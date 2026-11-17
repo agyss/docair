@@ -1,0 +1,71 @@
+{
+  "name": "docair",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    // Node: Angular example frontend + beads CLI (npm package @beads/bd)
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    // kubectl + helm: render/inspect Kubernetes charts that docair analyzes
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    },
+    // Claude Code CLI
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
+    // Docker inside the devcontainer (makes the container privileged): kind runs
+    // its node container here, and `terraform apply` builds the images with it.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true
+    },
+    // Terraform: provisions the kind cluster and the Helm releases (infra/terraform)
+    "ghcr.io/devcontainers/features/terraform:1": {
+      "version": "1.16.7",
+      "tflint": "none",
+      "terragrunt": "none"
+    }
+  },
+  // The kind node publishes the app on 127.0.0.1:8080; VS Code forwards it to your browser.
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "docair on kind (Traefik ingress)",
+      "onAutoForward": "notify"
+    }
+  },
+  "workspaceFolder": "/workspaces/docair",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/docair,type=bind",
+  "containerEnv": {
+    // All Claude Code state (memory, history, settings, login) lives in the volume below,
+    // isolated from the host and kept across container rebuilds.
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "redhat.vscode-yaml",
+        "Angular.ng-template",
+        "bierner.markdown-mermaid",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy"
+      }
+    }
+  },
+  "mounts": [
+    // Persist cargo registry between container rebuilds
+    "source=docair-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+    // Claude Code memory + history (CLAUDE_CONFIG_DIR)
+    "source=docair-claude-config,target=/home/vscode/.claude,type=volume"
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+  "remoteUser": "vscode"
+}

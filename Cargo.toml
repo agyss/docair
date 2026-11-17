@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace.dependencies]
+docair-adapters = { path = "crates/docair-adapters" }
+docair-ai = { path = "crates/docair-ai" }
+docair-core = { path = "crates/docair-core" }
+docair-lang-apis = { path = "crates/docair-lang-apis" }
+docair-lang-generic = { path = "crates/docair-lang-generic" }
+docair-lang-infra = { path = "crates/docair-lang-infra" }
+docair-lang-rust = { path = "crates/docair-lang-rust" }
+docair-rules = { path = "crates/docair-rules" }
+docair-viewer = { path = "crates/docair-viewer" }
+
+anyhow = "1.0.104"
+# Framework rules as patterns (docs/ADAPTERS.md §5.2); same tree-sitter 0.27 as the adapters.
+# Exact: newest release older than two weeks (0.51.1, 2026-11-02; 0.51.2 and 0.51.3 are newer).
+ast-grep-config = "=0.51.1"
+ast-grep-core = "=0.51.1"
+clap ={ version = "4.6.7", features = ["derive"] }
+globset = "0.4.21"
+ignore = "0.4.34"
+petgraph = "0.8.3"
+pulldown-cmark = { version = "0.13.5", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Exact: newest release older than two weeks; ast-grep-config 0.51 needs ^2.0.0 (docs/LIBRARIES.md).
+serde-saphyr = "=2.0.0"
+toml = "1.1.8"
+tree-sitter = "0.27.1"
+tree-sitter-rust = "0.24.2"
+axum = { version = "0.8.9", features = ["multipart"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "sync"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs"] }
+tempfile = "3.27.0"
+similar = "3.2.1"
+ureq = { version = "3.5.2", features = ["json"] }

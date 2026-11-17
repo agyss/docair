@@ -1,0 +1,47 @@
+# Images are built locally and imported into the kind node, so they are never pulled.
+server:
+  image:
+    repository: docair-server
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicas: 2
+  maxUploadMb: 25
+  maxFiles: 5000
+  podAnnotations: {}
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 512Mi }
+
+web:
+  image:
+    repository: docair-web
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicas: 1
+  podAnnotations: {}
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }
+
+ingress:
+  className: traefik
+  # Empty: answer for any host name, e.g. localhost.
+  host: ""
+
+networkPolicy:
+  enabled: true
+  # Only the ingress controller's namespace may reach the apps.
+  ingressNamespace: traefik
+
+# The AI model that answers questions in the web app (docs/SPEC.md §10).
+# Empty endpoint or model: asking is off and the Ask box is hidden.
+ai:
+  # Base URL of an OpenAI-compatible API, e.g. https://api.together.xyz/v1
+  endpoint: ""
+  # Model id as the endpoint names it, e.g. zai-org/GLM-5.3-Flash
+  model: ""
+  # The key. Helm puts it into the Secret docair-ai. Pass it with --set-string
+  # or Terraform's set_sensitive, never in a committed values file.
+  apiKey: ""
+  # Or the name of an existing Secret that holds the key under `api-key`.
+  existingSecret: ""

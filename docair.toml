@@ -1,0 +1,20 @@
+#***
+# docair reads doc blocks, Markdown and code, and renders the data flow of a whole system as one HTML page.
+#
+# @id   docair
+# @kind system
+#***
+system = "docair"
+# e2e/fixtures is a sample project the tests document, not part of docair; the
+# rule fixtures are code the adapters' rules are tested on (docs/ADAPTERS.md §9.1).
+exclude = ["crates/docair-viewer/vendor/**", "e2e/fixtures/**", "e2e/.out/**", "crates/*/rules/*.fixture.*"]
+
+# The e2e results of the last run (cd e2e && npm test) show on the test nodes (SPEC §12).
+[tests]
+results = ["e2e/test-results/results.json"]
+
+# The model that answers `docair ask` (SPEC §10.1). The key is not here: put
+# DOCAIR_AI_API_KEY into .env (gitignored, see .env.example) or the environment.
+[ai]
+endpoint = "https://api.together.xyz/v1"
+model    = "zai-org/GLM-5.3-Flash"

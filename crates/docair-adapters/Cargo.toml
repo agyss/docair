@@ -1,0 +1,21 @@
+#***
+# The adapter registry: every adapter docair has, in the order that decides
+# who says what a symbol is. The CLI and the server both scan with it.
+#
+# @id      docair-adapters
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+docair-core.workspace = true
+docair-lang-apis.workspace = true
+docair-lang-generic.workspace = true
+docair-lang-infra.workspace = true
+docair-lang-rust.workspace = true

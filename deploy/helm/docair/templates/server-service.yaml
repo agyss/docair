@@ -1,0 +1,25 @@
+{{/***
+ * Service docair-server: a stable name and ClusterIP in front of the server pods.
+ *
+ * It selects the pods with app.kubernetes.io/name=docair-server, and
+ * kube-proxy spreads connections over them. The Ingress sends /api here.
+ *
+ * @id      k8s.svc.docair-server
+ * @kind    endpoint
+ * @part-of k8s.release.docair
+ * @calls   docair-server.router (HTTP to a pod, port 8080)
+ * @flow    upload 8 "the Service picks a docair-server pod"
+ ***/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: docair-server
+  labels:
+    {{- include "docair.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "docair.selector" "docair-server" | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

@@ -1,0 +1,42 @@
+{{/***
+ * Ingress docair: the routing rules Traefik follows. /api goes to docair-server, everything else to docair-web.
+ *
+ * Both apps share one origin this way, so the browser needs no CORS and the
+ * frontend can call /api directly.
+ *
+ * @id      k8s.ingress.docair
+ * @kind    gateway
+ * @part-of k8s.release.docair
+ * @calls   k8s.svc.docair-web (HTTP /)
+ * @calls   k8s.svc.docair-server (HTTP /api)
+ * @flow    open 5 "the Ingress rule / matches: docair-web"
+ * @flow    upload 7 "the Ingress rule /api matches: docair-server"
+ ***/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: docair
+  labels:
+    {{- include "docair.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: docair-server
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: docair-web
+                port:
+                  name: http
+      {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}

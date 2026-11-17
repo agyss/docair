@@ -1,0 +1,955 @@
+{
+  "schema": "docair.graph/0",
+  "system": "orders",
+  "generator": "docair 0.1.0",
+  "nodes": [
+    {
+      "id": "orders-api",
+      "kind": "service",
+      "name": "orders-api",
+      "summary": "The orders API: stores orders and announces new ones.",
+      "description": "",
+      "part_of": "orders",
+      "source": {
+        "file": "api/Cargo.toml",
+        "line": 1
+      },
+      "symbol": "[package]",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders-api",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 5,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "orders.create",
+      "kind": "function",
+      "name": "create_order",
+      "summary": "Store a new order and announce it.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 1
+      },
+      "symbol": "fn create_order",
+      "http": {
+        "method": "POST",
+        "path": "/api/orders"
+      },
+      "docs": [
+        {
+          "file": "api/openapi.yaml",
+          "anchor": "createOrder",
+          "markdown": "**POST /api/orders** · `createOrder`\n\nPlace an order.\n\nTakes `CreateOrder`, answers `Order`."
+        }
+      ],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.create",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "POST /api/orders",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "emits",
+          "value": "topic:order.created",
+          "line": 7,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 9,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        },
+        {
+          "name": "described",
+          "value": "POST /api/orders (CreateOrder) -> Order",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:10 · POST /api/orders (createOrder)"
+        },
+        {
+          "name": "operation",
+          "value": "createOrder",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:10 · POST /api/orders (createOrder)"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "orders.get",
+      "kind": "function",
+      "name": "get_order",
+      "summary": "One order. The description names the parameter `{id}`.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 11
+      },
+      "symbol": "fn get_order",
+      "http": {
+        "method": "GET",
+        "path": "/api/orders/{orderId}"
+      },
+      "docs": [
+        {
+          "file": "api/openapi.yaml",
+          "anchor": "getOrder",
+          "markdown": "**GET /api/orders/{id}** · `getOrder`\n\nOne order.\n\nTakes `id`, answers `Order`."
+        }
+      ],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.get",
+          "line": 14,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 15,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "GET /api/orders/{orderId}",
+          "line": 16,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 18,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        },
+        {
+          "name": "described",
+          "value": "GET /api/orders/{id} (id) -> Order",
+          "line": 11,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:33 · GET /api/orders/{id} (getOrder)"
+        },
+        {
+          "name": "operation",
+          "value": "getOrder",
+          "line": 11,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:33 · GET /api/orders/{id} (getOrder)"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "orders.update",
+      "kind": "function",
+      "name": "update_order",
+      "summary": "Change an order. The route is misspelled on purpose: the description says `/api/orders/{id}`.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 20
+      },
+      "symbol": "fn update_order",
+      "http": {
+        "method": "PUT",
+        "path": "/api/order/{id}"
+      },
+      "docs": [
+        {
+          "file": "api/openapi.yaml",
+          "anchor": "update_order",
+          "markdown": "**PUT /api/orders/{id}** · `update_order`\n\nChange an order.\n\nTakes `Order`, answers `Order`."
+        }
+      ],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.update",
+          "line": 23,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 24,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "PUT /api/order/{id}",
+          "line": 25,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 27,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        },
+        {
+          "name": "described",
+          "value": "PUT /api/orders/{id} (Order) -> Order",
+          "line": 20,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:43 · PUT /api/orders/{id} (update_order)"
+        },
+        {
+          "name": "operation",
+          "value": "update_order",
+          "line": 20,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:43 · PUT /api/orders/{id} (update_order)"
+        },
+        {
+          "name": "http",
+          "value": "PUT /api/orders/{id}",
+          "line": 25,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:43 (update_order)"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "orders.list",
+      "kind": "function",
+      "name": "list_orders",
+      "summary": "List the orders. The description leaves this route out, so docair warns (W115).",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 29
+      },
+      "symbol": "fn list_orders",
+      "http": {
+        "method": "GET",
+        "path": "/api/orders"
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.list",
+          "line": 32,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 33,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "GET /api/orders",
+          "line": 34,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 36,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "orders.health",
+      "kind": "function",
+      "name": "health",
+      "summary": "Liveness probe. Left out of the description on purpose: `ignore` in docair.toml.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 38
+      },
+      "symbol": "fn health",
+      "http": {
+        "method": "GET",
+        "path": "/api/healthz"
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.health",
+          "line": 41,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 42,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "GET /api/healthz",
+          "line": 43,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 45,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "mailer",
+      "kind": "service",
+      "name": "mailer",
+      "summary": "Sends the mails about orders.",
+      "description": "",
+      "part_of": "orders",
+      "source": {
+        "file": "mailer/Cargo.toml",
+        "line": 1
+      },
+      "symbol": "[package]",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "mailer",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 5,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "mailer.confirm",
+      "kind": "function",
+      "name": "send_confirmation",
+      "summary": "Mail the shopper that the order arrived.",
+      "description": "",
+      "part_of": "mailer",
+      "source": {
+        "file": "mailer/src/lib.rs",
+        "line": 1
+      },
+      "symbol": "fn send_confirmation",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "mailer.confirm",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "mailer",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "consumes",
+          "value": "topic:order.created",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 8,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "shop-ui.cart",
+      "kind": "component",
+      "name": "Cart",
+      "summary": "The cart page: lists the items and places the order.",
+      "description": "",
+      "part_of": "shop-ui",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 1
+      },
+      "symbol": "class Cart",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shop-ui.cart",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "component",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop-ui",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "calls",
+          "value": "http:POST /api/orders",
+          "line": 7,
+          "origin": "authored"
+        },
+        {
+          "name": "calls",
+          "value": "http:POST /v1/charges \"pays for the order\"",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "component",
+          "line": 10,
+          "origin": "inferred",
+          "reason": "keyword `class`"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "api.openapi",
+      "kind": "api",
+      "name": "openapi.yaml",
+      "summary": "Orders API: The orders a shopper places.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/openapi.yaml",
+        "line": 1
+      },
+      "symbol": "OpenAPI 3.1.0 api/openapi.yaml",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "api",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "OpenAPI 3.1.0"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "mailer.asyncapi",
+      "kind": "api",
+      "name": "asyncapi.yaml",
+      "summary": "Mailer",
+      "description": "",
+      "part_of": "mailer",
+      "source": {
+        "file": "mailer/asyncapi.yaml",
+        "line": 1
+      },
+      "symbol": "AsyncAPI 2.6.0 mailer/asyncapi.yaml",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "api",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "AsyncAPI 2.6.0"
+        },
+        {
+          "name": "consumes",
+          "value": "topic:order.cancelled (OrderCancelled)",
+          "line": 19,
+          "origin": "inferred",
+          "reason": "mailer/asyncapi.yaml:19 · receives from order.cancelled"
+        },
+        {
+          "name": "part-of",
+          "value": "mailer",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "vendor.payments-openapi",
+      "kind": "api",
+      "name": "payments-openapi.json",
+      "summary": "Payments: The payment provider's API, vendored.",
+      "description": "",
+      "part_of": "payments",
+      "source": {
+        "file": "vendor/payments-openapi.json",
+        "line": 2
+      },
+      "symbol": "OpenAPI 2.0 vendor/payments-openapi.json",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "api",
+          "line": 2,
+          "origin": "inferred",
+          "reason": "OpenAPI 2.0"
+        },
+        {
+          "name": "part-of",
+          "value": "payments",
+          "line": 2,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "topic:order.created",
+      "kind": "topic",
+      "name": "order.created",
+      "summary": "A new order was stored.",
+      "description": "",
+      "part_of": "orders",
+      "source": {
+        "file": "api/asyncapi.yaml",
+        "line": 17
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "topic",
+          "line": 17,
+          "origin": "inferred",
+          "reason": "api/asyncapi.yaml:17 · sends to order.created"
+        },
+        {
+          "name": "described",
+          "value": "topic:order.created (OrderCreated)",
+          "line": 17,
+          "origin": "inferred",
+          "reason": "api/asyncapi.yaml:17 · sends to order.created"
+        },
+        {
+          "name": "part-of",
+          "value": "orders",
+          "line": 17,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "api.openapi.cancel-order",
+      "kind": "endpoint",
+      "name": "DELETE /api/orders/{id}",
+      "summary": "Cancel an order.",
+      "description": "",
+      "part_of": "api.openapi",
+      "source": {
+        "file": "api/openapi.yaml",
+        "line": 58
+      },
+      "symbol": "DELETE /api/orders/{id} (cancelOrder)",
+      "http": {
+        "method": "DELETE",
+        "path": "/api/orders/{id}"
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "endpoint",
+          "line": 58,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:58 · DELETE /api/orders/{id} (cancelOrder)"
+        },
+        {
+          "name": "http",
+          "value": "DELETE /api/orders/{id}",
+          "line": 58,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:58 · DELETE /api/orders/{id} (cancelOrder)"
+        },
+        {
+          "name": "described",
+          "value": "DELETE /api/orders/{id} (id)",
+          "line": 58,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:58 · DELETE /api/orders/{id} (cancelOrder)"
+        },
+        {
+          "name": "operation",
+          "value": "cancelOrder",
+          "line": 58,
+          "origin": "inferred",
+          "reason": "api/openapi.yaml:58 · DELETE /api/orders/{id} (cancelOrder)"
+        },
+        {
+          "name": "part-of",
+          "value": "api.openapi",
+          "line": 58,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "topic:order.cancelled",
+      "kind": "topic",
+      "name": "order.cancelled",
+      "summary": "An order was cancelled. No code handles it yet, on purpose.",
+      "description": "",
+      "part_of": "orders",
+      "source": {
+        "file": "mailer/asyncapi.yaml",
+        "line": 19
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "topic",
+          "line": 19,
+          "origin": "inferred",
+          "reason": "mailer/asyncapi.yaml:19 · receives from order.cancelled"
+        },
+        {
+          "name": "described",
+          "value": "topic:order.cancelled (OrderCancelled)",
+          "line": 19,
+          "origin": "inferred",
+          "reason": "mailer/asyncapi.yaml:19 · receives from order.cancelled"
+        },
+        {
+          "name": "part-of",
+          "value": "orders",
+          "line": 19,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "vendor.payments-openapi.create-charge",
+      "kind": "endpoint",
+      "name": "POST /v1/charges",
+      "summary": "Charge a card.",
+      "description": "",
+      "part_of": "vendor.payments-openapi",
+      "source": {
+        "file": "vendor/payments-openapi.json",
+        "line": 12
+      },
+      "symbol": "POST /v1/charges (createCharge)",
+      "http": {
+        "method": "POST",
+        "path": "/v1/charges"
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "endpoint",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "vendor/payments-openapi.json:12 · POST /v1/charges (createCharge)"
+        },
+        {
+          "name": "http",
+          "value": "POST /v1/charges",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "vendor/payments-openapi.json:12 · POST /v1/charges (createCharge)"
+        },
+        {
+          "name": "described",
+          "value": "POST /v1/charges (ChargeRequest) -> Charge",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "vendor/payments-openapi.json:12 · POST /v1/charges (createCharge)"
+        },
+        {
+          "name": "operation",
+          "value": "createCharge",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "vendor/payments-openapi.json:12 · POST /v1/charges (createCharge)"
+        },
+        {
+          "name": "part-of",
+          "value": "vendor.payments-openapi",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "payments",
+      "kind": "external",
+      "name": "payments",
+      "summary": "The payment provider.",
+      "description": "",
+      "part_of": "orders",
+      "source": {
+        "file": "docs/payments.md",
+        "line": 6
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "payments",
+          "line": 9,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "external",
+          "line": 10,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "shop-ui",
+      "kind": "service",
+      "name": "shop-ui",
+      "summary": "The shop's web front end.",
+      "description": "",
+      "part_of": "orders",
+      "source": {
+        "file": "ui/README.md",
+        "line": 3
+      },
+      "docs": [
+        {
+          "file": "ui/README.md",
+          "markdown": "# ui\n\n```docair\nThe shop's web front end.\n\n@id   shop-ui\n@kind service\n```"
+        }
+      ],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shop-ui",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 7,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "orders",
+      "kind": "system",
+      "name": "orders",
+      "summary": "",
+      "description": "",
+      "docs": [
+        {
+          "file": "README.md",
+          "markdown": "# orders\n\nA shop's orders: the cart places an order, the API stores it and announces it,\nthe mailer confirms it, and a payment provider charges the card."
+        }
+      ],
+      "tags": [],
+      "origin": "inferred"
+    }
+  ],
+  "edges": [
+    {
+      "from": "orders.create",
+      "to": "topic:order.created",
+      "kind": "emit",
+      "label": "OrderCreated",
+      "payload": "OrderCreated",
+      "from_api": "api/asyncapi.yaml",
+      "tag": "@emits topic:order.created",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 7
+      },
+      "origin": "authored"
+    },
+    {
+      "from": "topic:order.created",
+      "to": "mailer.confirm",
+      "kind": "consume",
+      "label": "OrderCreated",
+      "payload": "OrderCreated",
+      "from_api": "api/asyncapi.yaml",
+      "tag": "@consumes topic:order.created",
+      "source": {
+        "file": "mailer/src/lib.rs",
+        "line": 6
+      },
+      "origin": "authored"
+    },
+    {
+      "from": "shop-ui.cart",
+      "to": "orders.create",
+      "kind": "call",
+      "label": "(CreateOrder) → Order",
+      "via": "http:POST /api/orders",
+      "payload": "CreateOrder",
+      "reply": "Order",
+      "from_api": "api/openapi.yaml",
+      "tag": "@calls http:POST /api/orders",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 7
+      },
+      "origin": "authored"
+    },
+    {
+      "from": "shop-ui.cart",
+      "to": "vendor.payments-openapi.create-charge",
+      "kind": "call",
+      "label": "(ChargeRequest) → Charge",
+      "via": "http:POST /v1/charges",
+      "payload": "ChargeRequest",
+      "reply": "Charge",
+      "text": "pays for the order",
+      "from_api": "vendor/payments-openapi.json",
+      "tag": "@calls http:POST /v1/charges \"pays for the order\"",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 8
+      },
+      "origin": "authored"
+    },
+    {
+      "from": "topic:order.cancelled",
+      "to": "mailer.asyncapi",
+      "kind": "consume",
+      "label": "OrderCancelled",
+      "payload": "OrderCancelled",
+      "reply": "OrderCancelled",
+      "from_api": "mailer/asyncapi.yaml",
+      "tag": "@consumes topic:order.cancelled (OrderCancelled)",
+      "source": {
+        "file": "mailer/asyncapi.yaml",
+        "line": 19
+      },
+      "origin": "inferred"
+    }
+  ],
+  "flows": [],
+  "walkthroughs": [],
+  "view": {
+    "hide": [],
+    "tests": true
+  },
+  "diagnostics": [
+    {
+      "code": "W114",
+      "severity": "warning",
+      "message": "`DELETE /api/orders/{id}` (cancelOrder) is in api/openapi.yaml, but no code in `orders-api` serves it",
+      "file": "api/openapi.yaml",
+      "line": 58,
+      "node": "api.openapi.cancel-order"
+    },
+    {
+      "code": "W103",
+      "severity": "warning",
+      "message": "@http `PUT /api/order/{id}` but api/openapi.yaml:43 (update_order) says `PUT /api/orders/{id}`",
+      "file": "api/src/lib.rs",
+      "line": 25,
+      "node": "orders.update"
+    },
+    {
+      "code": "W115",
+      "severity": "warning",
+      "message": "`GET /api/orders` is served here, but api/openapi.yaml does not declare it; add it there, or list it in [[import.api]] ignore",
+      "file": "api/src/lib.rs",
+      "line": 29,
+      "node": "orders.list"
+    },
+    {
+      "code": "W114",
+      "severity": "warning",
+      "message": "mailer/asyncapi.yaml says `mailer` receives from `topic:order.cancelled`, but no code in it does",
+      "file": "mailer/asyncapi.yaml",
+      "line": 19,
+      "node": "mailer.asyncapi"
+    }
+  ]
+}

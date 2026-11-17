@@ -1,0 +1,4 @@
+docair is installed in namespace {{ .Release.Namespace }}.
+
+Open http://localhost:8080 (the kind node publishes the Traefik NodePort there),
+pick a project folder and click "Generate docair page".

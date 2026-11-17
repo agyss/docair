@@ -1,0 +1,206 @@
+{
+  "schema": "docair.walkthrough/0",
+  "id": "how-does-terraform-provision-the-cluster-and-in-which-order",
+  "question": "How does terraform provision the cluster, and in which order?",
+  "title": "Terraform provisions in dependency order: kind node, images, Traefik, docair chart",
+  "summary": "One `terraform apply` creates the kind cluster and builds both images in parallel, loads the images into the node's containerd, installs Traefik using the kubeconfig, and only then installs the docair chart, whose pods start from the loaded images and listen on port 8080.",
+  "recorded": {
+    "at": "2026-11-14T22:57:37Z",
+    "by": "ai",
+    "model": "zai-org/GLM-5.3-Flash",
+    "endpoint": "https://api.together.xyz/v1"
+  },
+  "steps": [
+    {
+      "title": "You run terraform apply once",
+      "text": "You run `terraform apply` in infra/terraform, one root module on the workstation. It creates the kind cluster, builds the two images, loads them into the node, installs Traefik and then the docair chart. Terraform orders all of this itself from the dependencies between the resources.",
+      "nodes": [
+        "developer",
+        "terraform"
+      ],
+      "edges": [
+        {
+          "from": "developer",
+          "to": "tf.kind_cluster"
+        },
+        {
+          "from": "developer",
+          "to": "tf.images"
+        }
+      ]
+    },
+    {
+      "title": "Terraform creates the kind cluster and builds the images in parallel",
+      "text": "Two independent resources start: kind_cluster.docair and terraform_data.images. The cluster job runs `docker run kindest/node`, which starts the node container docair-control-plane and returns a kubeconfig. The image job builds docair-server:dev (the Rust server) and docair-web:dev (Angular plus nginx) into Docker's local image store.",
+      "nodes": [
+        "tf.kind_cluster",
+        "tf.images"
+      ],
+      "edges": [
+        {
+          "from": "developer",
+          "to": "tf.kind_cluster"
+        },
+        {
+          "from": "developer",
+          "to": "tf.images"
+        }
+      ]
+    },
+    {
+      "title": "The node container boots a whole Kubernetes cluster",
+      "text": "Inside the container docair-control-plane, kubeadm starts the API server, scheduler, kubelet and containerd, all on the Docker network kind. The kubeconfig Terraform received from this step is what the Helm provider will use for both releases.",
+      "nodes": [
+        "kind-node",
+        "kind"
+      ],
+      "edges": [
+        {
+          "from": "tf.kind_cluster",
+          "to": "kind"
+        }
+      ]
+    },
+    {
+      "title": "The built images are imported into the node",
+      "text": "terraform_data.load_images waits for two things: the node name docair-control-plane from the cluster resource, and the finished image archives from Docker's store. `kind load docker-image` streams them in: `docker save` pipes the images into `ctr images import` inside the node container. From now on, pods can start without a registry.",
+      "nodes": [
+        "tf.load_images",
+        "images",
+        "kind-node"
+      ],
+      "edges": [
+        {
+          "from": "tf.kind_cluster",
+          "to": "tf.load_images"
+        },
+        {
+          "from": "images",
+          "to": "tf.load_images"
+        },
+        {
+          "from": "tf.load_images",
+          "to": "kind-node"
+        }
+      ]
+    },
+    {
+      "title": "Terraform installs Traefik with the kubeconfig",
+      "text": "The Helm provider uses the kubeconfig that the cluster resource returned to install chart traefik 42.2.0 into the namespace traefik. Traefik becomes the default IngressClass, and its Service is a NodePort on 30080 — exactly the port kind publishes on the node.",
+      "nodes": [
+        "tf.traefik",
+        "k8s.release.traefik"
+      ],
+      "edges": [
+        {
+          "from": "tf.kind_cluster",
+          "to": "tf.traefik"
+        },
+        {
+          "from": "tf.traefik",
+          "to": "k8s.release.traefik"
+        }
+      ]
+    },
+    {
+      "title": "Traefik listens on the published port",
+      "text": "The traefik pod takes every HTTP request that enters the cluster and routes it by the Ingress rules. Its NodePort 30080 leads out through the node container to 127.0.0.1:8080 on the workstation, which is the only way into the cluster. The cluster now has an entry point, but nothing to route to yet.",
+      "nodes": [
+        "k8s.traefik",
+        "host-port",
+        "kind-node"
+      ],
+      "edges": [
+        {
+          "from": "kind-node",
+          "to": "k8s.traefik"
+        },
+        {
+          "from": "host-port",
+          "to": "kind-node"
+        }
+      ]
+    },
+    {
+      "title": "Only then does Terraform install the docair chart",
+      "text": "helm_release.docair depends on both earlier results: the ingress class traefik must exist, and the images must already be in the node's containerd. That is why it runs last. Terraform installs chart deploy/helm/docair with image tag dev into the namespace docair.",
+      "nodes": [
+        "tf.docair",
+        "k8s.release.docair"
+      ],
+      "edges": [
+        {
+          "from": "tf.traefik",
+          "to": "tf.docair"
+        },
+        {
+          "from": "tf.load_images",
+          "to": "tf.docair"
+        },
+        {
+          "from": "tf.docair",
+          "to": "k8s.release.docair"
+        }
+      ]
+    },
+    {
+      "title": "Helm renders the chart into the cluster's objects",
+      "text": "The release creates two Deployments (docair-server, docair-web) with their Services, one Ingress that splits / and /api, the server's ConfigMap and a NetworkPolicy. The NetworkPolicy allows only pods in the namespace traefik to reach the apps, and only on port 8080.",
+      "nodes": [
+        "k8s.release.docair",
+        "k8s.ingress.docair",
+        "k8s.cm.docair-server",
+        "k8s.netpol.docair"
+      ],
+      "edges": [
+        {
+          "from": "tf.docair",
+          "to": "k8s.release.docair"
+        }
+      ]
+    },
+    {
+      "title": "The Deployments start their pods from the loaded images",
+      "text": "The kubelet schedules the pods and containerd starts both containers from the images that were imported earlier — no registry is needed. The docair-server container is the distroless server binary; the docair-web container is nginx serving the built Angular app. Both listen on 8080.",
+      "nodes": [
+        "k8s.deploy.docair-server",
+        "k8s.deploy.docair-web",
+        "container.docair-server",
+        "container.docair-web"
+      ],
+      "edges": [
+        {
+          "from": "images",
+          "to": "container.docair-server"
+        },
+        {
+          "from": "images",
+          "to": "container.docair-web"
+        }
+      ]
+    },
+    {
+      "title": "The server reads its settings and starts listening",
+      "text": "docair-server.main reads the ConfigMap's values (DOCAIR_MAX_UPLOAD_MB, DOCAIR_MAX_FILES) as environment variables, builds the router with GET /healthz for the probes and POST /api/scan for uploads, and listens on DOCAIR_BIND, 0.0.0.0:8080 by default. nginx serves the Angular files on 8080 as well. The cluster is ready for the first request at http://localhost:8080.",
+      "nodes": [
+        "docair-server.main",
+        "docair-server.config",
+        "nginx"
+      ],
+      "edges": [
+        {
+          "from": "docair-server.main",
+          "to": "docair-server.config"
+        },
+        {
+          "from": "k8s.cm.docair-server",
+          "to": "docair-server.config"
+        },
+        {
+          "from": "docair-server.main",
+          "to": "docair-server.router"
+        }
+      ]
+    }
+  ]
+}

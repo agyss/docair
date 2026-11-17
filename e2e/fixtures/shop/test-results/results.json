@@ -1,0 +1,21 @@
+{
+  "suites": [
+    {
+      "title": "cart.spec.ts",
+      "file": "cart.spec.ts",
+      "specs": [],
+      "suites": [
+        {
+          "title": "cart",
+          "file": "cart.spec.ts",
+          "specs": [
+            { "title": "buying stores the order", "file": "cart.spec.ts", "line": 17, "ok": true,
+              "tests": [{ "status": "expected", "results": [{ "status": "passed", "duration": 1840, "startTime": "2026-11-14T08:00:00.000Z" }] }] },
+            { "title": "the total adds up", "file": "cart.spec.ts", "line": 27, "ok": false,
+              "tests": [{ "status": "unexpected", "results": [{ "status": "failed", "duration": 120, "startTime": "2026-11-14T08:00:02.000Z" }] }] }
+          ]
+        }
+      ]
+    }
+  ]
+}

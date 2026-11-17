@@ -1,0 +1,18 @@
+target
+.docair
+**/node_modules
+web/dist
+web/.angular
+.git
+e2e/.out
+e2e/test-results
+e2e/playwright-report
+# Secrets: never part of a build context
+.env
+.env.*
+**/*.pem
+**/*.key
+infra/terraform/.terraform
+infra/terraform/*.tfstate*
+infra/terraform/*.tfvars*
+infra/terraform/*-config

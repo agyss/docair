@@ -1,0 +1,5 @@
+# A small shop, used by the e2e tests as a project to document.
+system = "shop"
+
+[tests]
+results = ["test-results/results.json"]

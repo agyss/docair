@@ -1,0 +1,18 @@
+#***
+# Generic adapter: for code no other adapter knows, guesses what each doc
+# block documents from the code line under it (keywords, Terraform labels,
+# Kubernetes kinds, test titles).
+#
+# @id      docair-lang-generic
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-lang-generic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+docair-core.workspace = true

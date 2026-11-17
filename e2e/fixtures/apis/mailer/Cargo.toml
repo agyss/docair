@@ -1,0 +1,10 @@
+#***
+# Sends the mails about orders.
+#
+# @id   mailer
+# @kind service
+#***
+[package]
+name = "mailer"
+version = "0.1.0"
+edition = "2024"

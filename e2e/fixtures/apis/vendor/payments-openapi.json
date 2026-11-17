@@ -1,0 +1,45 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Payments",
+    "version": "1.0",
+    "description": "The payment provider's API, vendored."
+  },
+  "host": "api.payments.example",
+  "basePath": "/v1",
+  "paths": {
+    "/charges": {
+      "post": {
+        "operationId": "createCharge",
+        "summary": "Charge a card.",
+        "parameters": [
+          { "name": "charge", "in": "body", "required": true, "schema": { "$ref": "#/definitions/ChargeRequest" } }
+        ],
+        "responses": {
+          "201": { "description": "Charged.", "schema": { "$ref": "#/definitions/Charge" } }
+        }
+      },
+      "get": {
+        "operationId": "listCharges",
+        "parameters": [ { "name": "limit", "in": "query", "type": "integer" } ],
+        "responses": {
+          "200": { "description": "The charges.", "schema": { "type": "array", "items": { "$ref": "#/definitions/Charge" } } }
+        }
+      }
+    },
+    "/refunds": {
+      "post": {
+        "operationId": "createRefund",
+        "parameters": [ { "name": "refund", "in": "body", "schema": { "$ref": "#/definitions/Refund" } } ],
+        "responses": {
+          "201": { "description": "Refunded.", "schema": { "$ref": "#/definitions/Refund" } }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ChargeRequest": { "type": "object" },
+    "Charge": { "type": "object" },
+    "Refund": { "type": "object" }
+  }
+}

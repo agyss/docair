@@ -60,18 +60,74 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
+Everything runs inside the devcontainer (cargo, node, bd, Docker).
 
 ```bash
-# Example:
-# npm install
-# npm test
+cargo test --workspace                      # unit tests and the golden graphs
+cargo clippy --workspace --all-targets      # no warnings
+cargo fmt --all --check
+cargo run -p docair-cli -- check .          # docair on itself: 0 errors, 0 warnings
+cargo run -p docair-cli -- scan .           # .docair/docair.html, docair's own page
 ```
+
+- Golden graphs: `crates/docair-adapters/tests/golden/*.graph.json`. A change that
+  moves them says why; rewrite them with `DOCAIR_BLESS=1 cargo test -p docair-adapters`
+  and review the diff.
+- e2e: `cd e2e && npm run build && npm test` (builds the release binaries and the web
+  app first). A run uses ports 9555 (fake AI) and 9556 (server), and rewrites
+  `e2e/.out` and `e2e/test-results/results.json`, which `docair check` reads.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+docair reads doc blocks, Markdown and code, and draws a whole system as one HTML
+page. The contract is [docs/SPEC.md](docs/SPEC.md); the crates are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); designs of larger changes are in
+`docs/` ([ADAPTERS.md](docs/ADAPTERS.md), [IMPORTS.md](docs/IMPORTS.md)); library
+choices in [docs/LIBRARIES.md](docs/LIBRARIES.md); words in [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- docair documents itself: new code gets docair doc blocks (`/*** … ***/` with `@id`,
+  `@part-of`, `@calls`, …), and `docair check .` stays at 0 errors and 0 warnings.
+- Design before code: a larger change starts as a design doc in `docs/`. SPEC.md
+  describes what is built and changes with each step that lands.
+- Dependencies: only versions at least two weeks old, pinned exactly when a newer one
+  would be picked; the choice and why go into LIBRARIES.md.
+- Docs are plain English: short sentences, tables, examples.
+- Do only the step that was asked for; propose the next one instead of starting it.
+- Privacy: the repository may be public. Never write Claude memory, transcripts,
+  session IDs, quotes of the user or personal notes into tracked files or into beads.
+
+## Beads in this repository
+
+These rules come on top of the Beads block above, and win where they differ.
+
+- Do not use `bd remember`. Preferences and lessons stay in Claude's own memory,
+  outside the repository; beads hold work items only.
+- Before planning, read `bd list --all` and the design docs in `docs/`: extend an
+  existing epic instead of starting a parallel one.
+- An epic has a design doc in `docs/` (`--spec-id`). Its steps are child issues with
+  `blocked-by` dependencies, also across epics. A design choice two epics share is a
+  `decision` issue, linked `related` to the steps it affects.
+- Claim an issue before working on it (`bd update <id> --claim`); renew the claim
+  during long work (`bd heartbeat <id>`).
+- Notes say what was built: files, tests, numbers. Close with `--reason`. Work left
+  over becomes a new issue with its dependencies; never `--force`.
+- Never pass `--session`, and keep `CLAUDE_SESSION_ID` unset: no session IDs in beads.
+- Issues are exported to `.beads/issues.jsonl` after every change (`export.auto`);
+  commit that file together with the code it belongs to.
+
+## Several sessions at once
+
+Several Claude sessions may work in this tree at the same time, with no branches
+between them.
+
+- `ListAgents` shows them. Send a short message before you change a file another
+  session works in, and when you land a step someone depends on.
+- One writer per file; hand files over explicitly.
+- Shared files (`crates/docair-core/src/facts.rs`, `crates/docair-core/src/lib.rs`,
+  the root `Cargo.toml`, `docs/SPEC.md`): re-read right before you edit, make exact
+  edits, never rewrite the whole file. Run `rustfmt` on your own files, not
+  `cargo fmt` over others' work.
+- Golden graphs of another session's work: send the diff, let the owner bless.
+- Ask before running e2e: the ports are shared.

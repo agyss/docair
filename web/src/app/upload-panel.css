@@ -1,0 +1,35 @@
+.drop {
+  border: 2px dashed var(--line);
+  border-radius: 16px;
+  padding: 44px 28px;
+  text-align: center;
+  background: var(--panel);
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.drop.dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.lead {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 15px;
+}
+.buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+input[type='file'] {
+  display: none;
+}
+.picked {
+  margin: 18px 0 12px;
+}
+.muted {
+  color: var(--muted);
+}

@@ -1,0 +1,187 @@
+# docair-server's HTTP API as an OpenAPI description. docair reads it
+# (docs/IMPORTS.md): every operation merges into the handler that serves its
+# route, and a route on one side only is a warning (W114, W115).
+openapi: 3.1.0
+info:
+  title: docair-server
+  version: 0.1.0
+  description: Turns an uploaded folder into a docair page, and answers questions about it with the configured AI model.
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Liveness and readiness probe.
+      responses:
+        '200':
+          description: The server is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/scan:
+    post:
+      operationId: scan_upload
+      summary: Scan an uploaded folder and answer with its graph and page.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '200':
+          description: The summary, the graph and the page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResult'
+  /api/ai:
+    get:
+      operationId: ai_status
+      summary: Whether questions can be asked, and of which model.
+      responses:
+        '200':
+          description: The AI settings, without the key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiStatus'
+  /api/ask:
+    post:
+      operationId: ask
+      summary: Ask the model about the graph.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+      responses:
+        '200':
+          description: The answer, a walkthrough, a view change, proposed edits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+  /api/word:
+    post:
+      operationId: word
+      summary: Let the model word the lines that say nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WordRequest'
+      responses:
+        '200':
+          description: The words, as edits of the tags.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+  /api/glossary:
+    post:
+      operationId: glossary
+      summary: Let the model explain the terms the glossary lacks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlossaryRequest'
+      responses:
+        '200':
+          description: The new glossary entries, as edits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+  /api/patch:
+    post:
+      operationId: patch
+      summary: Apply edits to the uploaded files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchRequest'
+      responses:
+        '200':
+          description: The changed files and their diff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatchAnswer'
+components:
+  schemas:
+    ScanResult:
+      type: object
+      properties:
+        system: {type: string}
+        files: {type: integer}
+        nodes: {type: integer}
+        edges: {type: integer}
+        flows: {type: integer}
+        errors: {type: integer}
+        warnings: {type: integer}
+        diagnostics: {type: array, items: {type: object}}
+        html: {type: string}
+        graph: {type: object}
+    AiStatus:
+      type: object
+      properties:
+        enabled: {type: boolean}
+        model: {type: [string, 'null']}
+    AskRequest:
+      type: object
+      properties:
+        question: {type: string}
+        graph: {type: object}
+        history: {type: array, items: {type: object}}
+        context: {type: [string, 'null']}
+    WordRequest:
+      type: object
+      properties:
+        graph: {type: object}
+        scope: {type: [string, 'null']}
+        limit: {type: [integer, 'null']}
+        all: {type: boolean}
+    GlossaryRequest:
+      type: object
+      properties:
+        graph: {type: object}
+        limit: {type: [integer, 'null']}
+    PatchRequest:
+      type: object
+      properties:
+        changes: {type: array, items: {type: object}}
+        files: {type: array, items: {$ref: '#/components/schemas/FileText'}}
+        ids: {type: array, items: {type: string}}
+    PatchAnswer:
+      type: object
+      properties:
+        files: {type: array, items: {$ref: '#/components/schemas/FileText'}}
+        diff: {type: string}
+        applied: {type: array, items: {type: integer}}
+        problems: {type: array, items: {type: string}}
+    FileText:
+      type: object
+      properties:
+        path: {type: string}
+        text: {type: string}
+    Reply:
+      type: object
+      properties:
+        answer: {type: string}
+        walkthrough: {type: object}
+        view: {type: object}
+        changes: {type: array, items: {type: object}}
+        wording: {type: array, items: {type: object}}

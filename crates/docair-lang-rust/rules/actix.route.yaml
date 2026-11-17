@@ -1,0 +1,17 @@
+# actix-web route attributes: `#[post("/api/orders")]` above a handler.
+id: rust.actix.route
+language: rust
+rule:
+  any:
+    - pattern: '#[$METHOD($PATH)]'
+    - pattern: '#[$METHOD($PATH, $$$)]'
+constraints:
+  METHOD:
+    regex: ^(get|post|put|patch|delete|head|options)$
+  PATH:
+    kind: string_literal
+facts:
+  - serves: http
+    method: $METHOD
+    path: $PATH
+    by: next

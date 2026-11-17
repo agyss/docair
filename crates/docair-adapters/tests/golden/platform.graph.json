@@ -1,0 +1,791 @@
+{
+  "schema": "docair.graph/0",
+  "system": "platform",
+  "generator": "docair 0.1.0",
+  "nodes": [
+    {
+      "id": "k8s.deploy.api",
+      "kind": "workload",
+      "name": "Deployment api",
+      "summary": "Kubernetes Deployment `api`.",
+      "description": "",
+      "part_of": "k8s.release.shop",
+      "source": {
+        "file": "charts/shop/templates/deployments.yaml",
+        "line": 1
+      },
+      "symbol": "Deployment api",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "workload",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Deployment`"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.shop",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.deploy.web",
+      "kind": "workload",
+      "name": "Deployment web",
+      "summary": "Kubernetes Deployment `web`.",
+      "description": "",
+      "part_of": "k8s.release.shop",
+      "source": {
+        "file": "charts/shop/templates/deployments.yaml",
+        "line": 18
+      },
+      "symbol": "Deployment web",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "workload",
+          "line": 18,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Deployment`"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.shop",
+          "line": 18,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.ingress.shop",
+      "kind": "gateway",
+      "name": "Ingress shop",
+      "summary": "Kubernetes Ingress `shop`.",
+      "description": "",
+      "part_of": "k8s.release.shop",
+      "source": {
+        "file": "charts/shop/templates/ingress.yaml",
+        "line": 1
+      },
+      "symbol": "Ingress shop",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "gateway",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Ingress`"
+        },
+        {
+          "name": "in",
+          "value": "requests (ingress class traefik) from k8s.release.traefik",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "ingressClassName"
+        },
+        {
+          "name": "routes",
+          "value": "k8s:Service/api (HTTP /api, port 80)",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Ingress rule"
+        },
+        {
+          "name": "routes",
+          "value": "k8s:Service/web (HTTP /, port 80)",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Ingress rule"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.shop",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.svc.api",
+      "kind": "endpoint",
+      "name": "Service api",
+      "summary": "Kubernetes Service `api`.",
+      "description": "",
+      "part_of": "k8s.release.shop",
+      "source": {
+        "file": "charts/shop/templates/services.yaml",
+        "line": 1
+      },
+      "symbol": "Service api",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "endpoint",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Service`"
+        },
+        {
+          "name": "selects",
+          "value": "k8s:Deployment/api (port 8080)",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Service selector"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.shop",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.svc.web",
+      "kind": "endpoint",
+      "name": "Service web",
+      "summary": "Kubernetes Service `web`.",
+      "description": "",
+      "part_of": "k8s.release.shop",
+      "source": {
+        "file": "charts/shop/templates/services.yaml",
+        "line": 12
+      },
+      "symbol": "Service web",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "endpoint",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Service`"
+        },
+        {
+          "name": "selects",
+          "value": "k8s:Deployment/web (port 8080)",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "Service selector"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.shop",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "terraform",
+      "kind": "job",
+      "name": "terraform",
+      "summary": "The Terraform root module in terraform: `terraform apply` there creates what its resources describe.",
+      "description": "",
+      "part_of": "platform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 1
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "job",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "terraform directory"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tf.kind_cluster.dev",
+      "kind": "config",
+      "name": "kind_cluster.dev",
+      "summary": "Terraform resource `kind_cluster.dev`.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 8
+      },
+      "symbol": "resource kind_cluster.dev",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 8,
+          "origin": "inferred",
+          "reason": "terraform resource"
+        },
+        {
+          "name": "creates",
+          "value": "k8s.cluster.dev (kind_cluster creates the cluster)",
+          "line": 8,
+          "origin": "inferred",
+          "reason": "terraform resource type"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 8,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.cluster.dev",
+      "kind": "cluster",
+      "name": "dev",
+      "summary": "The Kubernetes cluster dev, created by Terraform (kind_cluster).",
+      "description": "",
+      "part_of": "platform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 8
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "cluster",
+          "line": 8,
+          "origin": "inferred",
+          "reason": "created by kind_cluster.dev"
+        },
+        {
+          "name": "part-of",
+          "value": "platform",
+          "line": 8,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tf.helm_release.ingress",
+      "kind": "config",
+      "name": "helm_release.ingress",
+      "summary": "Terraform resource `helm_release.ingress`.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 24
+      },
+      "symbol": "resource helm_release.ingress",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "terraform resource"
+        },
+        {
+          "name": "in",
+          "value": "cluster access from tf:kind_cluster.dev",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "terraform reference"
+        },
+        {
+          "name": "creates",
+          "value": "k8s.release.traefik (helm install: chart traefik 42.2.0)",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "terraform resource type"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.release.traefik",
+      "kind": "release",
+      "name": "traefik",
+      "summary": "The Helm release traefik: what `helm install` made of the chart traefik, in the namespace traefik.",
+      "description": "",
+      "part_of": "k8s.ns.traefik",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 24
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "release",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "created by helm_release.ingress"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.ns.traefik",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.ns.traefik",
+      "kind": "namespace",
+      "name": "traefik",
+      "summary": "The namespace traefik in the cluster.",
+      "description": "",
+      "part_of": "k8s.cluster.dev",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 24
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "namespace",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "created by helm_release.ingress"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.cluster.dev",
+          "line": 24,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tf.helm_release.shop",
+      "kind": "config",
+      "name": "helm_release.shop",
+      "summary": "Terraform resource `helm_release.shop`.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 33
+      },
+      "symbol": "resource helm_release.shop",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "terraform resource"
+        },
+        {
+          "name": "in",
+          "value": "runs after from tf:helm_release.ingress",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "terraform reference"
+        },
+        {
+          "name": "in",
+          "value": "cluster access from tf:kind_cluster.dev",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "terraform reference"
+        },
+        {
+          "name": "creates",
+          "value": "k8s.release.shop (helm install: chart shop)",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "terraform resource type"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.release.shop",
+      "kind": "release",
+      "name": "shop",
+      "summary": "The Helm release shop: what `helm install` made of the chart shop, in the namespace shop.",
+      "description": "",
+      "part_of": "k8s.ns.shop",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 33
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "release",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "created by helm_release.shop"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.ns.shop",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.ns.shop",
+      "kind": "namespace",
+      "name": "shop",
+      "summary": "The namespace shop in the cluster.",
+      "description": "",
+      "part_of": "k8s.cluster.dev",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 33
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "namespace",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "created by helm_release.shop"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.cluster.dev",
+          "line": 33,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "api",
+      "kind": "service",
+      "name": "api",
+      "summary": "The shop's API: it answers the item requests.",
+      "description": "",
+      "part_of": "k8s.deploy.api",
+      "source": {
+        "file": "apps/README.md",
+        "line": 5
+      },
+      "docs": [
+        {
+          "file": "apps/README.md",
+          "markdown": "# The shop's programs\n\nThe infrastructure has no doc blocks; these name what runs in it.\n\n```docair\nThe shop's API: it answers the item requests.\n\n@id      api\n@kind    service\n@part-of k8s.deploy.api\n```\n\n```docair\nThe shop's web front end.\n\n@id      web\n@kind    service\n@part-of k8s.deploy.web\n```\n\n```docair\nA shopper's browser: it asks the shop for its items.\n\n@id      shopper\n@kind    external\n@part-of platform\n@calls   k8s.ingress.shop (GET /api/items) -> items \"asks for the items\"\n```"
+        }
+      ],
+      "tags": [
+        {
+          "name": "id",
+          "value": "api",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 9,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.deploy.api",
+          "line": 10,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "web",
+      "kind": "service",
+      "name": "web",
+      "summary": "The shop's web front end.",
+      "description": "",
+      "part_of": "k8s.deploy.web",
+      "source": {
+        "file": "apps/README.md",
+        "line": 13
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "web",
+          "line": 16,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 17,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.deploy.web",
+          "line": 18,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "shopper",
+      "kind": "external",
+      "name": "shopper",
+      "summary": "A shopper's browser: it asks the shop for its items.",
+      "description": "",
+      "part_of": "platform",
+      "source": {
+        "file": "apps/README.md",
+        "line": 21
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shopper",
+          "line": 24,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "external",
+          "line": 25,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "platform",
+          "line": 26,
+          "origin": "authored"
+        },
+        {
+          "name": "calls",
+          "value": "k8s.ingress.shop (GET /api/items) -> items \"asks for the items\"",
+          "line": 27,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "platform",
+      "kind": "system",
+      "name": "platform",
+      "summary": "",
+      "description": "",
+      "docs": [],
+      "tags": [],
+      "origin": "inferred"
+    }
+  ],
+  "edges": [
+    {
+      "from": "k8s.release.traefik",
+      "to": "k8s.ingress.shop",
+      "kind": "data",
+      "label": "requests (ingress class traefik)",
+      "tag": "@in requests (ingress class traefik) from k8s.release.traefik",
+      "source": {
+        "file": "charts/shop/templates/ingress.yaml",
+        "line": 1
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "k8s.ingress.shop",
+      "to": "k8s.svc.api",
+      "kind": "route",
+      "label": "HTTP /api, port 80",
+      "payload": "HTTP /api, port 80",
+      "tag": "@routes k8s:Service/api (HTTP /api, port 80)",
+      "source": {
+        "file": "charts/shop/templates/ingress.yaml",
+        "line": 1
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "k8s.ingress.shop",
+      "to": "k8s.svc.web",
+      "kind": "route",
+      "label": "HTTP /, port 80",
+      "payload": "HTTP /, port 80",
+      "tag": "@routes k8s:Service/web (HTTP /, port 80)",
+      "source": {
+        "file": "charts/shop/templates/ingress.yaml",
+        "line": 1
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "k8s.svc.api",
+      "to": "k8s.deploy.api",
+      "kind": "select",
+      "label": "port 8080",
+      "payload": "port 8080",
+      "tag": "@selects k8s:Deployment/api (port 8080)",
+      "source": {
+        "file": "charts/shop/templates/services.yaml",
+        "line": 1
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "k8s.svc.web",
+      "to": "k8s.deploy.web",
+      "kind": "select",
+      "label": "port 8080",
+      "payload": "port 8080",
+      "tag": "@selects k8s:Deployment/web (port 8080)",
+      "source": {
+        "file": "charts/shop/templates/services.yaml",
+        "line": 12
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "tf.kind_cluster.dev",
+      "to": "k8s.cluster.dev",
+      "kind": "create",
+      "label": "kind_cluster creates the cluster",
+      "payload": "kind_cluster creates the cluster",
+      "tag": "@creates k8s.cluster.dev (kind_cluster creates the cluster)",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 8
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "tf.kind_cluster.dev",
+      "to": "tf.helm_release.ingress",
+      "kind": "data",
+      "label": "cluster access",
+      "tag": "@in cluster access from tf:kind_cluster.dev",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 24
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "tf.helm_release.ingress",
+      "to": "k8s.release.traefik",
+      "kind": "create",
+      "label": "helm install: chart traefik 42.2.0",
+      "payload": "helm install: chart traefik 42.2.0",
+      "tag": "@creates k8s.release.traefik (helm install: chart traefik 42.2.0)",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 24
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "tf.helm_release.ingress",
+      "to": "tf.helm_release.shop",
+      "kind": "data",
+      "label": "runs after",
+      "tag": "@in runs after from tf:helm_release.ingress",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 33
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "tf.kind_cluster.dev",
+      "to": "tf.helm_release.shop",
+      "kind": "data",
+      "label": "cluster access",
+      "tag": "@in cluster access from tf:kind_cluster.dev",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 33
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "tf.helm_release.shop",
+      "to": "k8s.release.shop",
+      "kind": "create",
+      "label": "helm install: chart shop",
+      "payload": "helm install: chart shop",
+      "tag": "@creates k8s.release.shop (helm install: chart shop)",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 33
+      },
+      "origin": "inferred"
+    },
+    {
+      "from": "shopper",
+      "to": "k8s.ingress.shop",
+      "kind": "call",
+      "label": "(GET /api/items) → items",
+      "payload": "GET /api/items",
+      "reply": "items",
+      "text": "asks for the items",
+      "tag": "@calls k8s.ingress.shop (GET /api/items) -> items \"asks for the items\"",
+      "source": {
+        "file": "apps/README.md",
+        "line": 27
+      },
+      "origin": "authored"
+    }
+  ],
+  "flows": [],
+  "walkthroughs": [],
+  "view": {
+    "hide": [],
+    "tests": true
+  },
+  "diagnostics": []
+}

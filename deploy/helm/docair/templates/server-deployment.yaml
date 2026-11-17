@@ -1,0 +1,99 @@
+{{/***
+ * Deployment docair-server: keeps the server pods running (two by default).
+ *
+ * Each pod runs the docair-server container as a non-root user with a
+ * read-only root filesystem; only /tmp is writable. The kubelet probes
+ * /healthz. Settings come from the ConfigMap, the AI key from the Secret
+ * docair-ai.
+ *
+ * @id      k8s.deploy.docair-server
+ * @kind    workload
+ * @part-of k8s.release.docair
+ * @flow    provision 9 "the Deployments start their pods"
+ ***/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docair-server
+  labels:
+    {{- include "docair.labels" . | nindent 4 }}
+    app.kubernetes.io/name: docair-server
+spec:
+  replicas: {{ .Values.server.replicas }}
+  selector:
+    matchLabels:
+      {{- include "docair.selector" "docair-server" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "docair.labels" . | nindent 8 }}
+        app.kubernetes.io/name: docair-server
+      annotations:
+        # A changed setting or key restarts the pods: they read both only at start.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/ai: {{ .Values.ai | toJson | sha256sum }}
+        {{- with .Values.server.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          # Keep serving a few seconds after removal from the Service, so
+          # Traefik stops sending traffic here before the process stops.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: docair-server
+          {{- if or .Values.ai.apiKey .Values.ai.existingSecret }}
+          env:
+            - name: DOCAIR_AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ai.existingSecret | default "docair-ai" }}
+                  key: api-key
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scratch
+              mountPath: /tmp
+{{/***
+ * The scratch folder of a server pod, an emptyDir at /tmp: each upload is written here, scanned and deleted.
+ *
+ * @id      upload-dir
+ * @kind    store
+ * @part-of container.docair-server
+ ***/}}
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 512Mi

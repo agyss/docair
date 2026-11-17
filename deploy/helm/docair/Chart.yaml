@@ -1,0 +1,19 @@
+#***
+# Helm release docair: this chart, installed by Terraform into the namespace docair.
+#
+# The chart (this directory) is the recipe; the release is what is
+# installed from it: two Deployments (docair-web, docair-server) with their
+# Services, one Ingress that splits / and /api, the server's ConfigMap and a
+# NetworkPolicy. Terraform's helm_release.docair creates it with image tag dev.
+#
+# @id      k8s.release.docair
+# @kind    release
+# @part-of k8s.ns.docair
+# @flow    provision 8 "Helm renders the chart: Deployments, Services, Ingress, ConfigMap, NetworkPolicy"
+#***
+apiVersion: v2
+name: docair
+description: docair web app - upload source files, get a docair page back
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

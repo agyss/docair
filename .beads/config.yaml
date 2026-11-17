@@ -73,3 +73,5 @@
 
 sync:
     remote: "git+https://github.com/agyss/docair.git"
+export:
+    auto: true

@@ -1,0 +1,72 @@
+{{/***
+ * Deployment docair-web: keeps the nginx pod with the built Angular app running.
+ *
+ * @id      k8s.deploy.docair-web
+ * @kind    workload
+ * @part-of k8s.release.docair
+ * @flow    provision 9 "the Deployments start their pods"
+ ***/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docair-web
+  labels:
+    {{- include "docair.labels" . | nindent 4 }}
+    app.kubernetes.io/name: docair-web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "docair.selector" "docair-web" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "docair.labels" . | nindent 8 }}
+        app.kubernetes.io/name: docair-web
+      {{- with .Values.web.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          # Keep serving a few seconds after removal from the Service, so
+          # Traefik stops sending traffic here before the process stops.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          image: "{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

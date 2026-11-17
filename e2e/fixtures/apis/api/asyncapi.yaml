@@ -1,0 +1,31 @@
+asyncapi: 3.0.0
+info:
+  title: Orders events
+  version: 1.0.0
+servers:
+  production:
+    host: kafka.example.com:9092
+    protocol: kafka
+channels:
+  orderCreated:
+    address: order.created
+    description: A new order was stored.
+    messages:
+      OrderCreated:
+        $ref: '#/components/messages/OrderCreated'
+operations:
+  sendOrderCreated:
+    action: send
+    channel:
+      $ref: '#/channels/orderCreated'
+    messages:
+      - $ref: '#/channels/orderCreated/messages/OrderCreated'
+components:
+  messages:
+    OrderCreated:
+      name: OrderCreated
+      payload:
+        type: object
+        properties:
+          orderId:
+            type: string

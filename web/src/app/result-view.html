@@ -1,0 +1,67 @@
+<section class="result" data-test="result">
+  <header class="bar">
+    <span class="brand">docair</span>
+    <h2>{{ result().system }}</h2>
+    <ul class="stats">
+      <li><b>{{ result().files }}</b> files</li>
+      <li><b>{{ result().nodes }}</b> nodes</li>
+      <li><b>{{ result().edges }}</b> edges</li>
+      <li><b>{{ result().flows }}</b> flows</li>
+      <li [class.bad]="result().errors"><b>{{ result().errors }}</b> errors</li>
+      <li [class.warn]="result().warnings"><b>{{ result().warnings }}</b> warnings</li>
+    </ul>
+
+    @if (result().diagnostics.length) {
+      <details class="diagnostics">
+        <summary>Diagnostics ({{ result().diagnostics.length }})</summary>
+        <ul>
+          @for (d of result().diagnostics; track $index) {
+            <li [class]="d.severity">
+              <code>{{ d.code }}</code> {{ d.message }}
+              @if (d.file) {
+                <span class="where">{{ d.file }}:{{ d.line }}</span>
+              }
+            </li>
+          }
+        </ul>
+      </details>
+    }
+
+    @if (busy()) {
+      <span class="regen" data-test="regenerating">Generating the page again…</span>
+    }
+
+    <div class="actions">
+      @if (ai()?.enabled) {
+        <button class="button" [class.on]="chatOpen()" (click)="chatOpen.set(!chatOpen())" data-test="chat-toggle">✦ Ask docair</button>
+      }
+      <button class="button primary" (click)="closed.emit()" data-test="new-upload">New upload</button>
+      <button class="button" (click)="open()">Open in a new tab</button>
+      <button class="button secondary" (click)="download()">Download</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <iframe #frame title="docair page" sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox" [srcdoc]="page()" (load)="frameLoaded()" data-test="page"></iframe>
+    @if (ai()?.enabled && chatOpen()) {
+      <app-chat-panel
+        class="side"
+        [entries]="chat.entries()"
+        [busy]="chat.busy()"
+        [model]="ai()?.model ?? ''"
+        [context]="selection()"
+        (asked)="ask($event)"
+        (closed)="chatOpen.set(false)"
+        (play)="play($event)"
+        (saveWalkthrough)="saveWalkthrough($event)"
+        (undo)="undo($event)"
+        (review)="review($event)"
+        (apply)="apply($event)"
+        (downloadPatch)="downloadPatch($event)"
+        (clearContext)="selection.set(null)"
+        (wordLines)="wordLines()"
+        (explainTerms)="explainTerms()"
+      />
+    }
+  </div>
+</section>

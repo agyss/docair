@@ -1,0 +1,22 @@
+{{/***
+ * Service docair-web: a stable name and ClusterIP in front of the nginx pods. The Ingress sends everything but /api here.
+ *
+ * @id      k8s.svc.docair-web
+ * @kind    endpoint
+ * @part-of k8s.release.docair
+ * @calls   nginx (HTTP to a pod, port 8080)
+ * @flow    open 6 "the Service picks a docair-web pod"
+ ***/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: docair-web
+  labels:
+    {{- include "docair.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "docair.selector" "docair-web" | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
