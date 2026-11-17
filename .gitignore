@@ -1,0 +1,61 @@
+# Rust build output; docair's own cache and generated output
+/target
+/.docair/
+
+# Local secrets: the AI key lives here (see .env.example), never in docair.toml
+.env
+.env.*
+!.env.example
+# Keys and certificates, should one ever land in the tree
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Terraform: providers, state (holds the AI key and the cluster's client key),
+# variable files (may set ai_api_key), crash logs, local overrides
+**/.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# kubeconfig the kind provider writes next to the .tf files (<cluster_name>-config):
+# it holds the cluster admin's client key. Use `terraform output -raw kubeconfig`.
+infra/terraform/*-config
+*.kubeconfig
+kubeconfig
+
+# e2e: dependencies, generated pages, reports and traces
+e2e/node_modules/
+e2e/.out/
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+e2e/playwright/.cache/
+
+# Claude Code: personal, machine-local settings and notes
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Editors and OS
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
