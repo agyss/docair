@@ -41,6 +41,9 @@ enum Command {
         root: PathBuf,
         #[arg(long)]
         lenient: bool,
+        /// Also print how many hand-written lines the code confirms (docs/ADAPTERS.md §9.5).
+        #[arg(long)]
+        coverage: bool,
     },
     /// Ask the AI model: how something works, what to hide, what is wrong in the docs.
     Ask {
@@ -144,7 +147,11 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Scan { root, out, lenient } => cmd_scan(&root, out, lenient),
-        Command::Check { root, lenient } => cmd_check(&root, lenient),
+        Command::Check {
+            root,
+            lenient,
+            coverage,
+        } => cmd_check(&root, lenient, coverage),
         Command::Ask {
             question,
             root,
@@ -193,7 +200,14 @@ fn main() -> ExitCode {
  * @calls docair-cli.print_diagnostics "reports each diagnostic with its location"
  ***/
 fn cmd_scan(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<ExitCode> {
-    let graph = scan(root, docair_adapters::all(), &Options { lenient })?;
+    let graph = scan(
+        root,
+        docair_adapters::all(),
+        &Options {
+            lenient,
+            ..Options::default()
+        },
+    )?;
     let out = out.unwrap_or_else(|| root.join(".docair"));
     let json = out.join("docair.graph.json");
     let html = out.join("docair.html");
@@ -218,9 +232,19 @@ fn cmd_scan(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<ExitCode
  * @calls docair-core.scan "builds the graph of the project"
  * @calls docair-cli.print_diagnostics "reports each diagnostic with its location"
  ***/
-fn cmd_check(root: &Path, lenient: bool) -> Result<ExitCode> {
-    let graph = scan(root, docair_adapters::all(), &Options { lenient })?;
+fn cmd_check(root: &Path, lenient: bool, coverage: bool) -> Result<ExitCode> {
+    let graph = scan(
+        root,
+        docair_adapters::all(),
+        &Options {
+            lenient,
+            ..Options::default()
+        },
+    )?;
     print_diagnostics(&graph);
+    if coverage {
+        print_coverage(&graph);
+    }
     let (errors, warnings) = counts(&graph);
     println!(
         "docair check: {} nodes, {} edges, {errors} errors, {warnings} warnings",
@@ -228,6 +252,31 @@ fn cmd_check(root: &Path, lenient: bool) -> Result<ExitCode> {
         graph.edges.len()
     );
     Ok(exit_code(&graph))
+}
+
+/***
+ * Print, per kind of line, how many hand-written lines the code confirms and how many lines only the code knows.
+ *
+ * @calls docair-core.coverage.coverage "counts the lines"
+ ***/
+fn print_coverage(graph: &Graph) {
+    println!("lines      written  confirmed  via helpers  by a request  missing  only in code");
+    let (mut written, mut accounted) = (0, 0);
+    for (verb, c) in docair_core::coverage::coverage(graph) {
+        println!(
+            "@{verb:<9} {:>7}  {:>9}  {:>11}  {:>12}  {:>7}  {:>12}",
+            c.authored,
+            c.confirmed,
+            c.via_helpers,
+            c.by_request,
+            c.missing(),
+            c.code_only
+        );
+        written += c.authored;
+        accounted += c.authored - c.missing();
+    }
+    let share = (accounted * 100).checked_div(written).unwrap_or(0);
+    println!("the code accounts for {accounted} of {written} hand-written lines ({share}%)");
 }
 
 /***

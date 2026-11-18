@@ -151,6 +151,9 @@ pub fn digest(graph: &Graph) -> String {
             if !e.carries.is_empty() {
                 o.insert("carries".into(), json!(e.carries));
             }
+            if !e.carries_back.is_empty() {
+                o.insert("carries_back".into(), json!(e.carries_back));
+            }
             Value::Object(o)
         })
         .collect();
@@ -645,6 +648,7 @@ mod tests {
             view: View::default(),
             glossary: vec![],
             library: vec![],
+            meanings: None,
             diagnostics: vec![],
         }
     }

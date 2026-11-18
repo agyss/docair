@@ -149,7 +149,19 @@ pub fn load(
     edges: &[Edge],
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<Walkthrough> {
-    let folder = root.join(dir);
+    if !root.join(dir).exists() {
+        return Vec::new();
+    }
+    let Some(folder) = crate::config::inside(root, dir).filter(|p| p.is_dir()) else {
+        diags.push(
+            Diagnostic::new(
+                "W110",
+                format!("the walkthroughs folder {dir} is no folder inside the project"),
+            )
+            .at("docair.toml", 1),
+        );
+        return Vec::new();
+    };
     let Ok(entries) = std::fs::read_dir(&folder) else {
         return Vec::new();
     };
@@ -165,8 +177,11 @@ pub fn load(
             dir.trim_end_matches('/'),
             path.file_name().unwrap_or_default().to_string_lossy()
         );
-        let parsed = std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
+        // A file in the folder may be a link out of the project, or no file.
+        let parsed = crate::config::inside(root, &rel)
+            .filter(|p| p.is_file())
+            .ok_or_else(|| "no file inside the project".to_string())
+            .and_then(|p| std::fs::read_to_string(p).map_err(|e| e.to_string()))
             .and_then(|t| serde_json::from_str::<Walkthrough>(&t).map_err(|e| e.to_string()));
         let mut wt = match parsed {
             Ok(wt) if wt.schema == WALKTHROUGH_SCHEMA => wt,
@@ -206,6 +221,18 @@ pub fn load(
  * @writes walkthrough-files (Walkthrough)
  ***/
 pub fn save(root: &Path, dir: &str, wt: &Walkthrough) -> Result<PathBuf> {
+    // The folder stays inside the project, and the id is a file name, not a path.
+    let inside = crate::glossary::normalize(Path::new(dir));
+    let plain = !wt.id.is_empty()
+        && wt.id != ".."
+        && !wt.id.contains(['/', '\\'])
+        && !wt.id.starts_with('.');
+    let (Some(_), true) = (inside, plain) else {
+        anyhow::bail!(
+            "a walkthrough is recorded inside the project: {dir}/{}.json is not",
+            wt.id
+        );
+    };
     let folder = root.join(dir);
     std::fs::create_dir_all(&folder).with_context(|| format!("creating {}", folder.display()))?;
     let path = folder.join(format!("{}.json", wt.id));
@@ -257,8 +284,10 @@ mod tests {
             reply: None,
             text: None,
             carries: vec![],
+            carries_back: vec![],
             from_code: false,
             from_api: None,
+            reach: None,
             tag: "@calls".into(),
             source: SourceRef {
                 file: "x".into(),
@@ -295,6 +324,22 @@ mod tests {
             steps,
             file: None,
         }
+    }
+
+    #[test]
+    fn a_walkthrough_is_recorded_inside_the_project() {
+        let dir = std::env::temp_dir().join(format!("docair-wt-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut wt = walkthrough(vec![]);
+        assert!(save(&dir, "walks", &wt).is_ok());
+        assert!(
+            save(&dir, "../walks", &wt).is_err(),
+            "a folder out of the project"
+        );
+        assert!(save(&dir, "/tmp", &wt).is_err(), "an absolute folder");
+        wt.id = "../../x".into();
+        assert!(save(&dir, "walks", &wt).is_err(), "an id that is a path");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

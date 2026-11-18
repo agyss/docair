@@ -1,0 +1,20 @@
+# Writing files with the standard library: `fs::write(path, data)`,
+# `fs::create_dir_all(dir)`, `File::create(path)`. The block names the
+# store; the rule confirms that the code writes one (docs/ADAPTERS.md §5.7).
+id: rust.std.fs-write
+language: rust
+rule:
+  any:
+    - pattern: std::fs::write($P, $$$)
+    - pattern: fs::write($P, $$$)
+    - pattern: std::fs::create_dir_all($P)
+    - pattern: fs::create_dir_all($P)
+    - pattern: std::fs::File::create($P)
+    - pattern: File::create($P)
+    - pattern: std::fs::remove_file($P)
+    - pattern: fs::remove_file($P)
+    - pattern: tokio::fs::write($P, $$$)
+facts:
+  - writes: file
+    path: $P
+    by: enclosing

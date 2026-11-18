@@ -63,7 +63,8 @@
 | `docair-lang-infra` | Terraform, Helm charts, Kubernetes manifests, read as a whole | PoC |
 | `docair-lang-generic` | keyword guesses from the line after a block, for languages without an adapter | PoC |
 | `docair-lang-apis` | OpenAPI and AsyncAPI descriptions: the routes and topics they declare, matched with the code by the core (`declare`); where they disagree, `docair check` warns ([IMPORTS.md](IMPORTS.md)) | PoC |
-| `docair-lang-*`| more adapters: TypeScript/Angular | planned |
+| `docair-lang-ts` | TypeScript/JavaScript adapter (tree-sitter): declarations, Playwright tests, HttpClient and fetch requests | PoC |
+| `docair-scip` | reads SCIP code indexes (rust-analyzer) into calls between functions; runs the installed indexer | PoC |
 | `docair-viewer`| one self-contained HTML page: Cytoscape.js + ELK, levels, drill-down, scenarios | PoC |
 | `docair-cli`   | `docair scan`, `docair check` (later: `docair mermaid`, `docair serve`) | PoC |
 | `docair-server`| HTTP backend: `POST /api/scan` turns an uploaded folder into a docair page | PoC |

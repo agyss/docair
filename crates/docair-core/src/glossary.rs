@@ -80,6 +80,10 @@ pub fn parse(rel: &str, text: &str) -> Vec<Term> {
                 file: rel.to_string(),
                 line,
             },
+            from: String::new(),
+            node: None,
+            section: None,
+            unchecked: None,
         });
     };
     for (k, line) in text.lines().enumerate() {
@@ -215,14 +219,20 @@ pub fn linked_docs(rel: &str, markdown: &str) -> Vec<String> {
  * @reads project-files -> linked Markdown docs
  ***/
 pub fn library(root: &Path, terms: &[Term]) -> Vec<LibraryDoc> {
+    // The docs the entries link to, and the sections that define words (docs/MEANINGS.md §7).
     let files: BTreeSet<String> = terms
         .iter()
-        .flat_map(|t| linked_docs(&t.source.file, &t.markdown))
+        .flat_map(|t| {
+            let mut docs = linked_docs(&t.source.file, &t.markdown);
+            docs.extend(t.section.iter().map(|s| s.file.clone()));
+            docs
+        })
         .collect();
     files
         .into_iter()
         .filter_map(|file| {
-            let markdown = std::fs::read_to_string(root.join(&file)).ok()?;
+            let path = crate::config::inside(root, &file).filter(|p| p.is_file())?;
+            let markdown = std::fs::read_to_string(path).ok()?;
             Some(LibraryDoc { file, markdown })
         })
         .collect()

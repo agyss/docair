@@ -5,8 +5,15 @@ use docair_lang_apis::ApiAdapter;
 use docair_lang_generic::GenericAdapter;
 use docair_lang_infra::InfraAdapter;
 use docair_lang_rust::RustAdapter;
+use docair_lang_ts::TsAdapter;
 
-static ALL: [&dyn Adapter; 4] = [&RustAdapter, &InfraAdapter, &ApiAdapter, &GenericAdapter];
+static ALL: [&dyn Adapter; 5] = [
+    &RustAdapter,
+    &InfraAdapter,
+    &ApiAdapter,
+    &TsAdapter,
+    &GenericAdapter,
+];
 
 /***
  * Every adapter, in order: language adapters first, the generic guesses last.

@@ -51,8 +51,8 @@ test.describe('what the words mean', () => {
     await page.locator('#details code.node-ref', { hasText: 'orders.create' }).click();
     await expect(page.locator('#details h2')).toContainText('create_order');
     await page.getByTestId('glossary-button').click();
-    await expect(page.getByTestId('glossary').locator('dt')).toHaveText(['cart', 'order']);
+    await expect(page.getByTestId('glossary').locator('dt > a')).toHaveText(['cart', 'order']);
     await page.getByTestId('glossary-search').fill('ord');
-    await expect(page.getByTestId('glossary').locator('dt')).toHaveText(['order']);
+    await expect(page.getByTestId('glossary').locator('dt > a')).toHaveText(['order']);
   });
 });

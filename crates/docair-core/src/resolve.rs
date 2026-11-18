@@ -7,7 +7,8 @@ use petgraph::algo::astar;
 use petgraph::graph::NodeIndex;
 use petgraph::{Directed, EdgeType, Undirected};
 
-use crate::model::{Diagnostic, Edge, EdgeKind, Flow, FlowStep, Node, Origin, SourceRef};
+use crate::model::{Diagnostic, Edge, EdgeKind, Flow, FlowStep, Node, Origin, Reach, SourceRef};
+use crate::route::{Fit, Route};
 
 /// flow name → step number → (node ids, labels)
 type StepsByFlow = BTreeMap<String, BTreeMap<u32, (Vec<String>, Vec<String>)>>;
@@ -133,8 +134,121 @@ fn says(old: &str, new: &str) -> bool {
     })
 }
 
-struct Resolved {
-    id: String,
+/// What code says it touches without saying which one: `file:` (a read or a write) binds to a store, `net:` (a request to a host the code computes) to an external system.
+const OPEN_REFS: &[(&str, &[&str])] = &[("file:", &["store"]), ("net:", &["external", "host"])];
+
+/***
+ * Bind what code touches but doesn't name to what the part's own block names: `@reads file:` to the store of its `@reads`.
+ *
+ * The code says that a function reads a file; the block says which store
+ * that is (docs/ADAPTERS.md §5.7). An inferred `file:` or `net:` tag becomes
+ * the same tag to each target of that kind the block's own tags of the same
+ * name give; when the block gives none, those of the blocks of the functions
+ * that call it (a helper like `post(agent, url)` sends what its caller's
+ * block names), up to three calls up. One of them when there are several;
+ * with none the tag is dropped, and no line or warning comes of it.
+ ***/
+pub(crate) fn bind_open_refs(nodes: &mut [Node], index: &HashMap<String, usize>) {
+    // Who calls whom, as the code says it.
+    let mut callers: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, n) in nodes.iter().enumerate() {
+        for t in n
+            .tags
+            .iter()
+            .filter(|t| t.origin == Origin::Inferred && t.name == "calls")
+        {
+            if let Some(&k) = resolve_ref(&split_payload(&t.value).target, nodes, index)
+                .and_then(|r| index.get(&r.id))
+            {
+                callers.entry(k).or_default().push(i);
+            }
+        }
+    }
+    // The targets of these kinds a part's own block names with tags of this name.
+    let named = |at: usize, name: &str, kinds: &[&str]| -> Vec<String> {
+        nodes[at]
+            .tags
+            .iter()
+            .filter(|a| a.origin == Origin::Authored && a.name == name)
+            .filter_map(|a| {
+                let target = split_payload(&a.value).target;
+                let r = resolve_ref(&target, nodes, index)?;
+                let k = *index.get(&r.id)?;
+                kinds
+                    .contains(&nodes[k].kind.as_str())
+                    .then(|| target.trim().to_string())
+            })
+            .collect()
+    };
+    let mut changes: Vec<(usize, Vec<usize>, Vec<crate::model::Tag>)> = Vec::new();
+    for (i, node) in nodes.iter().enumerate() {
+        let open: Vec<usize> = node
+            .tags
+            .iter()
+            .enumerate()
+            .filter(|(_, tag)| {
+                tag.origin == Origin::Inferred
+                    && OPEN_REFS.iter().any(|(p, _)| tag.value.starts_with(p))
+            })
+            .map(|(t, _)| t)
+            .collect();
+        if open.is_empty() {
+            continue;
+        }
+        let mut bound: Vec<crate::model::Tag> = Vec::new();
+        for &t in &open {
+            let tag = &node.tags[t];
+            let kinds = OPEN_REFS
+                .iter()
+                .find(|(p, _)| tag.value.starts_with(p))
+                .map_or(&[][..], |(_, k)| *k);
+            // The part's own block first, then its callers', up to three calls up.
+            let mut found = named(i, &tag.name, kinds);
+            let mut seen = vec![i];
+            let mut ring = vec![i];
+            for _ in 0..3 {
+                if !found.is_empty() {
+                    break;
+                }
+                ring = ring
+                    .iter()
+                    .flat_map(|r| callers.get(r).into_iter().flatten().copied())
+                    .filter(|c| !seen.contains(c))
+                    .collect();
+                ring.sort_unstable();
+                ring.dedup();
+                seen.extend(&ring);
+                for &c in &ring {
+                    for target in named(c, &tag.name, kinds) {
+                        if !found.contains(&target) {
+                            found.push(target);
+                        }
+                    }
+                }
+            }
+            let several = found.len() > 1;
+            for target in found {
+                let mut b = tag.clone();
+                b.value = target;
+                if several {
+                    b.reach = Some(Reach::OneOf);
+                }
+                bound.push(b);
+            }
+        }
+        changes.push((i, open, bound));
+    }
+    for (i, open, bound) in changes {
+        let tags = &mut nodes[i].tags;
+        for &t in open.iter().rev() {
+            tags.remove(t);
+        }
+        tags.extend(bound);
+    }
+}
+
+pub(crate) struct Resolved {
+    pub(crate) id: String,
     sub: Option<String>,
     via: Option<String>,
 }
@@ -148,7 +262,7 @@ struct Resolved {
  *
  * @flow  scan 10 "refs become edges, flows get paths"
  * @in    nodes: Node[] from docair-core.build.build
- * @calls docair-core.resolve.match_http "compares called paths with routes"
+ * @calls docair-core.route.route.fit "compares called paths with routes"
  * @calls docair-core.resolve.flow_paths "orders the scenario steps and links them"
  * @out   graph: Node[] + Edge[] + Flow[]
  ***/
@@ -164,6 +278,7 @@ pub fn resolve(
         .collect();
     let mut edges: Vec<Edge> = Vec::new();
     let mut by_pair: HashMap<(String, String), usize> = HashMap::new();
+    bind_open_refs(&mut nodes, &index);
 
     for i in 0..nodes.len() {
         let node_id = nodes[i].id.clone();
@@ -287,6 +402,10 @@ pub fn resolve(
                     }
                 }
                 e.via = e.via.take().or(resolved.via);
+                // A certain way to the same part makes the line certain.
+                if tag.reach.is_none_or(|r| r == Reach::Certain) {
+                    e.reach = None;
+                }
                 e.text = match (e.text.take(), text) {
                     (Some(a), Some(b)) if a != b => Some(format!("{a}; {b}")),
                     (a, b) => a.or(b),
@@ -304,10 +423,12 @@ pub fn resolve(
                 via: resolved.via,
                 text,
                 carries: vec![],
+                carries_back: vec![],
                 payload,
                 reply,
                 from_code: false,
                 from_api: None,
+                reach: tag.reach.filter(|r| *r != Reach::Certain),
                 tag: format!("@{} {}", tag.name, tag.value),
                 source: SourceRef {
                     file: file.clone(),
@@ -324,7 +445,7 @@ pub fn resolve(
     (nodes, edges, flows)
 }
 
-/// Data nodes whose name (or a `@carried-as` word) occurs in what an edge carries (SPEC §3.6).
+/// Data nodes whose name (or a `@carried-as` word) occurs in what an edge carries there or, for a call, back (SPEC §3.6).
 fn find_carried_data(nodes: &[Node], edges: &mut [Edge]) {
     let data: Vec<(&str, Vec<String>)> = nodes
         .iter()
@@ -360,15 +481,30 @@ fn find_carried_data(nodes: &[Node], edges: &mut [Edge]) {
         {
             continue;
         }
-        let said = [&e.payload, &e.reply, &e.label]
-            .into_iter()
-            .flatten()
-            .map(|s| s.to_lowercase())
-            .collect::<Vec<_>>()
-            .join(" ");
+        // A call carries its payload there and its reply back; any other line carries all it says there.
+        let call = e.kind == EdgeKind::Call;
+        let label = e.label.as_deref().map(|l| match (&e.reply, call) {
+            (Some(r), true) => l.replace(&format!("→ {r}"), " "),
+            _ => l.to_string(),
+        });
+        let mut there: Vec<&str> = e.payload.iter().map(String::as_str).collect();
+        there.extend(label.as_deref());
+        if !call {
+            there.extend(e.reply.as_deref());
+        }
+        let there = there.join(" ").to_lowercase();
+        let back = if call {
+            e.reply.as_deref().unwrap_or("").to_lowercase()
+        } else {
+            String::new()
+        };
         for (id, words) in &data {
-            if words.iter().any(|w| crate::glossary::occurs_word(w, &said)) {
+            let names = |text: &str| words.iter().any(|w| crate::glossary::occurs_word(w, text));
+            if names(&there) {
                 e.carries.push(id.to_string());
+            }
+            if names(&back) {
+                e.carries_back.push(id.to_string());
             }
         }
     }
@@ -434,13 +570,19 @@ fn add_node(
     });
 }
 
-fn resolve_ref(r: &str, nodes: &[Node], index: &HashMap<String, usize>) -> Option<Resolved> {
+pub(crate) fn resolve_ref(
+    r: &str,
+    nodes: &[Node],
+    index: &HashMap<String, usize>,
+) -> Option<Resolved> {
     let r = r.trim();
     if let Some(rest) = r.strip_prefix("http:") {
         let (method, path) = rest.trim().split_once(char::is_whitespace)?;
+        let wanted = Route::parse(path.trim());
         let node = nodes.iter().find(|n| {
             n.http.as_ref().is_some_and(|h| {
-                h.method.eq_ignore_ascii_case(method) && match_http(path.trim(), &h.path)
+                h.method.eq_ignore_ascii_case(method)
+                    && wanted.fit(&Route::parse(&h.path)) == Fit::Certain
             })
         })?;
         return Some(Resolved {
@@ -489,27 +631,6 @@ fn resolve_ref(r: &str, nodes: &[Node], index: &HashMap<String, usize>) -> Optio
             via: None,
         })
     })
-}
-
-/***
- * Match a called path against a declared route, positionally, so that `{id}` and `:id` match any segment.
- ***/
-pub fn match_http(called: &str, declared: &str) -> bool {
-    let split = |p: &str| -> Vec<String> {
-        p.split('?')
-            .next()
-            .unwrap_or("")
-            .trim_matches('/')
-            .split('/')
-            .map(str::to_string)
-            .collect()
-    };
-    let (a, b) = (split(called), split(declared));
-    let is_param = |s: &str| s.starts_with(':') || (s.starts_with('{') && s.ends_with('}'));
-    a.len() == b.len()
-        && a.iter()
-            .zip(&b)
-            .all(|(x, y)| x == y || is_param(x) || is_param(y))
 }
 
 /***
@@ -731,6 +852,56 @@ mod tests {
         }
     }
 
+    /// What code touches without naming it binds to what the block, or a caller's block, names.
+    #[test]
+    fn open_refs_bind_to_what_the_blocks_name() {
+        let store = |id: &str| Node {
+            kind: "store".into(),
+            ..node(id, &[])
+        };
+        let external = Node {
+            kind: "external".into(),
+            ..node("ai", &[])
+        };
+        let mut load = node("load", &[("reads", "walks")]);
+        load.tags
+            .push(Tag::inferred("reads", "file:", 3, "fs::read_dir(…)"));
+        // A helper without a block of its own: its caller names the endpoint.
+        let mut post = node("post", &[]);
+        post.tags.push(Tag::inferred(
+            "calls",
+            "net:",
+            4,
+            "rust-analyzer: ureq Agent::post",
+        ));
+        let mut chat = node("chat", &[("calls", "ai")]);
+        chat.tags
+            .push(Tag::inferred("calls", "post", 5, "rust-analyzer: post"));
+        // Nothing names a store: no line, no warning.
+        let mut lonely = node("lonely", &[]);
+        lonely
+            .tags
+            .push(Tag::inferred("writes", "file:", 6, "fs::write(…)"));
+        let nodes = vec![store("walks"), external, load, post, chat, lonely];
+        let mut diags = Vec::new();
+        let (_, edges, _) = resolve(nodes, "shop", &mut diags);
+        let mut lines: Vec<(String, String, EdgeKind)> = edges
+            .iter()
+            .map(|e| (e.from.clone(), e.to.clone(), e.kind))
+            .collect();
+        lines.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        assert_eq!(
+            lines,
+            [
+                ("chat".into(), "ai".into(), EdgeKind::Call),
+                ("chat".into(), "post".into(), EdgeKind::Call),
+                ("post".into(), "ai".into(), EdgeKind::Call),
+                ("walks".into(), "load".into(), EdgeKind::Read),
+            ]
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
     #[test]
     fn edges_carry_the_data_their_payload_names() {
         let mut q = node("data.question", &[("carried-as", "prompt, ask")]);
@@ -754,15 +925,18 @@ mod tests {
         ];
         let mut diags = vec![];
         let (_, edges, _) = resolve(nodes, "shop", &mut diags);
-        let carries = |a: &str, b: &str| {
-            edges
-                .iter()
-                .find(|e| e.from == a && e.to == b)
-                .unwrap()
-                .carries
-                .clone()
-        };
-        assert_eq!(carries("panel", "svc"), vec!["data.question", "data.reply"]);
+        let edge = |a: &str, b: &str| edges.iter().find(|e| e.from == a && e.to == b).unwrap();
+        let carries = |a: &str, b: &str| edge(a, b).carries.clone();
+        assert_eq!(
+            carries("panel", "svc"),
+            vec!["data.question"],
+            "the payload goes there"
+        );
+        assert_eq!(
+            edge("panel", "svc").carries_back,
+            vec!["data.reply"],
+            "the reply comes back"
+        );
         assert_eq!(
             carries("svc", "model"),
             vec!["data.question"],
@@ -870,9 +1044,10 @@ mod tests {
 
     #[test]
     fn http_params_match_by_position() {
-        assert!(match_http("/api/orders/:id", "/api/orders/{id}"));
-        assert!(match_http("/api/orders/42?x=1", "/api/orders/{id}"));
-        assert!(!match_http("/api/orders", "/api/orders/{id}"));
+        let fits = |a: &str, b: &str| Route::parse(a).fit(&Route::parse(b)) == Fit::Certain;
+        assert!(fits("/api/orders/:id", "/api/orders/{id}"));
+        assert!(fits("/api/orders/42?x=1", "/api/orders/{id}"));
+        assert!(!fits("/api/orders", "/api/orders/{id}"));
     }
 
     #[test]

@@ -63,6 +63,8 @@ pub fn render_html(graph: &Graph) -> String {
             json!({
                 "summary": markdown_html_in(&t.summary, &dir, &library),
                 "body": markdown_html_in(&t.markdown, &dir, &library),
+                // The glossary's text while it is not checked against the code (docs/MEANINGS.md §2).
+                "unchecked": t.unchecked.as_deref().map(|m| markdown_html_in(m, &dir, &library)),
             }),
         );
     }

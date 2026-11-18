@@ -314,7 +314,7 @@
           "value": "component",
           "line": 11,
           "origin": "inferred",
-          "reason": "keyword `class`"
+          "reason": "tree-sitter: class_declaration"
         }
       ],
       "origin": "authored"
@@ -350,7 +350,7 @@
           "value": "function",
           "line": 20,
           "origin": "inferred",
-          "reason": "method"
+          "reason": "tree-sitter: method_definition"
         }
       ],
       "origin": "authored",
@@ -747,6 +747,9 @@
       "carries": [
         "data.order"
       ],
+      "carries_back": [
+        "data.order"
+      ],
       "tag": "@calls http:POST /api/orders (CreateOrder) -> Order",
       "source": {
         "file": "ui/src/cart.ts",
@@ -869,7 +872,9 @@
       "source": {
         "file": "GLOSSARY.md",
         "line": 5
-      }
+      },
+      "from": "code",
+      "node": "data.order"
     },
     {
       "id": "cart",
@@ -891,5 +896,18 @@
       "markdown": "# Orders\n\n## How an order moves\n\nThe shopper clicks Buy. The cart posts `CreateOrder` to `POST /api/orders`, and\ncreate_order writes the order into the orders table.\n"
     }
   ],
+  "meanings": {
+    "file": "docs/meanings.toml",
+    "decisions": {
+      "cart": {
+        "why": "Cart is the cart page; the word means the list of items, as the glossary says"
+      },
+      "order": {
+        "from": "data.order",
+        "checked": "ada35fb2",
+        "why": "the data the shopper places; the glossary entry agrees with it"
+      }
+    }
+  },
   "diagnostics": []
 }

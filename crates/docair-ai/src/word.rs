@@ -332,8 +332,10 @@ mod tests {
             reply: None,
             text: None,
             carries: vec![],
+            carries_back: vec![],
             from_code: false,
             from_api: None,
+            reach: None,
             tag: tag.into(),
             source: SourceRef {
                 file: "a.rs".into(),
@@ -368,6 +370,7 @@ mod tests {
             view: View::default(),
             glossary: vec![],
             library: vec![],
+            meanings: None,
             diagnostics: vec![],
         };
         assert_eq!(unworded(&graph, None, false), vec![1, 3, 0]);

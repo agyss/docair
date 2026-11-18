@@ -18,7 +18,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use docair_core::adapter::{Adapter, Project};
-use docair_core::facts::{Draw, Evidence, Facts, Inferred, Relation, Symbol, Target, Verb};
+use docair_core::facts::{
+    Draw, Evidence, Facts, Inferred, Meet, Relation, Serve, Symbol, Target, Verb,
+};
 use docair_core::ids::slug;
 use docair_core::model::{Origin, RawBlock, SourceFile};
 
@@ -139,6 +141,25 @@ struct K8sObject {
     target_port: Option<String>,
     /// Ingress: the controller that serves it (`ingressClassName`).
     class: Option<String>,
+    /// Workload: the environment variables its containers get.
+    env: Vec<EnvSet>,
+    /// ConfigMap, Secret: the keys of `data` and `stringData`.
+    keys: Vec<String>,
+}
+
+/// How a workload's container gets an environment variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EnvSet {
+    /// `- name: X` with `value:`: the workload sets it itself.
+    Value(String),
+    /// `valueFrom: configMapKeyRef` / `secretKeyRef`: from one key of a ConfigMap or Secret.
+    Key {
+        var: String,
+        kind: String,
+        name: String,
+    },
+    /// `envFrom: configMapRef` / `secretRef`: every key of a ConfigMap or Secret.
+    All { kind: String, name: String },
 }
 
 impl K8sObject {
@@ -240,6 +261,8 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
     let mut routes = Vec::new();
     let mut target_port = None;
     let mut class = None;
+    let mut env: Vec<EnvSet> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
     // A path stack of keys by indentation, to know where a line is.
     let mut stack: Vec<(usize, String)> = Vec::new();
     let mut host = String::new();
@@ -293,6 +316,48 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
                 target_port = Some(value.clone())
             }
             (["spec"], "ingressClassName") => class = Some(value.clone()),
+            // Environment: `env: - name: X`, then `valueFrom: secretKeyRef: name: …`.
+            (p, "name") if p.last() == Some(&"env") => env.push(EnvSet::Value(value.clone())),
+            (p, "name")
+                if p.len() >= 2
+                    && p[p.len() - 2] == "valueFrom"
+                    && matches!(p[p.len() - 1], "configMapKeyRef" | "secretKeyRef") =>
+            {
+                let kind = if p[p.len() - 1] == "secretKeyRef" {
+                    "Secret"
+                } else {
+                    "ConfigMap"
+                };
+                if let (Some(EnvSet::Value(var)), Some(name)) =
+                    (env.last().cloned(), object_name(t, &value))
+                {
+                    *env.last_mut().expect("the variable is there") = EnvSet::Key {
+                        var,
+                        kind: kind.into(),
+                        name,
+                    };
+                }
+            }
+            (p, "name")
+                if p.len() >= 2
+                    && p[p.len() - 2] == "envFrom"
+                    && matches!(p[p.len() - 1], "configMapRef" | "secretRef") =>
+            {
+                let kind = if p[p.len() - 1] == "secretRef" {
+                    "Secret"
+                } else {
+                    "ConfigMap"
+                };
+                if let Some(name) = object_name(t, &value) {
+                    env.push(EnvSet::All {
+                        kind: kind.into(),
+                        name,
+                    });
+                }
+            }
+            (["data"] | ["stringData"], k) if kind == "ConfigMap" || kind == "Secret" => {
+                keys.push(k.to_string())
+            }
             (_, "kubernetes.io/ingress.class") => class = Some(value.clone()),
             // A templated host (`{{ . | quote }}`) is not known: the rule then holds for any host.
             (_, "host") if kind == "Ingress" => {
@@ -302,7 +367,18 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
                     value.clone()
                 }
             }
-            (_, "path") if kind == "Ingress" => path = value.clone(),
+            (_, "path") if kind == "Ingress" => {
+                // A new path: the one before it is done, even when its port had no number.
+                if let Some(s) = svc.take() {
+                    routes.push((host.clone(), path.clone(), s, None));
+                }
+                path = value.clone()
+            }
+            (p, "name") if kind == "Ingress" && p.last() == Some(&"port") => {
+                if let Some(s) = svc.take() {
+                    routes.push((host.clone(), path.clone(), s, Some(value.clone())));
+                }
+            }
             (p, "name") if kind == "Ingress" && p.last() == Some(&"service") => {
                 svc = Some(value.clone())
             }
@@ -355,8 +431,20 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
         selector,
         routes,
         target_port,
-        class: class.filter(|c| !c.contains("{{")),
+        class,
+        env,
+        keys,
     })
+}
+
+/// An object's name as a manifest writes it: `docair-ai`, or the default of a template (`{{ .Values.x | default "docair-ai" }}`).
+fn object_name(line: &str, value: &str) -> Option<String> {
+    if !value.contains("{{") {
+        return Some(value.to_string()).filter(|v| !v.is_empty());
+    }
+    let (_, after) = line.split_once("default")?;
+    let name = after.split('"').nth(1)?;
+    Some(name.to_string()).filter(|n| !n.is_empty())
 }
 
 /// What the adapter knows about the whole project.
@@ -370,6 +458,8 @@ struct Index {
     /// Terraform addresses with an authored block → that block's `@creates` target ("" for none).
     authored: HashMap<String, String>,
     locals: HashMap<String, String>,
+    /// Locals whose value reads a file: `file(…)`, `filesha1(…)`, `templatefile(…)`.
+    file_locals: BTreeSet<String>,
     /// Cluster nodes the Terraform creates: authored `@creates` targets or `k8s.cluster.<name>`.
     clusters: Vec<String>,
     /// Addresses of cluster resources the helm/kubernetes providers talk to.
@@ -381,6 +471,133 @@ struct Index {
     objects: Vec<K8sObject>,
     /// Object symbols (`Deployment x`) that have an authored block.
     authored_objects: BTreeSet<String>,
+    /// Chart directory → its `values.yaml`, flattened: `ingress.className` → `traefik`.
+    values: BTreeMap<String, HashMap<String, String>>,
+    /// Blocks inside Terraform resources: `node {`, `extra_port_mappings {`, `values = [yamlencode({`.
+    subs: Vec<Sub>,
+    /// The `@id` of the authored block on a code line: (file, line) → id.
+    ids_at: HashMap<(String, usize), String>,
+}
+
+/// A block inside a Terraform resource, with its own attributes.
+#[derive(Debug, Clone)]
+struct Sub {
+    file: String,
+    line: usize,
+    /// `node`, `extra_port_mappings`, `values`.
+    kind: String,
+    /// `container_port = 30080`; for `values`, every `key = value` inside (`nodePort`, `isDefaultClass`).
+    attrs: HashMap<String, String>,
+    /// The line of the block it sits in, when that is a block too (`node` for `extra_port_mappings`).
+    parent: Option<usize>,
+    /// The resource's address: `kind_cluster.docair`.
+    resource: String,
+}
+
+/// The blocks inside a resource's body: `name {` and `name = [yamlencode({`, with the lines they start on.
+fn tf_subs(r: &TfBlock) -> Vec<Sub> {
+    let mut out: Vec<Sub> = Vec::new();
+    // (index in out, depth the block opened at)
+    let mut open: Vec<(usize, i32)> = Vec::new();
+    let mut depth = 0;
+    for (k, l) in r.body.iter().enumerate() {
+        let t = l.trim();
+        let line = r.line + 1 + k;
+        let head = t
+            .split(|c: char| c.is_whitespace() || c == '=' || c == '{')
+            .next()
+            .unwrap_or("");
+        let named = !head.is_empty() && head.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let opens = named && (t == format!("{head} {{") || t.contains("yamlencode({"));
+        if let Some((at, _)) = open.last()
+            && let Some((key, value)) = t.split_once('=')
+            && !opens
+        {
+            let key = key.trim().trim_matches('"');
+            let value = value.trim().trim_end_matches(',').trim().trim_matches('"');
+            if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                out[*at].attrs.insert(key.to_string(), value.to_string());
+            }
+            // `ports = { web = { nodePort = 30080 } }`: the keys on one line, too.
+            for part in t.split(['{', '}', ',']) {
+                if let Some((k2, v2)) = part.split_once('=') {
+                    let k2 = k2.trim();
+                    if !k2.is_empty() && k2.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        out[*at]
+                            .attrs
+                            .entry(k2.to_string())
+                            .or_insert_with(|| v2.trim().trim_matches('"').to_string());
+                    }
+                }
+            }
+        }
+        if opens {
+            out.push(Sub {
+                file: r.file.clone(),
+                line,
+                kind: head.to_string(),
+                attrs: HashMap::new(),
+                parent: open.last().map(|(at, _)| out[*at].line),
+                resource: r.address(),
+            });
+            open.push((out.len() - 1, depth));
+        }
+        depth += brace_delta(l);
+        while open.last().is_some_and(|(_, d)| depth <= *d) {
+            open.pop();
+        }
+    }
+    out
+}
+
+/// A chart's `values.yaml`, flattened to dotted keys: `ingress:\n  className: traefik` → `ingress.className` → `traefik`.
+fn flat_values(text: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    for raw in text.lines() {
+        let t = raw.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with('-') {
+            continue;
+        }
+        let ind = indent(raw);
+        while stack.last().is_some_and(|(i, _)| *i >= ind) {
+            stack.pop();
+        }
+        let Some((key, value)) = t.split_once(':') else {
+            continue;
+        };
+        let value = value
+            .split(" #")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('"');
+        let path: Vec<&str> = stack
+            .iter()
+            .map(|(_, k)| k.as_str())
+            .chain([key.trim()])
+            .collect();
+        if value.is_empty() {
+            stack.push((ind, key.trim().to_string()));
+        } else {
+            out.insert(path.join("."), value.to_string());
+        }
+    }
+    out
+}
+
+/// A template's value from the chart's values: `{{ .Values.ingress.className }}` → `traefik`.
+fn from_values(template: &str, values: Option<&HashMap<String, String>>) -> Option<String> {
+    let inner = template
+        .trim()
+        .strip_prefix("{{")?
+        .strip_suffix("}}")?
+        .trim();
+    let path = inner.strip_prefix(".Values.")?;
+    if path.contains(|c: char| c.is_whitespace() || c == '|') {
+        return None;
+    }
+    values?.get(path).cloned().filter(|v| !v.is_empty())
 }
 
 /// The block attached to a line, if any: its following line is the line or one or two before it.
@@ -427,12 +644,30 @@ impl Index {
                             a.resources.push(b);
                         }
                         "locals" => {
+                            // A local runs from `name = …` to the next one at the same indent.
+                            let top = b
+                                .body
+                                .iter()
+                                .find(|l| !l.trim().is_empty())
+                                .map_or(0, |l| indent(l));
+                            let mut current: Option<String> = None;
                             for l in &b.body {
-                                if let Some((k, v)) = l.split_once('=') {
-                                    a.locals.insert(
-                                        k.trim().to_string(),
-                                        v.trim().trim_matches('"').to_string(),
-                                    );
+                                let starts = indent(l) == top
+                                    && l.split_once('=').is_some_and(|(k, _)| {
+                                        let k = k.trim();
+                                        !k.is_empty()
+                                            && k.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                    });
+                                if starts && let Some((k, v)) = l.split_once('=') {
+                                    let k = k.trim().to_string();
+                                    a.locals
+                                        .insert(k.clone(), v.trim().trim_matches('"').to_string());
+                                    current = Some(k);
+                                }
+                                if let Some(k) = &current
+                                    && reads_file(l)
+                                {
+                                    a.file_locals.insert(k.clone());
                                 }
                             }
                         }
@@ -454,6 +689,17 @@ impl Index {
                         }
                         _ => {}
                     }
+                }
+            }
+            if f.rel.ends_with("/values.yaml") || f.rel == "values.yaml" {
+                a.values
+                    .insert(dir_of(&f.rel).to_string(), flat_values(&f.text));
+            }
+            for b in bs.iter().filter(|b| b.origin == Origin::Authored) {
+                if let (Some(fl), Some(id)) = (&b.following, b.tags.iter().find(|t| t.name == "id"))
+                {
+                    a.ids_at
+                        .insert((f.rel.clone(), fl.line), id.value.trim().to_string());
                 }
             }
             if f.rel.ends_with("Chart.yaml") {
@@ -490,6 +736,13 @@ impl Index {
         }
         a.provider_clusters.sort();
         a.provider_clusters.dedup();
+        a.subs = a.resources.iter().flat_map(tf_subs).collect();
+        // A templated class, from the chart's values: `{{ .Values.ingress.className }}`.
+        for o in &mut a.objects {
+            if let Some(c) = o.class.clone().filter(|c| c.contains("{{")) {
+                o.class = chart_of(&o.file).and_then(|d| from_values(&c, a.values.get(d)));
+            }
+        }
         // What the clusters and releases are called, now that every file is read.
         for r in a.resources.clone() {
             let ty = r.labels[0].as_str();
@@ -610,6 +863,26 @@ impl Index {
                     .insert("cluster access".into());
             }
         }
+        // A file it reads, itself or through a local: the block names the store (`file:`).
+        let reads = r.body.iter().find(|l| {
+            reads_file(l)
+                || refs_in(l.trim()).iter().any(|f| {
+                    f.strip_prefix("local.").is_some_and(|n| {
+                        self.file_locals.contains(n.split('.').next().unwrap_or(n))
+                    })
+                })
+                || self
+                    .file_locals
+                    .iter()
+                    .any(|n| l.contains(&format!("local.{n}")))
+        });
+        let file_read = reads.map(|l| {
+            Relation::new(
+                Verb::Reads,
+                Target::Ref("file:".into()),
+                Evidence::new(line, format!("terraform: {}", l.trim())),
+            )
+        });
         let mut tags: Vec<Relation> = uses
             .into_iter()
             .map(|(addr, what)| {
@@ -622,6 +895,7 @@ impl Index {
                 .label(what)
             })
             .collect();
+        tags.extend(file_read);
         let states_creates = authored.is_some_and(|b| authored_creates(b).is_some());
         if !states_creates && let Some(target) = self.created_id(r) {
             let how = if ty == "helm_release" {
@@ -720,6 +994,158 @@ impl Index {
     }
 
     /// What a Kubernetes object does: an Ingress routes, a Service selects.
+    /// What a block inside a resource is called on the graph: its block's `@id`, else the resource.
+    fn sub_target(&self, file: &str, line: usize, resource: &str) -> String {
+        self.ids_at
+            .get(&(file.to_string(), line))
+            .cloned()
+            .unwrap_or_else(|| format!("tf:{resource}"))
+    }
+
+    /***
+     * The way into the cluster, from the blocks inside resources: a port mapping leads into its node, the node to the release whose NodePort it publishes, the ingress controller's values to the Ingresses of its class.
+     *
+     * `extra_port_mappings { container_port = 30080 }` sits in `node { }`;
+     * `helm_release` values with `nodePort = 30080` take that port; a release
+     * whose values make it an IngressClass (`ingressClass`, `isDefaultClass`)
+     * takes the Ingresses whose `ingressClassName` is its name, and those
+     * without one when it is the default. The lines go to the `@id` of the
+     * block on the other end, else to the resource.
+     ***/
+    fn sub_relations(&self, sub: &Sub) -> Vec<Relation> {
+        let call = |to: String, what: String, why: &str| {
+            Relation::new(Verb::Calls, Target::Ref(to), Evidence::new(sub.line, why))
+                .payload(Some(what))
+        };
+        match sub.kind.as_str() {
+            "extra_port_mappings" => {
+                let Some(parent) = sub.parent else {
+                    return Vec::new();
+                };
+                let a = |k: &str| sub.attrs.get(k).cloned().unwrap_or_default();
+                let host = match a("listen_address") {
+                    l if l.is_empty() => a("host_port"),
+                    l => format!("{l}:{}", a("host_port")),
+                };
+                vec![call(
+                    self.sub_target(&sub.file, parent, &sub.resource),
+                    format!(
+                        "{} {host} → :{}",
+                        a("protocol").to_uppercase(),
+                        a("container_port")
+                    ),
+                    "extra_port_mappings in node",
+                )]
+            }
+            "node" => {
+                let ports: Vec<&String> = self
+                    .subs
+                    .iter()
+                    .filter(|m| m.file == sub.file && m.parent == Some(sub.line))
+                    .filter_map(|m| m.attrs.get("container_port"))
+                    .collect();
+                let mut out = Vec::new();
+                for v in self.subs.iter().filter(|v| v.kind == "values") {
+                    if let Some(port) = v.attrs.get("nodePort").filter(|p| ports.contains(p)) {
+                        out.push(call(
+                            self.sub_target(&v.file, v.line, &v.resource),
+                            format!("NodePort {port}"),
+                            "container_port = nodePort",
+                        ));
+                    }
+                }
+                out
+            }
+            "values" => {
+                let Some(r) = self.resources.iter().find(|r| r.address() == sub.resource) else {
+                    return Vec::new();
+                };
+                let controller = sub.attrs.contains_key("ingressClass")
+                    || sub.attrs.contains_key("isDefaultClass");
+                if !controller {
+                    return Vec::new();
+                }
+                let name = self.value(r, "name").unwrap_or_default();
+                let default = sub.attrs.get("isDefaultClass").is_some_and(|v| v == "true");
+                self.objects
+                    .iter()
+                    .filter(|o| o.kind == "Ingress")
+                    .filter(|o| match &o.class {
+                        Some(c) => *c == name,
+                        None => default,
+                    })
+                    .map(|o| {
+                        call(
+                            format!("k8s:{}", o.symbol().replacen(' ', "/", 1)),
+                            format!("ingress class {name}"),
+                            "ingressClassName",
+                        )
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /***
+     * The environment variables an object sets for the code: a ConfigMap's or Secret's keys that workloads take, a workload's own values.
+     *
+     * `envFrom` takes every key; `valueFrom` one key, under the variable's
+     * name. The workloads are those of the same chart or folder.
+     ***/
+    fn env_set_by(&self, o: &K8sObject) -> Vec<(String, Evidence)> {
+        let same_place = |other: &K8sObject| {
+            dir_of(&other.file) == dir_of(&o.file) || chart_of(&other.file) == chart_of(&o.file)
+        };
+        let mut out: Vec<(String, Evidence)> = Vec::new();
+        let mut add = |name: &str, why: String| {
+            if !out.iter().any(|(n, _)| n == name) {
+                out.push((name.to_string(), Evidence::new(o.line, why)));
+            }
+        };
+        if o.is_workload() {
+            for e in &o.env {
+                if let EnvSet::Value(var) = e {
+                    add(var, format!("env value in {} {}", o.kind, o.name));
+                }
+            }
+            return out;
+        }
+        if o.kind != "ConfigMap" && o.kind != "Secret" {
+            return out;
+        }
+        for w in self
+            .objects
+            .iter()
+            .filter(|w| w.is_workload() && same_place(w))
+        {
+            for e in &w.env {
+                match e {
+                    EnvSet::Key { var, kind, name } if *kind == o.kind && *name == o.name => {
+                        let r = if o.kind == "Secret" {
+                            "secretKeyRef"
+                        } else {
+                            "configMapKeyRef"
+                        };
+                        add(var, format!("{r} in {} {}", w.kind, w.name));
+                    }
+                    EnvSet::All { kind, name } if *kind == o.kind && *name == o.name => {
+                        let r = if o.kind == "Secret" {
+                            "secretRef"
+                        } else {
+                            "configMapRef"
+                        };
+                        for k in &o.keys {
+                            add(k, format!("envFrom {r} in {} {}", w.kind, w.name));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
     fn object_relations(&self, o: &K8sObject) -> Vec<Relation> {
         let mut tags = Vec::new();
         let same_place = |other: &K8sObject| {
@@ -792,6 +1218,27 @@ impl Index {
     }
 }
 
+/// Whether a line of Terraform reads a file: `file(…)`, `filesha1(…)`, `templatefile(…)`, `fileset(…)`.
+fn reads_file(line: &str) -> bool {
+    const READS: &[&str] = &[
+        "file(",
+        "filebase64(",
+        "filesha1(",
+        "filesha256(",
+        "filemd5(",
+        "templatefile(",
+        "fileset(",
+    ];
+    READS.iter().any(|f| {
+        line.match_indices(f).any(|(at, _)| {
+            line[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+    })
+}
+
 /// The chart directory a template belongs to: the directory above `templates/`.
 fn chart_of(file: &str) -> Option<&str> {
     file.rsplit_once("/templates/").map(|(d, _)| d)
@@ -861,13 +1308,26 @@ struct Out {
 }
 
 impl Out {
-    fn add(&mut self, mut s: Symbol, relations: Vec<Relation>) {
+    fn add(&mut self, mut s: Symbol, relations: Vec<Relation>) -> String {
         s.key = format!("infra:{}", self.facts.symbols.len());
+        let key = s.key.clone();
         for mut r in relations {
-            r.from = s.key.clone();
+            r.from = key.clone();
             self.facts.relations.push(r);
         }
         self.facts.symbols.push(s);
+        key
+    }
+
+    /// The environment variables the symbol `key` sets.
+    fn sets(&mut self, key: &str, env: Vec<(String, Evidence)>) {
+        for (name, evidence) in env {
+            self.facts.serves.push(Serve {
+                by: key.to_string(),
+                at: Meet::Env(name),
+                evidence,
+            });
+        }
     }
 }
 
@@ -894,17 +1354,25 @@ impl Index {
                     );
                 }
             }
+            for sub in self.subs.iter().filter(|s| s.file == file.rel) {
+                let relations = self.sub_relations(sub);
+                if !relations.is_empty() && blocks.iter().any(|b| authored(&b, sub.line, sub.line))
+                {
+                    out.add(Symbol::at("", &file.rel, sub.line), relations);
+                }
+            }
         } else {
             for o in self.objects.iter().filter(|o| o.file == file.rel) {
                 let from = o.line.saturating_sub(2);
                 if blocks.iter().any(|b| authored(&b, from, o.line)) {
-                    out.add(
+                    let key = out.add(
                         Symbol {
                             attach_from: from,
                             ..Symbol::at("", &file.rel, o.line)
                         },
                         self.object_relations(o),
                     );
+                    out.sets(&key, self.env_set_by(o));
                 }
             }
         }
@@ -991,7 +1459,8 @@ impl Index {
                     &format!("Kubernetes kind `{}`", o.kind),
                 );
                 s.display = Some(o.symbol());
-                out.add(s, self.object_relations(o));
+                let key = out.add(s, self.object_relations(o));
+                out.sets(&key, self.env_set_by(o));
             }
             // A chart that no Terraform installs is its own release.
             if file.rel.ends_with("Chart.yaml")
@@ -1076,6 +1545,62 @@ mod tests {
         assert!(refs_in("chart = \"${path.module}/x\"").is_empty());
     }
 
+    /// The way in: host port → node → the release that takes the NodePort → the Ingresses of its class.
+    #[test]
+    fn the_way_into_the_cluster() {
+        let cluster = "resource \"kind_cluster\" \"docair\" {\n  kind_config {\n    node {\n      role = \"control-plane\"\n      extra_port_mappings {\n        container_port = 30080\n        host_port      = 8080\n        protocol       = \"TCP\"\n      }\n    }\n  }\n}\n";
+        let traefik = "resource \"helm_release\" \"traefik\" {\n  name  = \"traefik\"\n  chart = \"traefik\"\n  values = [yamlencode({\n    ports = {\n      web = { nodePort = 30080 }\n    }\n    ingressClass = { enabled = true, isDefaultClass = true }\n  })]\n}\n";
+        let mut resources = tf_blocks("cluster.tf", cluster);
+        resources.extend(tf_blocks("ingress.tf", traefik));
+        let ingress = "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: docair\nspec:\n  ingressClassName: traefik\n";
+        let index = Index {
+            subs: resources.iter().flat_map(tf_subs).collect(),
+            objects: k8s_objects("c/templates/ingress.yaml", ingress),
+            resources,
+            ..Index::default()
+        };
+        let lines = |kind: &str| -> Vec<String> {
+            let sub = index.subs.iter().find(|s| s.kind == kind).unwrap();
+            index
+                .sub_relations(sub)
+                .iter()
+                .map(|r| {
+                    let Target::Ref(to) = &r.to else {
+                        unreachable!()
+                    };
+                    format!("{to} ({})", r.payload.clone().unwrap_or_default())
+                })
+                .collect()
+        };
+        assert_eq!(
+            lines("extra_port_mappings"),
+            ["tf:kind_cluster.docair (TCP 8080 → :30080)"]
+        );
+        assert_eq!(lines("node"), ["tf:helm_release.traefik (NodePort 30080)"]);
+        assert_eq!(
+            lines("values"),
+            ["k8s:Ingress/docair (ingress class traefik)"]
+        );
+    }
+
+    /// Ports by name, and two paths in one rule: each path keeps its Service.
+    #[test]
+    fn ingress_paths_with_named_ports() {
+        let yaml = "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: docair\nspec:\n  ingressClassName: {{ .Values.ingress.className }}\n  rules:\n    - http:\n        paths:\n          - path: /api\n            pathType: Prefix\n            backend:\n              service:\n                name: docair-server\n                port:\n                  name: http\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: docair-web\n                port:\n                  name: http\n";
+        let o = &k8s_objects("c/templates/ingress.yaml", yaml)[0];
+        let routes: Vec<(&str, &str)> = o
+            .routes
+            .iter()
+            .map(|(_, p, s, _)| (p.as_str(), s.as_str()))
+            .collect();
+        assert_eq!(routes, [("/api", "docair-server"), ("/", "docair-web")]);
+        let values = flat_values("ingress:\n  className: traefik\n  host: \"\"\n");
+        assert_eq!(
+            from_values(o.class.as_deref().unwrap(), Some(&values)).as_deref(),
+            Some("traefik")
+        );
+    }
+
     #[test]
     fn kubernetes_objects_routes_and_selectors() {
         let yaml = "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: shop\nspec:\n  rules:\n    - host: shop.local\n      http:\n        paths:\n          - path: /api\n            backend:\n              service:\n                name: api\n                port:\n                  number: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: api\nspec:\n  selector:\n    app: api\n  ports:\n    - port: 80\n      targetPort: 8080\n";
@@ -1094,6 +1619,54 @@ mod tests {
         assert!(o[1].selector.contains("app=api"));
         assert_eq!(o[1].target_port.as_deref(), Some("8080"));
         assert_eq!(o[1].id(), "k8s.svc.api");
+    }
+
+    /// What sets a variable: a ConfigMap through `envFrom`, a Secret key through `secretKeyRef`, a workload's own `value`.
+    #[test]
+    fn the_variables_objects_set() {
+        let dep = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: server\nspec:\n  template:\n    spec:\n      containers:\n        - name: server\n          ports:\n            - name: http\n              containerPort: 8080\n          envFrom:\n            - configMapRef:\n                name: server\n          {{- if .Values.ai.apiKey }}\n          env:\n            - name: DOCAIR_BIND\n              value: 0.0.0.0:8080\n            - name: DOCAIR_AI_API_KEY\n              valueFrom:\n                secretKeyRef:\n                  name: {{ .Values.ai.existingSecret | default \"ai\" }}\n                  key: api-key\n          {{- end }}\n";
+        let cm = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: server\ndata:\n  DOCAIR_MAX_FILES: {{ .Values.maxFiles | quote }}\n  {{- with .Values.ai.model }}\n  DOCAIR_AI_MODEL: {{ . | quote }}\n  {{- end }}\n";
+        let secret = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: ai\nstringData:\n  api-key: {{ .Values.ai.apiKey | quote }}\n";
+        let mut objects = k8s_objects("c/templates/deploy.yaml", dep);
+        objects.extend(k8s_objects("c/templates/cm.yaml", cm));
+        objects.extend(k8s_objects("c/templates/secret.yaml", secret));
+        assert_eq!(
+            objects[0].env,
+            [
+                EnvSet::All {
+                    kind: "ConfigMap".into(),
+                    name: "server".into()
+                },
+                EnvSet::Value("DOCAIR_BIND".into()),
+                EnvSet::Key {
+                    var: "DOCAIR_AI_API_KEY".into(),
+                    kind: "Secret".into(),
+                    name: "ai".into()
+                },
+            ]
+        );
+        let index = Index {
+            objects,
+            ..Index::default()
+        };
+        let names = |i: usize| -> Vec<String> {
+            index
+                .env_set_by(&index.objects[i])
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect()
+        };
+        assert_eq!(names(0), ["DOCAIR_BIND"], "the workload's own value");
+        assert_eq!(
+            names(1),
+            ["DOCAIR_MAX_FILES", "DOCAIR_AI_MODEL"],
+            "every key, envFrom"
+        );
+        assert_eq!(
+            names(2),
+            ["DOCAIR_AI_API_KEY"],
+            "one key, under the variable's name"
+        );
     }
 
     #[test]

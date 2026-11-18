@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::ids::slug;
 
@@ -28,8 +28,53 @@ pub struct Config {
     /// Glossary files besides those named `GLOSSARY.md` (SPEC §13).
     #[serde(default)]
     pub glossary: Vec<String>,
+    /// The decisions about words; default `docs/meanings.toml` (docs/MEANINGS.md).
+    pub meanings: Option<String>,
     /// API descriptions to read: OpenAPI and AsyncAPI (docs/IMPORTS.md).
     pub import: Option<ImportSettings>,
+    /// Checks that are off by default (SPEC §8).
+    pub checks: Option<CheckSettings>,
+    /// Calls between functions from code indexes (docs/ADAPTERS.md §5.4).
+    pub code: Option<CodeSettings>,
+}
+
+/// `[code]` in `docair.toml`: where the calls between functions come from.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeSettings {
+    /// SCIP index files to read, relative to the root (built in CI, for example).
+    #[serde(default)]
+    pub scip: Vec<String>,
+    /// Run the indexers docair finds installed (`rust-analyzer scip`) and read what they write.
+    /// Never for an untrusted project (`Options::untrusted`): an indexer builds the code, and build scripts run.
+    #[serde(default)]
+    pub run_indexers: bool,
+}
+
+/***
+ * The file or folder a path in `docair.toml` names, if it stays inside the root.
+ *
+ * The path must be relative and must not leave the root, also not through a
+ * symbolic link, and it must be a regular file or a folder: an uploaded
+ * `docair.toml` can't make docair read `/etc`, `../..` or `/dev/zero`.
+ ***/
+pub fn inside(root: &Path, rel: &str) -> Option<PathBuf> {
+    if Path::new(rel).is_absolute() {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    let path = root.join(rel).canonicalize().ok()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    (path.starts_with(&root) && (meta.is_file() || meta.is_dir())).then_some(path)
+}
+
+/// `[checks]` in `docair.toml`: checks that are off by default.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckSettings {
+    /// W118: a route that nothing in the project requests.
+    #[serde(default)]
+    pub unrequested_routes: bool,
 }
 
 /// `[import]` in `docair.toml`.
@@ -152,4 +197,32 @@ pub fn load(root: &Path) -> Result<Config> {
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+#[cfg(test)]
+mod inside_tests {
+    use super::inside;
+
+    #[test]
+    fn a_path_in_docair_toml_stays_inside_the_root() {
+        let dir = std::env::temp_dir().join(format!("docair-inside-{}", std::process::id()));
+        let root = dir.join("root");
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("target/index.scip"), "").unwrap();
+        std::fs::write(dir.join("secret"), "").unwrap();
+        assert!(inside(&root, "target/index.scip").is_some());
+        assert!(inside(&root, "target").is_some());
+        assert!(inside(&root, "./target/../target/index.scip").is_some());
+        assert!(inside(&root, "../secret").is_none(), "leaves the root");
+        assert!(inside(&root, "/dev/zero").is_none(), "absolute");
+        assert!(inside(&root, "missing.scip").is_none());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("secret"), root.join("link")).unwrap();
+            assert!(inside(&root, "link").is_none(), "a link out of the root");
+            std::os::unix::fs::symlink("/dev/zero", root.join("zero")).unwrap();
+            assert!(inside(&root, "zero").is_none(), "no device");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -16,6 +16,11 @@ publish.workspace = true
 [dependencies]
 docair-core.workspace = true
 docair-rules.workspace = true
+docair-scip.workspace = true
 toml.workspace = true
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
+
+[dev-dependencies]
+protobuf.workspace = true
+scip.workspace = true

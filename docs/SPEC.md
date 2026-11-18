@@ -103,6 +103,7 @@ include      = ["apps/**", "charts/**"]
 exclude      = ["**/node_modules/**", "target/**"]
 strict       = true                   # unresolved refs are errors (§8)
 walkthroughs = "docs/walkthroughs"    # recorded walkthroughs (§10.3), this is the default
+meanings     = "docs/meanings.toml"   # the decisions about words (§13.5), this is the default
 
 [view]                                # what the page shows by default (§11)
 hide = ["terraform"]                  # sections left out; the viewer can show them again
@@ -120,11 +121,25 @@ part_of = "orders-api"
 base    = "/api"
 ignore  = ["GET /healthz"]
 
+[checks]                              # checks that are off by default (§8)
+unrequested_routes = true             # W118: a route nothing in the project requests
+
+[code]                                # calls between functions (docs/ADAPTERS.md §5.4)
+run_indexers = true                   # run rust-analyzer when it is installed, and read its index
+scip = ["ci/rust.scip"]               # or read index files built elsewhere (CI), inside the root
+
 [ai]                                  # the model that answers `docair ask` (§10.1)
 endpoint    = "https://api.together.xyz/v1"
 model       = "zai-org/GLM-5.3-Flash"
 api_key_env = "DOCAIR_AI_API_KEY"     # the default; the key itself is never in this file
 ```
+
+`run_indexers` builds the code (rust-analyzer runs build scripts and
+procedural macros), so the server ignores it for an upload: an uploaded
+project is scanned without running anything. Every path `docair.toml` names
+(`scip`, `[tests] results`, `meanings`, `walkthroughs`, and the docs a
+glossary links to) must be a file or folder inside the root: not an absolute
+path, `..` out of it or a link out of it (W110, W111, W113).
 
 ### 1.2 CLI
 
@@ -311,7 +326,7 @@ get a warning. They are drawn as a plain box.
 | `cluster`   | a Kubernetes cluster | `⎈ kind` |
 | `namespace` | a Kubernetes namespace | `⬚ docair` dashed frame |
 | `network`   | a network or address range: a Docker network, the pod or service CIDR | `⇌ kind-net` ellipse |
-| `gateway`   | where traffic is routed: an ingress controller, an Ingress, a published port | `⇶ traefik` |
+| `gateway`   | where traffic is routed or answered by software the project only configures: an ingress controller, an Ingress, a published port, a web server such as nginx | `⇶ traefik` |
 | `container` | a container image as it runs: what a Dockerfile builds | `▦ docair-server` double frame |
 | `release`   | an installed package: a Helm release, grouping everything one installation created | `⎔ docair release` |
 | `test`      | a test case, or a suite of tests (§12) | `✓ a picked folder becomes a page` |
@@ -519,8 +534,13 @@ move.
   a box opened) stops the layout under way. The last six pictures keep their
   layout: going back to one draws it at once (docair's code layer again:
   0.44 s instead of a new layout). A part moved by hand is not kept; the
-  picture comes back as it was laid out. Where a browser starts no worker,
-  the page lays out itself and draws the same picture.
+  picture comes back as it was laid out. The placements a picture is chosen
+  from (the two directions, then the ways below) do not depend on each
+  other, so two workers lay them out side by side, each taking the next when
+  it is free; the page chooses, and one worker draws the winner's lines. The
+  same picture: docair's code layer 14.2 s → 12.0 s, the page ready in 0.66 s
+  instead of 1.05 s. Where a browser starts no worker, the page lays out
+  itself and draws the same picture.
 * **Top-down** (after Kasperowski & von Hanxleden). Every box is laid out on
   its own (inside out), then what it holds is scaled to the box's budget of
   800 px, never below 70 % per box: a box with a lot inside does not blow the
@@ -561,7 +581,11 @@ move.
   crossing); on docair's code layer that ranks the placements as routing them
   does. Each way wins somewhere: Infrastructure takes "a port per line",
   Network and Apps "ports in order", Kubernetes "a port per line, parts in
-  order", Code "ports and parts in order", the Overview stays as it is. A way
+  order", Code "ports and parts in order", the Overview stays as it is. The
+  two ways with a port per line are left out when a box would get more than
+  40 ports: on docair's code layer docair-core got 124, ELK took 10 s for that
+  box alone, and those ways never won (Code: 33 s → 14 s, the same picture;
+  the other layers have at most 24 ports to a box). A way
   is done once: done again from its own result, it makes the picture worse
   more often than better (all boxes move at once, each after where the others
   were). All boxes of one height go to ELK in one call, as the children of a
@@ -864,10 +888,17 @@ A `<ref>` names something by one of these forms:
 | `orders.create`       | the node with that id |
 | `tf:helm_release.docair` | the node of that Terraform resource, by its address (§6.1) |
 | `k8s:Service/docair-web` | the node of that Kubernetes object, by its kind and name (§6.1) |
-| `http:POST /api/orders` | the node declaring `@http POST /api/orders`. Path params match by position (`:id` ≡ `{id}`). This links an Angular `HttpClient` call to a Rust handler. |
+| `http:POST /api/orders` | the node declaring `@http POST /api/orders`: same method, and the path fits the route for certain (`{id}` ≡ `:id` ≡ `<int:id>` ≡ `${id}`; query, scheme and host ignored). This links an Angular `HttpClient` call to a Rust handler. |
 | `topic:order.created` | a topic node, created implicitly the first time it is referenced |
 | `k8s:deployment/orders-api` | a Kubernetes object produced by the k8s adapter |
 | `orders-db.orders`    | a part of a node: an implicit child node `orders-db.orders` (named `orders`, same kind as its parent) inside `orders-db`, so every table or file that is read or written has its own node |
+
+**Requests from code.** A request an adapter reads (`@requests POST /api/scan
+-> ScanResult`, inferred) meets what serves the same route after resolve,
+the same way. When calls, routes and selections already lead from the client
+to the handler (through the host port, Ingress, Service and router), the
+request only confirms them. Otherwise it becomes a call line `via
+http:POST /api/scan`. Two servers give `W116`, none `W117` (§8).
 
 Resolution order for a bare ref: exact id, then the longest id prefix
 (sub-part form). A ref that doesn't resolve fails `docair check` (it is a
@@ -944,8 +975,8 @@ An adapter has two jobs:
 
 | Adapter    | Infers |
 |------------|--------|
-| Rust       | every item is a node, with or without a block (`origin: discovered`), except impl blocks (their methods sit inside the type), unit tests (`#[test]`, `#[cfg(test)]`, `tests/`) and items inside function bodies; symbol + kind (`fn`, `struct`, `impl`); the `///` docs as summary and description when no block says them; the signature of a function (parameter names, return type without `Result`/`Option`/`Json`…) for the words on calls (§4.2); rules (`crates/docair-lang-rust/rules/`): actix route attributes and axum `.route("/x", get(handler))` → the routes a handler serves (`@http`), and the axum router → `@calls` to each handler with the route as payload; module path → default `@part-of` |
-| TypeScript / Angular | the signature of a function or method from its declaration line (parameter names, return type without `Promise`/`Observable`); `test('…')` → a test named by its title (§12); later: `@Component`/`@Injectable` → kind, `HttpClient.post<Order>(url, body)` → `@calls http:POST … (CreateOrder) -> Order` |
+| Rust       | every item is a node, with or without a block (`origin: discovered`), except impl blocks (their methods sit inside the type), unit tests (`#[test]`, `#[cfg(test)]`, `tests/`) and items inside function bodies; symbol + kind (`fn`, `struct`, `impl`); the `///` docs as summary and description when no block says them; the signature of a function (parameter names, return type without `Result`/`Option`/`Json`…) for the words on calls (§4.2); rules (`crates/docair-lang-rust/rules/`): actix route attributes and axum `.route("/x", get(handler))` → the routes a handler serves (`@http`), and the axum router → `@calls` to each handler with the route as payload; module path → default `@part-of`; calls between functions: from rust-analyzer's index (`[code]`), where a call through a trait reaches one of its implementations (`reach: one-of`, one line to each), else the calls the syntax makes certain (`self.save()`, `load()` in the same file, `config::load()`, `Self::new()`); data between calls in one function: `let x = f(…); g(&x)` → `@in x: T from f` on g (inferred; docs/ADAPTERS.md §5.6); rules `std.env` (`env::var("X")`, also through a closure or function that passes the name on) → a read of the variable, `std.fs-read`/`std.fs-write` → `@reads file:`/`@writes file:`, a request through `ureq`/`reqwest` (code index) → `@calls net:`; `file:` and `net:` bind to the store or external system the block, or a caller's block, names (docs/ADAPTERS.md §5.7) |
+| TypeScript / JavaScript | every file is a module; every class, function, method (also arrow-function fields), constant, interface, type and enum at module or class level is a node, with or without a block, and a documented top-level call is named after what it calls; JSDoc (`/** … */`) as summary and description when no block says them; `@Component`/`@Injectable`/… → why a class is a component; the signature of a function or method from its declaration line (parameter names, return type without `Promise`/`Observable`); `test('…')`, `test.describe('…')` → a test named by its title (§12); rules (`crates/docair-lang-ts/rules/`): Angular `this.http.post<Reply>(url, …)` in a class whose `http` is an HttpClient, and `fetch(url, { method })` → `@requests POST /api/scan -> ScanResult` on the method (inferred; lines to what serves them in §4.3); calls the syntax makes certain: `this.save()` reaches the class's method, `load()` the function of that name in the file; across files: a call on an injected service (`this.scanner.scan()`), an Angular output to the parent's handler its template binds (`(asked)="ask($event)"`), `postMessage({ type })` to the function a `message` listener calls for that type, `bootstrapApplication(App)` to `App` (docs/ADAPTERS.md §5.4); rules `node.env` (`process.env.X`) → a read of the variable, `node.fs-read`/`node.fs-write` → `@reads file:`/`@writes file:` (docs/ADAPTERS.md §5.7) |
 
 ### 6.1 Infrastructure: how things are provisioned and routed
 
@@ -979,7 +1010,7 @@ class members and arrow functions in TypeScript (→ `function`), `resource`
 blocks and attributes in Terraform (`namespace = "docair"` → *namespace
 docair*), and for Kubernetes manifests (plain or Helm templates) the
 object's `kind:` and `metadata.name` (*Service docair-web*, kind `endpoint`).
-| Kubernetes / Helm | Deployments, StatefulSets, Services, Ingresses, ConfigMaps → `workload`/`config` nodes; selector matching → Service→Pod edges (`select`); Ingress rules → `http:` routing (`route`); env vars that point at service hosts → `@calls` |
+| Kubernetes / Helm | Deployments, StatefulSets, Services, Ingresses, ConfigMaps → `workload`/`config` nodes; selector matching → Service→Pod edges (`select`); Ingress rules → `http:` routing (`route`); a container's `env` (`value`, `configMapKeyRef`, `secretKeyRef`) and `envFrom` → the variables a workload, ConfigMap or Secret sets, which the code's reads of them meet (`@reads k8s.cm.x (NAME)`, docs/ADAPTERS.md §5.7); `{{ .Values.x }}` in a template from the chart's `values.yaml`; Terraform `extra_port_mappings` in `node`, `nodePort` in a release's values and its IngressClass → the way into the cluster: host port → node → ingress controller → Ingress (docs/ADAPTERS.md §7.1) |
 
 If a block and the code disagree, the block wins and `docair check` warns about
 the mismatch.
@@ -1223,12 +1254,18 @@ Flow {
 | `W107` | warning         | a `@scenario` block names a scenario that has no `@flow` steps |
 | `W108` | warning         | an edge between a group and one of its own members (it cannot be drawn as an arrow; containment already says it) |
 | `W109` | warning         | a recorded walkthrough names a node or an edge that is not in the graph (the ref is left out; a step with nothing left is dropped) |
-| `W110` | warning         | a file in `walkthroughs/` is not a walkthrough: invalid JSON or another `schema` |
-| `W111` | warning         | a test result names a test that has no `test` node, or a results file cannot be read (§12.3) |
+| `W110` | warning         | a file in `walkthroughs/` is not a walkthrough: invalid JSON or another `schema`, or the folder is no folder inside the root |
+| `W111` | warning         | a test result names a test that has no `test` node, or a results file cannot be read or is no file inside the root (§12.3) |
 | `W112` | warning         | a glossary term is defined twice, has no definition, or `See:` names no node (§13) |
-| `W113` | warning         | a file cannot be read, such as an API description that is not valid YAML or JSON, or a part of a description is not read (§6.2) |
+| `W113` | warning         | a file cannot be read, such as an API description that is not valid YAML or JSON, a part of a description is not read (§6.2), or a source file tree-sitter can't parse, or a `[code] scip` path is no file inside the root |
 | `W114` | warning         | an API description declares a route, or a send or receive, that no code in its service has (§6.2) |
 | `W115` | warning         | code in a described service has a route, or a send or receive, that its descriptions leave out, and `[[import.api]] ignore` does not list it (§6.2) |
+| `W116` | warning         | two parts serve a request the code sends: both get a line (§4.3) |
+| `W117` | warning         | nothing in the project serves a request the code sends, such as a route renamed on one side (§4.3); a request to another origin (`https://…`) is left alone |
+| `W118` | warning         | nothing in the project requests a route; off unless `[checks] unrequested_routes = true`, because public APIs and probes are requested from outside |
+| `W119` | warning         | `[code] run_indexers` ran rust-analyzer and it failed: the calls come from the syntax only (§6) |
+| `W120` | warning         | a word names a part (a module, a component, a data) and at least two texts use it, but nothing settles what it means: no summary that defines it, no decision (§13.5); only in a project with a glossary or a decisions file |
+| `W121` | warning         | a word's settling is out of date: a decision's `from` names no node, or the glossary entry of a word the code defines is not checked against the code's current text (§13.5) |
 
 Each diagnostic has `{ code, severity, message, file, line, node? }`.
 `docair check` exits non-zero if any error remains.
@@ -1290,7 +1327,9 @@ Versioned. A change that breaks this format bumps `schema`.
 
 `walkthroughs` holds the recorded walkthroughs, bound to this graph (§10.3).
 `view` is the default of what is shown (§11). A test node carries its last
-result in `test` (§12).
+result in `test` (§12). `glossary` holds every explained word, from the
+glossary, the code or a doc heading, `library` the docs they link to, and
+`meanings` the decisions about words and what is still to settle (§13).
 
 The viewer reads only this file. It never parses source code, so any
 backend change that keeps this schema needs no viewer change.
@@ -1794,6 +1833,9 @@ Descriptions use words a newcomer may not know: *diagnostics*, *digest*,
 *Ingress*, *NodePort*. The glossary says what they mean, and the page
 explains them where they are used.
 
+The glossary is not the only place that says what a word means: the code
+does too, and the code comes first (§13.5, [MEANINGS.md](MEANINGS.md)).
+
 ### 13.1 The glossary file
 
 Any file named `GLOSSARY.md` (and the files listed in `glossary = [...]` in
@@ -1831,7 +1873,13 @@ others in any case. W112 when a term is defined twice, has no definition, or
   whole entry in the details panel, with the parts whose texts use the term.
 * A code span that names a node (`docair-core.scan`, `ScanService`) links to
   that node; hovering shows its summary.
-* **Glossary** in the header lists every term, with a filter.
+* **Glossary** in the header lists every term, with a filter. A word the
+  code defines is marked `ƒ`, one a doc heading defines `§`.
+* The hover and the whole entry say where the meaning comes from: *from
+  `Entry`* (the part, a link to it), *in DESIGN.md §2*, or *in the glossary*.
+  A glossary entry not checked against the code that defines its word shows
+  the code's words first and its own below, under *In the glossary, not
+  checked against the code*.
 
 > **Viewer mock: hovering a term in the details.**
 >
@@ -1868,3 +1916,51 @@ in the texts is dropped.
 The entries are shown at once, marked ✦, and become one edit that appends
 them to the glossary (`docs/GLOSSARY.md` when there is none yet): review
 the diff, apply it, or download the patch (§10.6).
+
+The same request settles the words that name parts (§13.5): for each open
+word the model says whether it is a term, and which of its parts defines it;
+it may word that part's text better for a newcomer, never changing its
+meaning, and that becomes a glossary entry. It compares each unchecked
+glossary entry with the code, and rewrites the entry where they disagree: the
+code is right. Open words go 20 to a request, entries 10, at most six
+requests a run; a request whose answer is cut off leaves its words open. The edit also writes the decisions file, so a second run on
+an unchanged project asks about no word again.
+
+### 13.5 The code first: where a word's meaning comes from
+
+[MEANINGS.md](MEANINGS.md) explains why. Three sources, best first:
+
+| Source | Which words | Example |
+|--------|-------------|---------|
+| the docs of a part of kind `module`, `component` or `data` | its name, split into words (`LibraryDoc` → *library doc*); names with `-` or `.` are names of things | `Entry`: "An entry is one payment in the ledger" |
+| a glossary entry | its term and `Also:` spellings | *Ingress* |
+| a doc heading `Word: the rest` | one to three words before the colon | `## 2. Entries: one line of the ledger per payment` |
+
+A part **defines its word by itself** when it is the only such part with
+that name and its summary says so (`Entries: …`, `An entry is …`); in every
+other case a **decision** says so. A word that names parts, is used in at
+least two texts and is settled neither way is **open** (W120). A doc heading
+alone never makes a word a term: it adds *Read more*, and it defines a word a
+decision makes a term without naming a part.
+
+When the code defines a word that also has a glossary entry, the entry is
+shown only once it is **checked**: compared with the part's text at its
+current fingerprint (FNV-1a of the summary and description). Until then the
+page shows the code's words, and W121 asks for the comparison.
+
+**The decisions file** (`docs/meanings.toml`, or `meanings` in docair.toml)
+has one table per word:
+
+```toml
+[ledger]
+from = "books.ledger"        # the part whose docs define it
+checked = "ace0ee32"         # the glossary entry agrees with this text of it
+why = "the module that keeps the payments"
+
+[audit]
+term = false                 # an everyday word here, never underlined
+```
+
+`docair glossary` writes it (§13.4); people review and edit it like code. A
+decision is opened again when `from` names no node or `checked` no longer
+matches (W121). `term = false` stays until a person changes it.

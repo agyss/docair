@@ -150,6 +150,15 @@ pub enum About {
 #[serde(rename_all = "lowercase")]
 enum MeetKind {
     Http,
+    /// An environment variable, by `name`.
+    Env,
+}
+
+/// What a read or a write touches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Medium {
+    File,
 }
 
 /// One entry of a rule's `facts`.
@@ -158,8 +167,17 @@ enum MeetKind {
 struct FactSpec {
     /// `serves: http`: the symbol `by` names serves an HTTP route.
     serves: Option<MeetKind>,
+    /// `requests: http`: the symbol `by` names sends an HTTP request; `requests: env` with `name`: it reads an environment variable.
+    requests: Option<MeetKind>,
+    /// `reads: file`, `writes: file`: the symbol `by` names reads or writes a file, at `path` when the code says it.
+    reads: Option<Medium>,
+    writes: Option<Medium>,
     method: Option<String>,
     path: Option<String>,
+    /// The environment variable `requests: env` reads, e.g. `$NAME`.
+    name: Option<String>,
+    /// What comes back from a request, e.g. `$REPLY`; left out when the match has none.
+    reply: Option<String>,
     /// `calls: $NAME`: the symbol `by` names calls the symbol this name names.
     calls: Option<String>,
     /// What travels along a call, e.g. `$VERB $PATH`.
@@ -175,13 +193,29 @@ impl FactSpec {
             By::Name(n) => Some(n.as_str()),
             _ => None,
         };
-        [&self.method, &self.path, &self.calls, &self.payload]
-            .into_iter()
-            .flatten()
-            .map(String::as_str)
-            .chain(by)
-            .collect()
+        [
+            &self.method,
+            &self.path,
+            &self.name,
+            &self.calls,
+            &self.payload,
+            &self.reply,
+        ]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .chain(by)
+        .collect()
     }
+}
+
+/// `where:` for one variable: what the adapter must know about it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WhereSpec {
+    /// The type the captured field must have, e.g. `HttpClient` for `this.$CLIENT`.
+    #[serde(rename = "type")]
+    of_type: String,
 }
 
 #[derive(Deserialize)]
@@ -190,6 +224,9 @@ struct RuleFile {
     language: String,
     #[serde(flatten)]
     core: SerializableRuleCore,
+    /// docair's one addition to ast-grep: what only the language adapter knows, such as a field's type.
+    #[serde(rename = "where", default)]
+    where_: std::collections::BTreeMap<String, WhereSpec>,
     facts: Vec<FactSpec>,
 }
 
@@ -197,6 +234,8 @@ struct RuleFile {
 pub struct Rule {
     pub id: String,
     matcher: RuleCore,
+    /// `where:`: (variable, type) the adapter must confirm.
+    requires: Vec<(String, String)>,
     facts: Vec<FactSpec>,
 }
 
@@ -204,10 +243,20 @@ pub struct Rule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fact {
     Serves(Meet),
+    /// A request to a rendezvous point, with what comes back.
+    Requests {
+        at: Meet,
+        reply: Option<String>,
+    },
     /// A call to the symbol a name names, with what travels.
     Calls {
         to: String,
         payload: Option<String>,
+    },
+    /// A read or a write of a file, with the path when the code writes it out.
+    Access {
+        write: bool,
+        path: Option<String>,
     },
 }
 
@@ -222,6 +271,8 @@ pub struct Found {
     pub line: usize,
     /// The matched code, for the viewer's "inferred from …".
     pub why: String,
+    /// From `where:`: (captured text, type) pairs the adapter must confirm, e.g. (`http`, `HttpClient`).
+    pub requires: Vec<(String, String)>,
 }
 
 /// The `$NAME`s a template uses.
@@ -288,18 +339,27 @@ impl Rule {
         }
         let defined = matcher.defined_vars();
         for f in &file.facts {
-            match (f.serves, &f.calls) {
-                (Some(MeetKind::Http), None) if f.method.is_some() && f.path.is_some() => {}
-                (Some(MeetKind::Http), None) => {
+            let access = f.reads.is_some() || f.writes.is_some();
+            match (f.serves, f.requests, &f.calls, access) {
+                (Some(MeetKind::Http), None, None, false)
+                | (None, Some(MeetKind::Http), None, false)
+                    if f.method.is_some() && f.path.is_some() => {}
+                (Some(MeetKind::Http), None, None, false)
+                | (None, Some(MeetKind::Http), None, false) => {
                     return Err(format!(
-                        "rule {}: `serves: http` needs method and path",
+                        "rule {}: an http fact needs method and path",
                         file.id
                     ));
                 }
-                (None, Some(_)) => {}
+                (None, Some(MeetKind::Env), None, false) if f.name.is_some() => {}
+                (None, Some(MeetKind::Env), None, false) => {
+                    return Err(format!("rule {}: an env fact needs name", file.id));
+                }
+                (None, None, Some(_), false) => {}
+                (None, None, None, true) if !(f.reads.is_some() && f.writes.is_some()) => {}
                 _ => {
                     return Err(format!(
-                        "rule {}: a fact needs either `serves` or `calls`",
+                        "rule {}: a fact needs one of `serves`, `requests`, `calls`, `reads` or `writes`",
                         file.id
                     ));
                 }
@@ -310,9 +370,17 @@ impl Rule {
                 }
             }
         }
+        if let Some(v) = file.where_.keys().find(|v| !defined.contains(v.as_str())) {
+            return Err(format!("rule {}: where: `{v}` is not in the rule", file.id));
+        }
         Ok(Rule {
             id: file.id,
             matcher,
+            requires: file
+                .where_
+                .into_iter()
+                .map(|(v, w)| (v, w.of_type))
+                .collect(),
             facts: file.facts,
         })
     }
@@ -371,40 +439,79 @@ impl RuleSet {
                     let Some(about) = Rule::about(&m, &f.by, env) else {
                         continue;
                     };
-                    let fact = match (f.serves, &f.calls) {
-                        (Some(MeetKind::Http), _) => {
-                            let (Some(method), Some(path)) = (
-                                fill(f.method.as_deref().unwrap_or(""), env),
-                                fill(f.path.as_deref().unwrap_or(""), env),
-                            ) else {
-                                continue;
-                            };
-                            Fact::Serves(Meet::Http(Http {
-                                method: method.to_uppercase(),
-                                path,
-                            }))
+                    // Optional words (payload, reply) are left out when the match has none.
+                    let optional = |t: &Option<String>| t.as_deref().and_then(|t| fill(t, env));
+                    let http = || {
+                        let method = fill(f.method.as_deref().unwrap_or(""), env)?;
+                        let path = fill(f.path.as_deref().unwrap_or(""), env)?;
+                        Some(Meet::Http(Http {
+                            method: method.to_uppercase(),
+                            path,
+                        }))
+                    };
+                    if f.reads.or(f.writes) == Some(Medium::File) {
+                        let fact = Fact::Access {
+                            write: f.writes.is_some(),
+                            path: optional(&f.path),
+                        };
+                        out.push(Found {
+                            rule: rule.id.clone(),
+                            about,
+                            fact,
+                            line: m.start_pos().line() + 1,
+                            why: why.clone(),
+                            requires: Vec::new(),
+                        });
+                        continue;
+                    }
+                    let fact = match (f.serves, f.requests, &f.calls) {
+                        (Some(MeetKind::Env), _, _) => continue,
+                        (None, Some(MeetKind::Env), _) => {
+                            match f.name.as_deref().and_then(|t| fill(t, env)) {
+                                Some(name) => Fact::Requests {
+                                    at: Meet::Env(name),
+                                    reply: None,
+                                },
+                                None => continue,
+                            }
                         }
-                        (None, Some(to)) => {
+                        (Some(MeetKind::Http), _, _) => match http() {
+                            Some(at) => Fact::Serves(at),
+                            None => continue,
+                        },
+                        (None, Some(MeetKind::Http), _) => match http() {
+                            Some(at) => Fact::Requests {
+                                at,
+                                reply: optional(&f.reply),
+                            },
+                            None => continue,
+                        },
+                        (None, None, Some(to)) => {
                             let Some(to) = fill(to, env) else {
                                 continue;
                             };
-                            let payload = match &f.payload {
-                                Some(p) => match fill(p, env) {
-                                    Some(p) => Some(p),
-                                    None => continue,
-                                },
-                                None => None,
-                            };
-                            Fact::Calls { to, payload }
+                            Fact::Calls {
+                                to,
+                                payload: optional(&f.payload),
+                            }
                         }
-                        (None, None) => continue,
+                        (None, None, None) => continue,
                     };
+                    let requires = rule
+                        .requires
+                        .iter()
+                        .map(|(v, ty)| {
+                            let text = env.get_match(v).map(|n| n.text().to_string());
+                            (text.unwrap_or_default(), ty.clone())
+                        })
+                        .collect();
                     out.push(Found {
                         rule: rule.id.clone(),
                         about,
                         fact,
                         line: m.start_pos().line() + 1,
                         why: why.clone(),
+                        requires,
                     });
                 }
             }
@@ -499,8 +606,17 @@ mod tests {
         );
         assert!(
             bad("id: x\nlanguage: rust\nrule: {pattern: a}\nfacts: [{method: GET}]")
-                .contains("either `serves` or `calls`")
+                .contains("one of `serves`, `requests`, `calls`, `reads` or `writes`")
         );
+        assert!(
+            bad("id: x\nlanguage: rust\nrule: {pattern: a}\nfacts: [{requests: env}]")
+                .contains("an env fact needs name")
+        );
+        assert!(
+            bad("id: x\nlanguage: rust\nrule: {pattern: a}\nfacts: [{reads: file, writes: file}]")
+                .contains("one of")
+        );
+        assert!(bad("id: x\nlanguage: rust\nrule: {pattern: $A}\nwhere: {B: {type: X}}\nfacts: [{requests: http, method: GET, path: /}]").contains("where: `B`"));
     }
 
     #[test]
@@ -535,6 +651,7 @@ mod tests {
                     path: "/api/orders".into()
                 })),
                 why: "#[post(\"/api/orders\")]".into(),
+                requires: vec![],
             }]
         );
     }

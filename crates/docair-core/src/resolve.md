@@ -13,12 +13,17 @@ Every data-flow tag (`@in … from`, `@out … to`, `@calls`, `@reads`, `@writes
    so a typo shows up in the picture instead of disappearing.
 
 Two edges between the same two nodes in the same direction are merged into
-one, and their labels are joined.
+one. The code's words stay on the line, an author's words add to them, and
+words that say the same show once.
 
-## Matching HTTP refs {#docair-core.resolve.match_http}
+## Matching HTTP refs
 
-Paths match **by position**. A segment written as `{id}` or `:id` on either
-side matches any segment, so the Angular call
-`this.http.get('/api/orders/' + id)`, inferred as `GET /api/orders/:id`,
-reaches the Rust handler declared as `GET /api/orders/{id}`. Query strings
-are ignored, and so are leading and trailing slashes.
+A called path meets a declared route through the route module
+(`docair-core.route`): the method must be the same and the path must fit
+the route **for certain**. A segment written as `{id}`, `:id`, `<int:id>`
+or `${id}` is a value and matches any segment, so `GET /api/orders/42`
+reaches a handler declared as `GET /api/orders/{id}`. Query strings,
+fragments, a scheme and a host are ignored, and so are empty segments. A
+path whose start the code computes (`${base}/orders`) only *may* fit, so it
+gets no line. Requests the code sends are matched the same way, after
+resolve (`docair-core.request.link`).

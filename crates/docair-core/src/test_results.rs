@@ -18,7 +18,8 @@ struct Reported {
  * Read the test reports named in `[tests] results` and put each result on its test node.
  *
  * A result binds to the `test` node in the same file whose name is the
- * test's title. Results without a node, and unreadable reports, are W111.
+ * test's title. Results without a node, and unreadable reports, are W111,
+ * and so is a report outside the project (`../x`, `/dev/zero`, a link out).
  *
  * @id     docair-core.test_results.attach
  * @flow   scan 11 "test results are put on the test nodes"
@@ -26,11 +27,20 @@ struct Reported {
  ***/
 pub fn attach(root: &Path, reports: &[String], nodes: &mut [Node], diags: &mut Vec<Diagnostic>) {
     for rel in reports {
-        let path = root.join(rel);
-        if !path.exists() {
+        if !root.join(rel).exists() {
             // No run yet: the tests show without results.
             continue;
         }
+        let Some(path) = crate::config::inside(root, rel).filter(|p| p.is_file()) else {
+            diags.push(
+                Diagnostic::new(
+                    "W111",
+                    format!("the test report {rel} is no file inside the project"),
+                )
+                .at("docair.toml", 1),
+            );
+            continue;
+        };
         let parsed = std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
             .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()));

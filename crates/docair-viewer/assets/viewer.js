@@ -708,9 +708,13 @@ function fitZoom(width, height, ctx) {
 /** The size of a line's words: as small as the smaller of its two ends is drawn. */
 const lineFont = (e, scale) => LABEL_FONT * Math.min(scale.get(e.data.source) ?? 1, scale.get(e.data.target) ?? 1);
 
-/** Positions, lines and their words: top-down (SPEC §3.5). Runs in the layout worker, or on the page when it has none. */
+/** Positions, lines and their words: top-down (SPEC §3.5), on the page, when it has no layout workers. */
 async function computeLayout(nodes, edges, hints, ctx) {
-  const best = await topdownPlace(nodes, edges, hints, ctx);
+  return routeLines(nodes, edges, await topdownPlace(nodes, edges, hints, ctx));
+}
+
+/** The lines of a placed picture, and their words. In a layout worker, or on the page. */
+function routeLines(nodes, edges, best) {
   if (best.scale) for (const e of edges) e.data.fs = lineFont(e, best.scale);
   // A small picture was routed while its placement was chosen.
   const { lines, ...placed } = best;
@@ -775,84 +779,137 @@ function keepLayout(key, r) {
 }
 
 /***
- * The layout worker: it lays out pictures beside the page, so the page keeps answering while a large
- * picture is laid out (SPEC §3.5). It runs ELK and this script, read from the page's own script tags.
- * A newer picture stops an older layout. Without a worker, the page lays out itself, as before.
+ * The layout workers: they lay out pictures beside the page, so the page keeps answering while a large
+ * picture is laid out (SPEC §3.5). They run ELK and this script, read from the page's own script tags.
+ * The placements a picture is chosen from do not depend on each other: the two workers lay them out
+ * side by side, each taking the next when it is free, then one of them draws the winner's lines. A
+ * newer picture stops an older layout. Without workers, the page lays out itself, as before.
  *
  * @id      docair-viewer.layout-worker
  * @part-of docair-viewer.page
  * @calls   docair-viewer.top-down "places the parts box by box"
  * @calls   docair-viewer.grid-lines "draws the lines"
  ***/
-const LAYOUT = { worker: null, url: null, off: false, job: null, next: 0 };
+const LAYOUT = { workers: [], url: null, off: false, job: null, next: 0, step: 0, pending: new Map() };
 
-/** The layout worker, started when first needed; null when the page has none. */
-function layoutWorker() {
-  if (LAYOUT.off) return null;
-  if (LAYOUT.worker) return LAYOUT.worker;
+/** How many workers lay out side by side: two directions, then up to four ways (TOPDOWN_WAYS). */
+const LAYOUT_WORKERS = 2;
+
+/** The layout workers, started when first needed; none when the page cannot have them. */
+function layoutWorkers() {
+  if (LAYOUT.off) return [];
+  if (LAYOUT.workers.length) return LAYOUT.workers;
   try {
     if (!LAYOUT.url) {
       const text = (id) => document.getElementById(id).textContent;
       // The function keeps this script's 'use strict' (it is the first line of the function's body).
       LAYOUT.url = URL.createObjectURL(new Blob([text('docair-elk'), '\n;\n(function () {\n', text('docair-app'), '\n})();\n'], { type: 'text/javascript' }));
     }
-    const w = new Worker(LAYOUT.url);
-    w.onmessage = ({ data }) => {
-      const job = LAYOUT.job;
-      if (!job || data.id !== job.id) return;
-      LAYOUT.job = null;
-      if (data.ok) job.resolve(data.result);
-      else job.reject(new Error(data.error));
-    };
-    w.onerror = (ev) => {
-      ev.preventDefault();
-      workerFailed(ev.message);
-    };
-    LAYOUT.worker = w;
-    return w;
+    const n = Math.max(1, Math.min(LAYOUT_WORKERS, navigator.hardwareConcurrency || LAYOUT_WORKERS));
+    for (let k = 0; k < n; k++) {
+      const w = new Worker(LAYOUT.url);
+      w.onmessage = ({ data }) => {
+        const step = LAYOUT.pending.get(data.id);
+        if (!step) return;
+        LAYOUT.pending.delete(data.id);
+        if (data.ok) step.resolve(data.result);
+        else step.reject(new Error(data.error));
+      };
+      w.onerror = (ev) => {
+        ev.preventDefault();
+        workerFailed(ev.message);
+      };
+      LAYOUT.workers.push(w);
+    }
+    return LAYOUT.workers;
   } catch (err) {
     workerFailed(err.message);
-    return null;
+    return [];
   }
 }
 
-/** Lay out in the worker; the same picture again shares the layout under way, a newer one stops it. */
+/** Lay out in the workers; the same picture again shares the layout under way, a newer one stops it. */
 function layoutJob(key, msg) {
   if (LAYOUT.job && key != null && LAYOUT.job.key === key) return LAYOUT.job.promise;
   if (LAYOUT.job) stopLayout();
-  const w = layoutWorker();
-  if (!w) return layoutHere(msg);
+  if (!layoutWorkers().length) return layoutHere(msg);
   const job = { id: ++LAYOUT.next, key, msg };
-  job.promise = new Promise((resolve, reject) => Object.assign(job, { resolve, reject }));
   LAYOUT.job = job;
-  w.postMessage({ id: job.id, ...msg });
+  job.promise = layoutThere(job).finally(() => {
+    if (LAYOUT.job === job) LAYOUT.job = null;
+  });
   return job.promise;
 }
 
-/** Stop the layout under way: the worker goes, the next layout starts a new one. */
-function stopLayout() {
-  const job = LAYOUT.job;
-  LAYOUT.job = null;
-  LAYOUT.worker?.terminate();
-  LAYOUT.worker = null;
-  job?.reject(new Error('stopped: a newer picture is laid out'));
+/** A layout in the workers: the page chooses among the placements they lay out, as topdownPlace does. */
+async function layoutThere(job) {
+  const { op, nodes, edges, hints, ctx } = job.msg;
+  const steps = (list) => inWorkers(job, list.map((x) => ({ ...x, job: job.id, nodes, edges, hints, ctx })));
+  const run = (specs) => steps(specs.map((spec) => ({ op: 'place', spec })));
+  try {
+    const live = hintsFrom(hints, edges);
+    if (op === 'first') return await topdownFirst(nodes, edges, live, ctx, run);
+    const best = await topdownPlace(nodes, edges, live, ctx, run);
+    return (await steps([{ op: 'route', placed: best }]))[0];
+  } catch (err) {
+    // The workers broke: the page lays out itself.
+    if (LAYOUT.off && LAYOUT.job === job) return layoutHere(job.msg);
+    throw err;
+  }
 }
 
-/** A layout on the page itself: without a worker. */
+/** Send these steps to the workers, each worker taking the next when it is free; their results in order. */
+async function inWorkers(job, msgs) {
+  const workers = layoutWorkers();
+  if (!workers.length) throw new Error('no layout worker');
+  const out = new Array(msgs.length);
+  let next = 0;
+  await Promise.all(
+    workers.map(async (w) => {
+      while (next < msgs.length) {
+        if (LAYOUT.job !== job) throw new Error('stopped: a newer picture is laid out');
+        const k = next++;
+        out[k] = await sendStep(w, msgs[k]);
+      }
+    }),
+  );
+  return out;
+}
+
+/** One step for one worker: its result, or why it failed. */
+function sendStep(w, msg) {
+  const id = ++LAYOUT.step;
+  return new Promise((resolve, reject) => {
+    LAYOUT.pending.set(id, { resolve, reject });
+    w.postMessage({ ...msg, id });
+  });
+}
+
+/** Stop the layout under way: the workers go, the next layout starts new ones. */
+function stopLayout() {
+  LAYOUT.job = null;
+  dropWorkers(new Error('stopped: a newer picture is laid out'));
+}
+
+/** End the workers, and the steps they still had. */
+function dropWorkers(why) {
+  for (const w of LAYOUT.workers) w.terminate();
+  LAYOUT.workers = [];
+  for (const step of LAYOUT.pending.values()) step.reject(why);
+  LAYOUT.pending.clear();
+}
+
+/** A layout on the page itself: without workers. */
 function layoutHere(msg) {
   const hints = hintsFrom(msg.hints, msg.edges);
   return msg.op === 'first' ? topdownFirst(msg.nodes, msg.edges, hints, msg.ctx) : computeLayout(msg.nodes, msg.edges, hints, msg.ctx);
 }
 
-/** The worker did not start (or broke): the page lays out itself from now on, the layout under way too. */
+/** A worker did not start (or broke): the page lays out itself from now on, the layout under way too. */
 function workerFailed(why) {
   console.warn(`docair: no layout worker (${why}); the page lays out itself`);
   LAYOUT.off = true;
-  LAYOUT.worker?.terminate();
-  LAYOUT.worker = null;
-  const job = LAYOUT.job;
-  LAYOUT.job = null;
-  if (job) layoutHere(job.msg).then(job.resolve, job.reject);
+  dropWorkers(new Error(`no layout worker (${why})`));
 }
 
 /** The layout the first view needs to see whether a layer is readable: the placement as it is. */
@@ -860,15 +917,18 @@ function layoutFirst(nodes, edges) {
   return layoutJob(null, { op: 'first', nodes, edges, hints: hintsData(nodes, edges), ctx: layoutContext() });
 }
 
-/** In the layout worker: lay out what the page sends, and send the result back. */
+/** In a layout worker: lay out the steps the page sends, and send each result back. */
 function serveLayouts() {
   // ELK's own worker code takes the worker's messages when it first loads: take them back.
   new ELK();
+  // The boxes laid out for the newest picture: its placements share most of them.
+  let laid = { job: null, cache: null };
   self.onmessage = async ({ data: m }) => {
     try {
       S.font = m.ctx.font;
       const hints = hintsFrom(m.hints, m.edges);
-      const result = m.op === 'first' ? await topdownFirst(m.nodes, m.edges, hints, m.ctx) : await computeLayout(m.nodes, m.edges, hints, m.ctx);
+      if (laid.job !== m.job) laid = { job: m.job, cache: { elk: new ELK(), laid: new Map() } };
+      const result = m.op === 'route' ? routeLines(m.nodes, m.edges, m.placed) : await placeSafely(m.nodes, m.edges, hints, m.ctx, laid.cache, m.spec);
       self.postMessage({ id: m.id, ok: true, result });
     } catch (err) {
       self.postMessage({ id: m.id, ok: false, error: String(err?.stack || err) });
@@ -994,7 +1054,10 @@ function placeLabels(nodes, edges, pos, routes, scale = null, keep = new Map()) 
  * in each of TOPDOWN_WAYS, which tell every box about its surroundings; the
  * placement whose lines cost least is kept.
  */
-const TOPDOWN = { budget: 800, floor: 0.7, spacing: 1.6 };
+// linePorts: a way with a port per line is left out when a box would get more ports than this. On docair's
+// own Code layer docair-core got 124 and ELK took 10 s for it alone, for a placement that never won; the
+// smaller layers have at most 24 (their per-line ways do win).
+const TOPDOWN = { budget: 800, floor: 0.7, spacing: 1.6, linePorts: 40 };
 /**
  * The ways a box learns where its lines go, from the placement before:
  *   ports    'line': a port on the box's border for every line that leaves it, on the side that faces the
@@ -1019,52 +1082,70 @@ const BOX_PAD = { top: 28, left: 10, right: 10, bottom: 10 };
  *
  * The picture is laid out as it is, in the direction that fits the canvas
  * best; then again in each of TOPDOWN_WAYS, which tell every box where its
- * lines go outside it. The cheapest placement wins: a small picture is routed
- * for each (that takes 20 ms) and the price of its lines decides; a big one
- * is judged by its lines drawn straight from part to part.
+ * lines go outside it, except a way with a port per line when a box would get
+ * more than TOPDOWN.linePorts ports. The cheapest placement wins: a small
+ * picture is routed for each (that takes 20 ms) and the price of its lines
+ * decides; a big one is judged by its lines drawn straight from part to part.
  *
  * @id      docair-viewer.top-down
  * @part-of docair-viewer.page
  * @flow    view 3 "the parts are placed box by box"
  * @calls   docair-viewer.grid-lines "routes a small picture to price a placement"
  ***/
-async function topdownPlace(nodes, edges, hints, ctx) {
-  const cache = { elk: new ELK(), laid: new Map() };
-  const first = await topdownFirst(nodes, edges, hints, ctx, cache);
-  const small = edges.length <= ROUTER.exactUpTo;
-  const priceOf = (r) => {
-    if (!small) return straightPrice(edges, r.pos);
-    r.lines = gridLines(nodes, edges, r);
-    return r.lines.price;
-  };
-  let best = first;
-  let least = priceOf(first);
+async function topdownPlace(nodes, edges, hints, ctx, run = placeHere(nodes, edges, hints, ctx)) {
+  // A small picture is routed for each placement; a big one is priced by its lines drawn straight.
+  const price = edges.length <= ROUTER.exactUpTo ? 'route' : 'straight';
+  const first = await topdownFirst(nodes, edges, hints, ctx, run, price);
   first.way = 'as it is';
-  for (const way of TOPDOWN_WAYS) {
-    let r;
-    try {
-      r = await topdownLayout(nodes, edges, first.direction, hints, cache, way, first);
-    } catch (err) {
-      console.warn(`docair: top-down, ${way.key}: ELK failed`, err);
-      continue;
-    }
-    r.way = way.key;
-    const c = priceOf(r);
-    if (c < least) [best, least] = [r, c];
-  }
+  let best = first;
+  for (const r of await run(TOPDOWN_WAYS.map((_, way) => ({ direction: first.direction, way, prev: first.pos, price })))) if (r && r.price < best.price) best = r;
   return best;
 }
 
 /** The picture placed as it is, in the direction that fits the canvas best (the other has to fit 1.1 times larger). */
-async function topdownFirst(nodes, edges, hints, ctx, cache = { elk: new ELK(), laid: new Map() }) {
+async function topdownFirst(nodes, edges, hints, ctx, run = placeHere(nodes, edges, hints, ctx), price = null) {
   const dirs = ctx.direction === 'auto' ? ['DOWN', 'RIGHT'] : [ctx.direction];
   let first = null;
-  for (const d of dirs) {
-    const r = await topdownLayout(nodes, edges, d, hints, cache);
-    r.zoom = fitZoom(r.width, r.height, ctx);
-    if (!first || r.zoom > first.zoom * 1.1) first = r;
-  }
+  for (const r of await run(dirs.map((direction) => ({ direction, price })))) if (!first || r.zoom > first.zoom * 1.1) first = r;
   return first;
+}
+
+/** Lay out placements here, one after another: they share the boxes laid out before. */
+function placeHere(nodes, edges, hints, ctx) {
+  const cache = { elk: new ELK(), laid: new Map() };
+  return async (specs) => {
+    const out = [];
+    for (const spec of specs) out.push(await placeSafely(nodes, edges, hints, ctx, cache, spec));
+    return out;
+  };
+}
+
+/** One placement (placeOne); a way ELK fails on is left out, the placement as it is must not fail. */
+async function placeSafely(nodes, edges, hints, ctx, cache, spec) {
+  try {
+    return await placeOne(nodes, edges, hints, ctx, cache, spec);
+  } catch (err) {
+    if (spec.way == null) throw err;
+    console.warn(`docair: top-down, ${TOPDOWN_WAYS[spec.way].key}: ELK failed`, err);
+    return null;
+  }
+}
+
+/**
+ * One placement: in a direction, as it is or in one of TOPDOWN_WAYS (from the placement `prev`), and its
+ * price when asked: 'route' (its lines routed) or 'straight' (its lines drawn straight). Null when the way
+ * does not suit the picture (TOPDOWN.linePorts).
+ */
+async function placeOne(nodes, edges, hints, ctx, cache, { direction, way = null, prev = null, price = null }) {
+  const r = await topdownLayout(nodes, edges, direction, hints, cache, way == null ? null : TOPDOWN_WAYS[way], prev && { pos: prev });
+  if (!r) return null;
+  r.zoom = fitZoom(r.width, r.height, ctx);
+  if (way != null) r.way = TOPDOWN_WAYS[way].key;
+  if (price === 'route') {
+    r.lines = gridLines(nodes, edges, r);
+    r.price = r.lines.price;
+  } else if (price === 'straight') r.price = straightPrice(edges, r.pos);
+  return r;
 }
 
 /** What a placement's lines cost when drawn straight from part to part: their length, and 150 px for every crossing. */
@@ -1147,6 +1228,8 @@ async function topdownLayout(nodes, edges, direction, hints, cache, way = null, 
         }
       }
     }
+    // A port per line for a box with very many lines: ELK takes seconds for that box alone.
+    if (way.ports === 'line' && [...ports.values()].some((list) => list.length > TOPDOWN.linePorts)) return null;
     // ELK counts a box's ports clockwise from its top left corner.
     if (way.ordered) {
       const rank = { top: 0, right: 1, bottom: 2, left: 3 };

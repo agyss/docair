@@ -233,8 +233,10 @@ pub fn safe_path(name: &str) -> Option<PathBuf> {
  *
  * An upload of one folder is scanned from inside that folder, so the folder's name becomes the system's name.
  *
+ * An upload is untrusted: docair runs no indexer on it, since an indexer builds the code and build scripts run.
+ *
  * @id      docair-server.run_scan
- * @calls   docair-core.scan (folder, Rust adapter, lenient) -> Graph
+ * @calls   docair-core.scan (folder, Rust adapter, lenient, untrusted) -> Graph
  * @calls   docair-viewer.render_html (graph) -> html
  * @reads   upload-dir -> source files
  * @flow    upload 13 "the docair pipeline runs on the upload"
@@ -248,7 +250,10 @@ pub fn run_scan(root: &Path, files: usize) -> anyhow::Result<ScanResult> {
     let graph = scan(
         &scan_root,
         docair_adapters::all(),
-        &Options { lenient: true },
+        &Options {
+            lenient: true,
+            untrusted: true,
+        },
     )?;
     let errors = graph
         .diagnostics
@@ -711,6 +716,82 @@ mod tests {
             std::fs::write(path, content).unwrap();
         }
         run_scan(dir.path(), files.len()).unwrap().graph
+    }
+
+    /// An uploaded `docair.toml` can't make the server build the code (an indexer runs
+    /// build scripts) or read a code index outside the upload.
+    #[test]
+    fn an_upload_runs_no_code_and_reads_nothing_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let upload = dir.path().join("upload");
+        let up = upload.join("up");
+        let files = [
+            (
+                "Cargo.toml",
+                "[package]\nname = \"up\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+            ),
+            (
+                "build.rs",
+                "fn main() { std::fs::write(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/RAN\"), \"\").unwrap(); }\n",
+            ),
+            ("src/main.rs", "/***\n * @id up.main\n ***/\nfn main() {}\n"),
+            (
+                "docair.toml",
+                "system = \"up\"\n[code]\nrun_indexers = true\nscip = [\"../../outside.scip\", \"/dev/zero\"]\n",
+            ),
+        ];
+        for (name, content) in files {
+            let path = up.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        std::fs::write(dir.path().join("outside.scip"), "").unwrap();
+        let graph = run_scan(&upload, files.len()).unwrap().graph;
+        assert!(!up.join("RAN").exists(), "the upload's build script ran");
+        let refused = graph
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "W113" && d.message.contains("no file inside the project"))
+            .count();
+        assert_eq!(refused, 2, "{:?}", graph.diagnostics);
+    }
+
+    /// The other paths an uploaded `docair.toml` names stay inside the upload too.
+    #[test]
+    fn an_upload_names_no_files_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let upload = dir.path().join("upload");
+        let up = upload.join("up");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("report.json"), r#"{"suites": []}"#).unwrap();
+        std::fs::write(outside.join("meanings.toml"), "").unwrap();
+        let report = outside.join("report.json");
+        let toml = format!(
+            "system = \"up\"\nwalkthroughs = \"../../outside\"\nmeanings = \"../../outside/meanings.toml\"\n[tests]\nresults = [\"{}\", \"../../outside/report.json\"]\n",
+            report.display()
+        );
+        std::fs::create_dir_all(up.join("src")).unwrap();
+        std::fs::write(up.join("docair.toml"), toml).unwrap();
+        std::fs::write(
+            up.join("src/main.rs"),
+            "/***\n * @id up.main\n ***/\nfn main() {}\n",
+        )
+        .unwrap();
+        let graph = run_scan(&upload, 2).unwrap().graph;
+        let refused = |code: &str| {
+            graph
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == code && d.message.contains("inside the project"))
+                .count()
+        };
+        assert_eq!(
+            (refused("W111"), refused("W113"), refused("W110")),
+            (2, 1, 1),
+            "{:?}",
+            graph.diagnostics
+        );
     }
 
     #[tokio::test]

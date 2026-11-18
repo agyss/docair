@@ -156,7 +156,26 @@ pub fn build(
 
     assign_parents(system, &mut nodes, &pending, &index, diags);
     attach_docs(system, &mut nodes, &pending, &index, docs, files, diags);
+    drop_empty_modules(&mut nodes);
     nodes
+}
+
+/// A module found in the code that nothing ended up in says nothing: leave it out
+/// (a TypeScript file whose declarations are all documented elsewhere).
+fn drop_empty_modules(nodes: &mut Vec<Node>) {
+    loop {
+        let parents: HashSet<String> = nodes.iter().filter_map(|n| n.part_of.clone()).collect();
+        let before = nodes.len();
+        nodes.retain(|n| {
+            !(n.origin == Origin::Discovered
+                && n.kind == "module"
+                && n.docs.is_empty()
+                && !parents.contains(&n.id))
+        });
+        if nodes.len() == before {
+            break;
+        }
+    }
 }
 
 fn node_id(b: &RawBlock, diags: &mut Vec<Diagnostic>) -> Option<String> {
@@ -245,11 +264,15 @@ fn assign_parents(
                     .parent_line
                     .and_then(|l| by_code_line.get(&(p.file.as_str(), l)))
                     .map(|&j| (nodes[j].id.clone(), "enclosing item"));
+                // A function is no box for other parts unless a block says so: a method of
+                // `Config` skips a function a block named `….config`, and goes to the module.
+                let is_function =
+                    |c: &String| index.get(c).is_some_and(|&j| nodes[j].kind == "function");
                 let from_hints = || {
                     p.hints
                         .part_of
                         .iter()
-                        .find(|c| exists(c))
+                        .find(|c| exists(c) && !is_function(c))
                         .map(|c| (c.clone(), "module path"))
                 };
                 let from_dirs = || {

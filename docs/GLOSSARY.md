@@ -321,3 +321,111 @@ The smallest unit Kubernetes runs: one or more containers that share an IP addre
 See: k8s.deploy.docair-server, k8s.deploy.docair-web
 
 A Kubernetes object that keeps a set of identical pods running and replaces them when they fail. The docair chart installs two, for docair-server and docair-web. [Read more](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+
+## rendezvous point
+
+See: docair-core.facts.meet, docair-core.facts.serve, docair-core.request.link
+
+Where two sides meet without knowing each other: a route that a handler serves, an API description declares, or a client requests. Adapters report each side as a fact, and the core links what requests a point with the code that serves it.
+
+## ast-grep
+
+See: docair-rules, docair-lang-rust.rules, docair-lang-ts.rules
+
+A tool that finds code by patterns written like the code itself, built on tree-sitter grammars. docair's framework rules are ast-grep patterns plus the facts a match means. [Read more](https://ast-grep.github.io/)
+
+## decision
+
+See: docair-core.meanings.decision
+
+What was decided about one word of the docs: which part's docs define it, or that the word is ordinary. The decisions are kept in the meanings file, which `docair glossary` writes and every scan reads.
+
+## event
+
+See: docair-lang-apis.model.event
+
+A message that an AsyncAPI description says the described application sends to, or receives from, a channel.
+
+## family
+
+See: docair-core.lang.family
+
+A family of languages whose comments are written the same way; its markers say how doc blocks are written in its languages.
+
+## fit
+
+See: docair-core.route.fit
+
+How well a request's path matches a route.
+
+## inferred
+
+See: docair-core.facts.inferred
+
+A value an adapter read from the code, kept together with the reason it was read; inferred tags never replace authored ones.
+
+## item
+
+See: docair-lang-rust.item
+
+One thing tree-sitter finds in a Rust file; every item gets an id, and its parent comes from `@part-of` or the item that encloses it.
+
+## marker
+
+See: docair-core.lang.marker
+
+The comment symbols that fence a doc block in a source file: an opening marker, a closing marker, and the line prefix stripped from content lines.
+
+## meet
+
+See: docair-core.facts.meet
+
+A rendezvous point where two sides meet without knowing each other: doc blocks meet the facts, requests the code sends meet the routes that serve them, and API descriptions meet the handlers and topics they describe.
+
+## merge
+
+See: docair-core.merge
+
+The core joins the facts the adapters collected with the docs: each doc block is attached to the symbol it documents, and declared routes and description endpoints merge into the handlers that serve them.
+
+## route
+
+See: docair-core.route.route
+
+A path pattern that code serves or that an API description declares; docair splits routes and requested paths into segments, so it can judge how well a request fits a route.
+
+## rule
+
+See: docair-rules.rule
+
+A loaded rule: its matcher recognises a framework's code pattern, and a match tells docair what that code is.
+
+## rule file
+
+See: docair-rules.rule-file
+
+A YAML file holding the rules for one grammar; docair loads and checks each rule file, and its `language` names the grammar it targets.
+
+## serve
+
+See: docair-core.facts.serve
+
+A symbol serves a rendezvous point — a place where requests arrive, such as a route — when it is the code that runs there, e.g. the handler of a route.
+
+## tag value
+
+See: docair-core.resolve.tag-value
+
+The full content of a data-flow tag: the ref it points at, what happens on the way, what the tag's node sends and what it receives.
+
+## view
+
+See: docair-core.model.view
+
+What the page shows when it opens: which of its sections are hidden or shown.
+
+## view change
+
+See: docair-ai.ask.view-change
+
+The change an AI reply asks for in the view: which sections of the page to hide and show.

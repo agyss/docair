@@ -139,28 +139,8 @@ pub fn guess(file: &SourceFile, following: &Following) -> Symbol {
                 Some(kind),
                 &format!("keyword `{keyword}`"),
             );
-            if kind == "function" && file.lang.name == "typescript" {
-                s.signature = docair_core::signature::ts_signature(text);
-            }
             return s;
         }
-    }
-
-    // Tests: `test('title', …)`, `it("…")`, `test.describe('…')` are named after their title.
-    if file.lang.name == "typescript"
-        && let Some(title) = test_title(text)
-    {
-        infer(&mut s, "", &title, Some("test"), "test call");
-        return s;
-    }
-
-    // TypeScript class members: `async upload(files: File[]) {`, `scan = (f) => …`
-    if file.lang.name == "typescript"
-        && let Some(name) = method_name(text)
-    {
-        infer(&mut s, "", name, Some("function"), "method");
-        s.signature = docair_core::signature::ts_signature(text);
-        return s;
     }
 
     // Kubernetes manifests (plain or Helm templates): `kind:` and `metadata.name`.
@@ -219,90 +199,8 @@ fn k8s_object(text: &str, line: usize) -> Option<(String, String)> {
     Some((kind?, name?))
 }
 
-/// The title of a `test(…)`, `it(…)` or `describe(…)` call, with modifiers like `.only` or `.describe`.
-pub fn test_title(text: &str) -> Option<String> {
-    let t = text.trim_start();
-    let head = ["test", "it", "describe"]
-        .into_iter()
-        .find(|h| t.starts_with(h))?;
-    let mut rest = &t[head.len()..];
-    while let Some(r) = rest.strip_prefix('.') {
-        let word: String = r.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-        if ![
-            "only", "skip", "describe", "serial", "parallel", "fixme", "fail", "slow",
-        ]
-        .contains(&word.as_str())
-        {
-            return None;
-        }
-        rest = &r[word.len()..];
-    }
-    let rest = rest.trim_start().strip_prefix('(')?.trim_start();
-    let quote = rest
-        .chars()
-        .next()
-        .filter(|c| matches!(c, '\'' | '"' | '`'))?;
-    let body = &rest[1..];
-    let end = body.find(quote)?;
-    Some(body[..end].to_string()).filter(|s| !s.is_empty())
-}
-
-/// The method or arrow-function field a TypeScript line declares, if any.
-fn method_name(text: &str) -> Option<&str> {
-    const MODIFIERS: &[&str] = &[
-        "public ",
-        "private ",
-        "protected ",
-        "static ",
-        "async ",
-        "readonly ",
-        "override ",
-        "get ",
-        "set ",
-    ];
-    let mut t = text.trim();
-    loop {
-        let before = t;
-        for m in MODIFIERS {
-            if let Some(rest) = t.strip_prefix(m) {
-                t = rest.trim_start();
-            }
-        }
-        if t == before {
-            break;
-        }
-    }
-    let end = t
-        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
-        .unwrap_or(t.len());
-    let (name, rest) = t.split_at(end);
-    const NOT_METHODS: &[&str] = &[
-        "if", "for", "while", "switch", "catch", "return", "function", "new", "await", "yield",
-        "typeof", "super", "this",
-    ];
-    if name.is_empty()
-        || name.starts_with(|c: char| c.is_ascii_digit())
-        || NOT_METHODS.contains(&name)
-    {
-        return None;
-    }
-    let rest = rest.trim_start();
-    let rest = match rest.strip_prefix('<') {
-        Some(generic) => generic
-            .split_once('>')
-            .map_or(generic, |(_, r)| r)
-            .trim_start(),
-        None => rest,
-    };
-    let is_method = rest.starts_with('(');
-    let is_arrow_field = rest.starts_with('=') && !rest.starts_with("==") && rest.contains("=>");
-    (is_method || is_arrow_field).then_some(name)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{method_name, test_title};
-
     #[test]
     fn kubernetes_objects() {
         let text = "apiVersion: v1\nkind: Service\nmetadata:\n  name: docair-web\n  labels:\n    name: other\nspec: {}\n";
@@ -310,39 +208,5 @@ mod tests {
             super::k8s_object(text, 1),
             Some(("Service".into(), "docair-web".into()))
         );
-    }
-
-    #[test]
-    fn test_titles() {
-        assert_eq!(
-            test_title("test('a page', async () => {").as_deref(),
-            Some("a page")
-        );
-        assert_eq!(
-            test_title("  test.describe(\"web\", () => {").as_deref(),
-            Some("web")
-        );
-        assert_eq!(test_title("it.only(`x y`, fn)").as_deref(), Some("x y"));
-        assert_eq!(test_title("testing('x')"), None);
-        assert_eq!(test_title("test.extend({})"), None);
-    }
-
-    #[test]
-    fn typescript_members() {
-        assert_eq!(
-            method_name("async upload(files: File[]): Promise<void> {"),
-            Some("upload")
-        );
-        assert_eq!(
-            method_name("protected onDrop(event: DragEvent) {"),
-            Some("onDrop")
-        );
-        assert_eq!(method_name("scan<T>(files: File[]) {"), Some("scan"));
-        assert_eq!(
-            method_name("readonly reset = () => this.files.set([]);"),
-            Some("reset")
-        );
-        assert_eq!(method_name("if (x) {"), None);
-        assert_eq!(method_name("readonly files = signal<File[]>([]);"), None);
     }
 }

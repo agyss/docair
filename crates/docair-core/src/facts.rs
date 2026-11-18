@@ -3,6 +3,7 @@
 //! Adapters report facts and never touch the graph. The core merges them with
 //! the doc blocks (`merge`) and builds nodes and edges from both.
 
+pub use crate::model::Reach;
 use crate::model::{Diagnostic, Http, Signature};
 
 /// Where a fact was read, and why, in words the viewer shows (`ⓘ inferred from …`).
@@ -106,6 +107,8 @@ pub enum Meet {
     Http(Http),
     /// A message topic or queue, by its address: `order.created`.
     Topic(String),
+    /// An environment variable: the code reads it, a Deployment's env or a ConfigMap sets it.
+    Env(String),
 }
 
 impl std::fmt::Display for Meet {
@@ -113,6 +116,7 @@ impl std::fmt::Display for Meet {
         match self {
             Meet::Http(h) => write!(f, "{} {}", h.method, h.path),
             Meet::Topic(t) => write!(f, "topic:{t}"),
+            Meet::Env(name) => write!(f, "env:{name}"),
         }
     }
 }
@@ -146,6 +150,22 @@ pub struct Declare {
     pub role: Role,
     pub summary: Option<String>,
     pub description: Option<String>,
+    pub evidence: Evidence,
+}
+
+/// A symbol asks a rendezvous point for something: a client's HTTP request.
+///
+/// Requests become lines to what serves the same point in step 6
+/// (docs/ADAPTERS.md §7); until then they show as an inferred `@requests` tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    /// The key of the symbol that sends the request.
+    pub by: String,
+    pub at: Meet,
+    /// What the request sends.
+    pub payload: Option<String>,
+    /// What comes back.
+    pub reply: Option<String>,
     pub evidence: Evidence,
 }
 
@@ -222,6 +242,8 @@ pub struct Relation {
     pub label: Option<String>,
     /// What travels or how, written in parentheses after the target.
     pub payload: Option<String>,
+    /// How sure the code is that this is where it goes (docs/ADAPTERS.md §5.5).
+    pub reach: Reach,
     pub evidence: Evidence,
 }
 
@@ -233,8 +255,14 @@ impl Relation {
             to,
             label: None,
             payload: None,
+            reach: Reach::Certain,
             evidence,
         }
+    }
+
+    pub fn reach(mut self, reach: Reach) -> Self {
+        self.reach = reach;
+        self
     }
 
     pub fn label(mut self, label: impl Into<String>) -> Self {
@@ -271,6 +299,8 @@ pub struct Facts {
     pub serves: Vec<Serve>,
     /// What API descriptions declare (docs/IMPORTS.md).
     pub declares: Vec<Declare>,
+    /// What clients ask rendezvous points for.
+    pub requests: Vec<Request>,
     pub relations: Vec<Relation>,
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -280,6 +310,7 @@ impl Facts {
         self.symbols.extend(other.symbols);
         self.serves.extend(other.serves);
         self.declares.extend(other.declares);
+        self.requests.extend(other.requests);
         self.relations.extend(other.relations);
         self.diagnostics.extend(other.diagnostics);
     }

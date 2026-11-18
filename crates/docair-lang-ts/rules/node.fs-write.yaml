@@ -1,0 +1,21 @@
+# Writing files in Node: `fs.writeFileSync(path, data)`, `writeFile(path, data)`,
+# `fs.mkdirSync(dir)`. The block names the store; the rule confirms that the
+# code writes one (docs/ADAPTERS.md §5.7).
+id: ts.node.fs-write
+language: typescript
+rule:
+  any:
+    - pattern: $FS.writeFileSync($P, $$$)
+    - pattern: $FS.writeFile($P, $$$)
+    - pattern: $FS.mkdirSync($P, $$$)
+    - pattern: $FS.mkdirSync($P)
+    - pattern: $FS.rmSync($P, $$$)
+    - pattern: $FS.rmSync($P)
+    - pattern: writeFileSync($P, $$$)
+    - pattern: writeFile($P, $$$)
+constraints:
+  FS: { regex: ^(fs|fsp|promises|fs\.promises)$ }
+facts:
+  - writes: file
+    path: $P
+    by: enclosing

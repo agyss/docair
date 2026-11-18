@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 
-use crate::facts::{Draw, Facts, Meet, Relation, Serve, Symbol, Target};
+use crate::facts::{Draw, Facts, Meet, Reach, Relation, Request, Serve, Symbol, Target};
 use crate::model::{Diagnostic, Following, Hints, Origin, RawBlock, SourceFile, Tag};
 
 /// The routes and relations of each symbol, by symbol key.
 struct ByKey<'a> {
     serves: HashMap<&'a str, Vec<&'a Serve>>,
+    requests: HashMap<&'a str, Vec<&'a Request>>,
     relations: HashMap<&'a str, Vec<&'a Relation>>,
     /// The id of the node each drawn symbol became.
     ids: HashMap<&'a str, String>,
@@ -16,10 +17,14 @@ struct ByKey<'a> {
 impl<'a> ByKey<'a> {
     fn new(facts: &'a [Facts]) -> Self {
         let mut serves: HashMap<&str, Vec<&Serve>> = HashMap::new();
+        let mut requests: HashMap<&str, Vec<&Request>> = HashMap::new();
         let mut relations: HashMap<&str, Vec<&Relation>> = HashMap::new();
         for f in facts {
             for s in &f.serves {
                 serves.entry(s.by.as_str()).or_default().push(s);
+            }
+            for r in &f.requests {
+                requests.entry(r.by.as_str()).or_default().push(r);
             }
             for r in &f.relations {
                 relations.entry(r.from.as_str()).or_default().push(r);
@@ -27,6 +32,7 @@ impl<'a> ByKey<'a> {
         }
         ByKey {
             serves,
+            requests,
             relations,
             ids: HashMap::new(),
         }
@@ -36,12 +42,16 @@ impl<'a> ByKey<'a> {
     ///
     /// A relation to a symbol that became no node is left out.
     fn tags(&self, key: &str) -> Vec<Tag> {
-        let serves = self.serves.get(key).into_iter().flatten().map(|s| {
+        let serves = self.serves.get(key).into_iter().flatten().filter_map(|s| {
             let e = &s.evidence;
             match &s.at {
-                Meet::Http(_) => Tag::inferred("http", &s.at.to_string(), e.line, &e.why),
+                Meet::Http(_) => Some(Tag::inferred("http", &s.at.to_string(), e.line, &e.why)),
                 // Code that serves a topic is where its messages arrive.
-                Meet::Topic(_) => Tag::inferred("consumes", &s.at.to_string(), e.line, &e.why),
+                Meet::Topic(_) => {
+                    Some(Tag::inferred("consumes", &s.at.to_string(), e.line, &e.why))
+                }
+                // What sets a variable shows as the lines to the code that reads it (env::link).
+                Meet::Env(_) => None,
             }
         });
         let relations = self
@@ -55,14 +65,31 @@ impl<'a> ByKey<'a> {
                     Target::Ref(id) => id.clone(),
                     Target::Symbol(k) => self.ids.get(k.as_str())?.clone(),
                 };
-                Some(Tag::inferred(
-                    r.verb.tag(),
-                    &r.value_to(&to),
-                    e.line,
-                    &e.why,
-                ))
+                let mut tag = Tag::inferred(r.verb.tag(), &r.value_to(&to), e.line, &e.why);
+                tag.reach = (r.reach != Reach::Certain).then_some(r.reach);
+                Some(tag)
             });
-        serves.chain(relations).collect()
+        // Requests show as `@requests` until step 6 makes them lines (docs/ADAPTERS.md §7).
+        let requests = self.requests.get(key).into_iter().flatten().map(|r| {
+            let e = &r.evidence;
+            let payload = r
+                .payload
+                .as_deref()
+                .map(|p| format!(" ({p})"))
+                .unwrap_or_default();
+            let reply = r
+                .reply
+                .as_deref()
+                .map(|t| format!(" -> {t}"))
+                .unwrap_or_default();
+            Tag::inferred(
+                "requests",
+                &format!("{}{payload}{reply}", r.at),
+                e.line,
+                &e.why,
+            )
+        });
+        serves.chain(requests).chain(relations).collect()
     }
 }
 

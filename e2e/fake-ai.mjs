@@ -17,13 +17,29 @@ function reply(messages) {
     return { lines: lines.map((l) => ({ n: l.n, text: `${l.kind === 'cover' ? 'checks' : 'uses'} ${l.to?.name ?? 'it'}` })) };
   }
   // Glossary entries (docair glossary, Explain the terms); the last one is not in the docs and is dropped.
+  // Open words (docs/MEANINGS.md §6): a word whose part has no docs is a term, written from its name; the others are everyday words.
+  // Entries to check: the glossary never agrees, and is rewritten from the code's summary.
   if ((messages[0]?.content || '').startsWith('You write the glossary')) {
+    const user = messages[1]?.content || '';
+    const section = (name) => {
+      const m = user.match(new RegExp(`\\n${name}:\\n(.*)\\n`));
+      return m ? JSON.parse(m[1]) : [];
+    };
+    const decisions = section('Open words').map((o) => {
+      const part = o.parts[0];
+      return part && !part.summary
+        ? { word: o.word, term: true, from: part.id, definition: `A ${o.word} as the code keeps it: who paid and how much.`, why: 'the part of that name' }
+        : { word: o.word, term: false, why: 'an everyday word here' };
+    });
+    const checks = section('Entries to check').map((c) => ({ word: c.word, agrees: false, definition: c.code.summary.replace(/^[^:]+:\s*/, '') }));
     return {
       terms: [
         { term: 'orders table', aliases: [], definition: 'The table in Postgres that keeps every order.', see: ['orders-db'], link: '' },
         { term: 'cart page', aliases: [], definition: 'The page where the shopper sees the cart and buys.', see: ['shop-ui.cart'], link: 'https://example.com/cart' },
         { term: 'flux capacitor', aliases: [], definition: 'Not in these docs.', see: [], link: '' },
       ],
+      decisions,
+      checks,
     };
   }
   const users = messages.filter((m) => m.role === 'user');

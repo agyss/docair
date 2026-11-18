@@ -19,3 +19,4 @@ docair-lang-apis.workspace = true
 docair-lang-generic.workspace = true
 docair-lang-infra.workspace = true
 docair-lang-rust.workspace = true
+docair-lang-ts.workspace = true

@@ -1,10 +1,12 @@
-//! The model explains the words of the docs: new glossary entries (SPEC §13.4).
+//! The model explains the words of the docs: new glossary entries, and what
+//! the words that name parts mean, the code first (SPEC §13.4, docs/MEANINGS.md §6).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{Result, bail};
 use docair_core::glossary::DEFAULT_FILE;
-use docair_core::model::{Change, Graph};
+use docair_core::meanings::{self, Decision, OpenWord, Unchecked, stem};
+use docair_core::model::{Change, Graph, Term};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -12,7 +14,7 @@ use crate::ask::Reply;
 use crate::client::{Message, Usage, chat};
 use crate::config::AiConfig;
 
-/// The rules for the entries.
+/// The rules for the entries, the decisions and the checks.
 pub const GLOSSARY_PROMPT: &str = r#"You write the glossary of a software project's documentation. You get the texts of the docs (summaries and descriptions of the parts of the system, and the words on the lines between them) and the terms the glossary already explains.
 
 Pick the words a newcomer to this project would not know and that the glossary does not explain yet: words of this project ("digest", "walkthrough") and technologies ("Ingress", "NodePort", "tree-sitter"). Skip everyday words and names of single functions.
@@ -24,7 +26,16 @@ For each term:
 - "see": ids of the parts (from the texts) where the term is implemented or used, at most 3.
 - "link": for a technology, the URL of its official documentation; else "".
 
-Decide quickly: go through the texts once and take the terms that stand out; do not weigh every word. Write in the language of the texts. Reply with exactly one JSON object: {"terms": [{"term": "...", "aliases": [], "definition": "...", "see": [], "link": ""}]}"#;
+The request may also list "Open words": words that name parts of the code, each with those parts' texts, and the glossary's entry when there is one. The code is the best source of what a word means. Decide each word once:
+- "term": false when it is an everyday word here that a reader knows (a verb such as "check", a plain noun such as "message"). Look at "used", the sentences that use it: when they use it in its everyday sense ("the following", "placed", "a change", "the project"), it is an everyday word here, even though a part has that name. true only when a reader should get it explained.
+- "from": the id of the part whose text says what the word means in those sentences; only one of the ids listed with the word; "" when none of them does. A part that merely shares the name is not it: a parser's tree node does not define "node" when the sentences mean a part on the chart.
+- "definition": only with "from", and only when the part's text is too terse for a newcomer: that text in 1 to 3 plain sentences, never changing its meaning; else "".
+- "agrees": only with "from" and a glossary entry: true when the entry means the same as the part's text; false when it does not, and then "definition" says it the way the code does.
+- "why": one short reason, for the reviewer.
+
+It may also list "Entries to check": glossary entries of words the code defines, with the code's text. The code is right. For each: "agrees": true when the entry means the same; else false, with "definition": the entry rewritten in 1 to 3 sentences to agree with the code.
+
+Decide quickly: go through the texts once and take the terms that stand out; do not weigh every word. Write in the language of the texts. Reply with exactly one JSON object: {"terms": [{"term": "...", "aliases": [], "definition": "...", "see": [], "link": ""}], "decisions": [{"word": "...", "term": true, "from": "", "definition": "", "agrees": true, "why": "..."}], "checks": [{"word": "...", "agrees": true, "definition": ""}]}"#;
 
 /// One entry the model proposes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,11 +50,50 @@ pub struct TermDraft {
     pub link: String,
 }
 
+/// What the model decided about an open word.
+#[derive(Debug, Clone, Deserialize)]
+struct DecisionDraft {
+    word: String,
+    #[serde(default = "yes")]
+    term: bool,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    definition: Option<String>,
+    #[serde(default)]
+    agrees: Option<bool>,
+    #[serde(default)]
+    why: Option<String>,
+}
+
+/// Whether a glossary entry agrees with the code.
+#[derive(Debug, Clone, Deserialize)]
+struct CheckDraft {
+    word: String,
+    #[serde(default)]
+    agrees: Option<bool>,
+    #[serde(default)]
+    definition: Option<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
-struct Terms {
+struct Answer {
     #[serde(default)]
     terms: Vec<TermDraft>,
+    #[serde(default)]
+    decisions: Vec<DecisionDraft>,
+    #[serde(default)]
+    checks: Vec<CheckDraft>,
 }
+
+/// How many open words and entries to check go into one request, and how many requests one run makes.
+const OPEN_PER_REQUEST: usize = 20;
+const CHECKS_PER_REQUEST: usize = 10;
+const MAX_REQUESTS: usize = 6;
 
 /// How much of a description goes to the model.
 const TEXT_CHARS: usize = 160;
@@ -100,12 +150,79 @@ pub fn markdown_of(t: &TermDraft) -> String {
     out
 }
 
+/// A non-empty, trimmed string.
+fn given(s: &Option<String>) -> Option<String> {
+    s.as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
+/// The glossary entry (not one from code or a doc heading) that spells this word.
+fn entry_for<'a>(graph: &'a Graph, word: &str) -> Option<&'a Term> {
+    let st = stem(word);
+    graph.glossary.iter().find(|t| {
+        t.from.is_empty()
+            && std::iter::once(&t.term)
+                .chain(&t.aliases)
+                .any(|w| stem(w) == st)
+    })
+}
+
+/// A part's text for the model.
+fn part_json(graph: &Graph, id: &str) -> Value {
+    match graph.nodes.iter().find(|n| n.id == id) {
+        Some(n) => {
+            let about: String = n.description.chars().take(TEXT_CHARS * 2).collect();
+            json!({ "id": n.id, "kind": n.kind, "name": n.name, "summary": n.summary, "about": about })
+        }
+        None => json!({ "id": id }),
+    }
+}
+
+/// Up to three sentences of other parts that use the word, so the model sees in which sense the docs use it.
+fn used_in(graph: &Graph, word: &str, parts: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in &graph.nodes {
+        if parts.contains(&n.id) {
+            continue;
+        }
+        let text = format!("{} {}", n.summary, n.description);
+        for sentence in text.split_inclusive(['.', '\n']) {
+            let plain = sentence.split_whitespace().collect::<Vec<_>>().join(" ");
+            if meanings::uses_word(word, &plain.to_lowercase()) {
+                out.push(plain.chars().take(140).collect());
+                break;
+            }
+        }
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// Ask once; a reasoning model that thinks until its budget is gone gets the short version instead.
+fn ask(cfg: &AiConfig, full: &str, short: Option<&str>) -> Result<crate::client::Reply> {
+    let messages = [Message::system(GLOSSARY_PROMPT), Message::user(full)];
+    match chat(cfg, &messages, true) {
+        Err(e) if e.to_string().contains("max_tokens") && short.is_some() => {
+            let retry = [
+                Message::system(GLOSSARY_PROMPT),
+                Message::user(short.unwrap_or_default()),
+            ];
+            chat(cfg, &retry, true)
+        }
+        other => other,
+    }
+}
+
 /***
- * Ask the model for glossary entries: the words of the docs a newcomer would not know and the glossary does not explain yet.
+ * Ask the model for glossary entries: the words of the docs a newcomer would not know and the glossary does not explain yet; and settle the words that name parts, the code first: which part defines each, which are ordinary, whether the glossary agrees with the code.
  *
  * @id      docair-ai.glossary.explain
- * @calls   docair-ai.client.chat (texts + known terms) -> new entries "asks the model for the missing terms"
- * @out     reply: Reply with the entries and one text edit
+ * @calls   docair-ai.client.chat (texts + known terms + open words + entries to check) -> entries, decisions, checks "asks the model for the missing terms and what the open words mean"
+ * @out     reply: Reply with the entries and one edit: new and rewritten entries, the decisions file
  ***/
 pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
     let mut texts = Vec::new();
@@ -134,65 +251,142 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
         .iter()
         .flat_map(|t| std::iter::once(t.term.clone()).chain(t.aliases.iter().cloned()))
         .collect();
-    let messages = [
-        Message::system(GLOSSARY_PROMPT),
-        Message::user(format!(
-            "System `{}`. Explained already: {}.\nAt most {limit} new terms.\nThe texts:\n{}\nThe words on the lines:\n{}",
-            graph.system,
-            if known.is_empty() {
-                "nothing".to_string()
-            } else {
-                known.join(", ")
-            },
-            serde_json::to_string(&texts).expect("texts serialize"),
-            serde_json::to_string(&words).expect("words serialize"),
-        )),
-    ];
-    // A long text can make a reasoning model think until its budget is gone:
-    // then once more with the summaries only.
-    let reply = match chat(cfg, &messages, true) {
-        Err(e) if e.to_string().contains("max_tokens") => {
+    let known_text = if known.is_empty() {
+        "nothing".to_string()
+    } else {
+        known.join(", ")
+    };
+
+    // What is still to settle (docs/MEANINGS.md §3, §4), in batches.
+    let m = graph.meanings.clone().unwrap_or_default();
+    let open: Vec<&OpenWord> = m
+        .open
+        .iter()
+        .take(OPEN_PER_REQUEST * MAX_REQUESTS)
+        .collect();
+    let unchecked: Vec<&Unchecked> = m
+        .unchecked
+        .iter()
+        .take(CHECKS_PER_REQUEST * MAX_REQUESTS)
+        .collect();
+    let left = m.open.len() - open.len() + m.unchecked.len() - unchecked.len();
+    let batches = open
+        .len()
+        .div_ceil(OPEN_PER_REQUEST)
+        .max(unchecked.len().div_ceil(CHECKS_PER_REQUEST))
+        .max(1);
+    let mut answers = Vec::new();
+    let mut problems_early: Vec<String> = Vec::new();
+    let mut usage = Usage::default();
+    let mut seconds = 0.0;
+    for b in 0..batches {
+        let mut tail = String::new();
+        let open_here: Vec<Value> = open
+            .iter()
+            .skip(b * OPEN_PER_REQUEST)
+            .take(OPEN_PER_REQUEST)
+            .map(|o| {
+                json!({
+                    "word": o.word,
+                    "parts": o.parts.iter().map(|id| part_json(graph, id)).collect::<Vec<_>>(),
+                    "glossary": entry_for(graph, &o.word).map(|t| t.markdown.clone()),
+                    "used": used_in(graph, &o.word, &o.parts),
+                    "doc": o.section.as_ref().map(|s| format!("{}: {}", s.file, s.title)),
+                })
+            })
+            .collect();
+        if !open_here.is_empty() {
+            tail.push_str(&format!(
+                "\nOpen words:\n{}\n",
+                serde_json::to_string(&open_here).expect("open words serialize")
+            ));
+        }
+        let checks_here: Vec<Value> = unchecked
+            .iter()
+            .skip(b * CHECKS_PER_REQUEST)
+            .take(CHECKS_PER_REQUEST)
+            .map(|u| {
+                let entry = graph.glossary.iter().find(|t| t.id == u.term);
+                json!({
+                    "word": u.word,
+                    "code": part_json(graph, &u.node),
+                    "glossary": entry.and_then(|t| t.unchecked.clone()),
+                })
+            })
+            .collect();
+        if !checks_here.is_empty() {
+            tail.push_str(&format!(
+                "\nEntries to check:\n{}\n",
+                serde_json::to_string(&checks_here).expect("checks serialize")
+            ));
+        }
+        let reply = if b == 0 {
+            let full = format!(
+                "System `{}`. Explained already: {known_text}.\nAt most {limit} new terms.\nThe texts:\n{}\nThe words on the lines:\n{}{tail}",
+                graph.system,
+                serde_json::to_string(&texts).expect("texts serialize"),
+                serde_json::to_string(&words).expect("words serialize"),
+            );
             let short: Vec<Value> = texts
                 .iter()
                 .map(|t| json!({ "id": t["id"], "name": t["name"], "summary": t["summary"] }))
                 .collect();
-            let retry = [
-                Message::system(GLOSSARY_PROMPT),
-                Message::user(format!(
-                    "System `{}`. Explained already: {}.\nAt most {limit} new terms.\nThe texts:\n{}",
-                    graph.system,
-                    if known.is_empty() {
-                        "nothing".to_string()
-                    } else {
-                        known.join(", ")
-                    },
-                    serde_json::to_string(&short).expect("texts serialize"),
-                )),
-            ];
-            chat(cfg, &retry, true)?
+            let short = format!(
+                "System `{}`. Explained already: {known_text}.\nAt most {limit} new terms.\nThe texts:\n{}{tail}",
+                graph.system,
+                serde_json::to_string(&short).expect("texts serialize"),
+            );
+            ask(cfg, &full, Some(&short))?
+        } else {
+            let full = format!(
+                "System `{}`. Explained already: {known_text}.\nAt most 0 new terms.{tail}",
+                graph.system
+            );
+            ask(cfg, &full, None)?
+        };
+        usage += reply.usage;
+        seconds += reply.seconds;
+        let content = &reply.content;
+        let json = content
+            .find('{')
+            .zip(content.rfind('}'))
+            .map(|(a, b)| &content[a..=b])
+            .unwrap_or("{}");
+        // A cut-off or unreadable answer costs only its own words: they stay open for the next run.
+        match serde_json::from_str::<Answer>(json) {
+            Ok(parsed) => answers.push(parsed),
+            Err(e) if b > 0 || batches > 1 => problems_early.push(format!(
+                "request {} of {batches}: the model's answer cannot be read ({e}); its words stay open",
+                b + 1
+            )),
+            Err(e) => bail!("the model's entries cannot be read: {e}"),
         }
-        other => other?,
-    };
-    let content = &reply.content;
-    let json = content
-        .find('{')
-        .zip(content.rfind('}'))
-        .map(|(a, b)| &content[a..=b])
-        .unwrap_or("{}");
-    let parsed: Terms = serde_json::from_str(json)
-        .map_err(|e| anyhow::anyhow!("the model's entries cannot be read: {e}"))?;
+    }
 
     let ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
-    let mut taken: HashSet<String> = known.iter().map(|k| k.to_lowercase()).collect();
-    let mut problems = Vec::new();
+    // Words are the same word in any case and number: `fact` is `facts`.
+    let mut taken: HashSet<String> = known.iter().map(|k| stem(k)).collect();
+    // Open words get settled by decisions, not by new terms.
+    let open_stems: HashSet<String> = m.open.iter().map(|o| stem(&o.word)).collect();
+    if answers.is_empty() {
+        bail!("{}", problems_early.join("; "));
+    }
+    let mut problems = problems_early;
     let mut terms = Vec::new();
-    for mut t in parsed.terms {
+    for t in answers
+        .iter_mut()
+        .flat_map(|a| std::mem::take(&mut a.terms))
+    {
+        let mut t = t;
         t.term = t.term.trim().to_string();
         t.definition = t.definition.trim().to_string();
         if t.term.is_empty() || t.term.chars().count() > 40 || t.definition.is_empty() {
             continue;
         }
-        if !taken.insert(t.term.to_lowercase()) {
+        if terms.len() >= limit
+            || open_stems.contains(&stem(&t.term))
+            || !taken.insert(stem(&t.term))
+        {
             continue;
         }
         if !occurs(&t.term, &corpus) && !t.aliases.iter().any(|a| occurs(a, &corpus)) {
@@ -200,7 +394,7 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
             continue;
         }
         t.aliases
-            .retain(|a| !a.trim().is_empty() && taken.insert(a.to_lowercase()));
+            .retain(|a| !a.trim().is_empty() && taken.insert(stem(a)));
         t.see.retain(|s| ids.contains(s.as_str()));
         t.see.truncate(3);
         if !(t.link.starts_with("https://") || t.link.starts_with("http://")) {
@@ -209,21 +403,165 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
         let definition: String = t.definition.chars().take(600).collect();
         t.definition = definition;
         terms.push(t);
-        if terms.len() >= limit {
-            break;
+    }
+
+    // Decisions and checks: the decisions file, entries built from the code, entries rewritten to agree with it.
+    let mut decisions: BTreeMap<String, Decision> = m.decisions.clone();
+    let mut rewrites: Vec<Change> = Vec::new();
+    let (mut settled, mut ordinary, mut checked, mut rewritten) = (0, 0, 0, 0);
+    let mut seen: HashSet<String> = HashSet::new();
+    let fingerprint = |id: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(meanings::fingerprint)
+    };
+    let rewrite = |entry: &Term, definition: &str, node: &str, rewrites: &mut Vec<Change>| {
+        let mut see = entry.see.clone();
+        if !see.iter().any(|s| s == node) {
+            see.push(node.to_string());
         }
+        let text = markdown_of(&TermDraft {
+            term: entry.term.clone(),
+            aliases: entry.aliases.clone(),
+            definition: definition.chars().take(600).collect(),
+            see,
+            link: String::new(),
+        });
+        rewrites.push(Change {
+            node: "glossary".into(),
+            mode: "section".into(),
+            file: entry.source.file.clone(),
+            line: entry.source.line,
+            add: vec![],
+            remove: vec![],
+            summary: Some(text),
+            why: format!("`{}` rewritten to agree with `{node}`.", entry.term),
+        });
+    };
+    for d in answers.iter().flat_map(|a| &a.decisions) {
+        let Some(o) = open.iter().find(|o| stem(&o.word) == stem(&d.word)) else {
+            problems.push(format!(
+                "`{}` was not an open word; left out",
+                d.word.trim()
+            ));
+            continue;
+        };
+        if !seen.insert(o.word.clone()) {
+            continue;
+        }
+        let why = given(&d.why);
+        if !d.term {
+            decisions.insert(
+                o.word.to_lowercase(),
+                Decision {
+                    term: false,
+                    why,
+                    ..Decision::default()
+                },
+            );
+            settled += 1;
+            ordinary += 1;
+            continue;
+        }
+        let from = given(&d.from);
+        if let Some(f) = &from
+            && !o.parts.contains(f)
+        {
+            problems.push(format!(
+                "`{}`: `{f}` is not one of its parts; it stays open",
+                o.word
+            ));
+            continue;
+        }
+        let mut dec = Decision {
+            from: from.clone(),
+            why,
+            ..Decision::default()
+        };
+        if let Some(f) = &from {
+            let definition = given(&d.definition);
+            match entry_for(graph, &o.word) {
+                Some(entry) => match (d.agrees, definition) {
+                    (Some(true), _) => {
+                        dec.checked = fingerprint(f);
+                        checked += 1;
+                    }
+                    (Some(false), Some(def)) => {
+                        rewrite(entry, &def, f, &mut rewrites);
+                        dec.checked = fingerprint(f);
+                        checked += 1;
+                        rewritten += 1;
+                    }
+                    _ => {}
+                },
+                None => {
+                    if let Some(def) = definition
+                        && taken.insert(stem(&o.word))
+                    {
+                        terms.push(TermDraft {
+                            term: o.word.clone(),
+                            aliases: vec![],
+                            definition: def.chars().take(600).collect(),
+                            see: vec![f.clone()],
+                            link: String::new(),
+                        });
+                        dec.checked = fingerprint(f);
+                    }
+                }
+            }
+        }
+        decisions.insert(o.word.to_lowercase(), dec);
+        settled += 1;
     }
-    if terms.is_empty() && !problems.is_empty() {
-        bail!("the model proposed no term that the docs use");
+    for c in answers.iter().flat_map(|a| &a.checks) {
+        let Some(u) = unchecked.iter().find(|u| stem(&u.word) == stem(&c.word)) else {
+            problems.push(format!(
+                "`{}` was not an entry to check; left out",
+                c.word.trim()
+            ));
+            continue;
+        };
+        if !seen.insert(format!("check:{}", u.word)) {
+            continue;
+        }
+        let Some(entry) = graph.glossary.iter().find(|t| t.id == u.term) else {
+            continue;
+        };
+        let key = u.word.to_lowercase();
+        let mut dec = decisions.get(&key).cloned().unwrap_or_default();
+        dec.from.get_or_insert_with(|| u.node.clone());
+        match (c.agrees, given(&c.definition)) {
+            (Some(true), _) => {}
+            (Some(false), Some(def)) => {
+                rewrite(entry, &def, &u.node, &mut rewrites);
+                rewritten += 1;
+            }
+            _ => {
+                problems.push(format!(
+                    "`{}`: no answer whether the glossary agrees; it stays unchecked",
+                    u.word
+                ));
+                continue;
+            }
+        }
+        dec.checked = Some(u.fingerprint.clone());
+        decisions.insert(key, dec);
+        checked += 1;
     }
+    if terms.is_empty() && settled == 0 && checked == 0 && !problems.is_empty() {
+        bail!("the model proposed no term that the docs use, and settled no word");
+    }
+
     let file = graph
         .glossary
-        .first()
+        .iter()
+        .find(|t| t.source.file.ends_with(".md") && t.from != "doc")
         .map_or(DEFAULT_FILE.to_string(), |t| t.source.file.clone());
-    let changes = if terms.is_empty() {
-        vec![]
-    } else {
-        vec![Change {
+    let mut changes = Vec::new();
+    if !terms.is_empty() {
+        changes.push(Change {
             node: "glossary".into(),
             mode: "text".into(),
             file: file.clone(),
@@ -232,34 +570,66 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
             remove: vec![],
             summary: Some(terms.iter().map(markdown_of).collect::<Vec<_>>().join("\n")),
             why: format!("{} new terms for {file}.", terms.len()),
-        }]
-    };
-    Ok(Reply {
-        answer: if terms.is_empty() {
-            "The glossary already explains every word the model would add.".into()
+        });
+    }
+    changes.extend(rewrites);
+    if decisions != m.decisions {
+        let meanings_file = if m.file.is_empty() {
+            meanings::DEFAULT_FILE.to_string()
         } else {
-            format!(
-                "Explained {} terms: {}.",
-                terms.len(),
-                terms
-                    .iter()
-                    .map(|t| t.term.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        },
+            m.file.clone()
+        };
+        changes.push(Change {
+            node: "meanings".into(),
+            mode: "file".into(),
+            file: meanings_file.clone(),
+            line: 0,
+            add: vec![],
+            remove: vec![],
+            summary: Some(meanings::to_toml(&decisions)),
+            why: format!(
+                "{settled} words settled, {checked} glossary entries checked, in {meanings_file}."
+            ),
+        });
+    }
+
+    let mut answer = if terms.is_empty() {
+        "The glossary already explains every word the model would add.".to_string()
+    } else {
+        format!(
+            "Explained {} terms: {}.",
+            terms.len(),
+            terms
+                .iter()
+                .map(|t| t.term.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    if settled > 0 {
+        answer.push_str(&format!(
+            " Settled {settled} words that name parts ({ordinary} everyday words)."
+        ));
+    }
+    if checked > 0 {
+        answer.push_str(&format!(
+            " Checked {checked} glossary entries against the code ({rewritten} rewritten to agree with it)."
+        ));
+    }
+    if left > 0 {
+        answer.push_str(&format!(" {left} more are left for the next run."));
+    }
+    Ok(Reply {
+        answer,
         walkthrough: None,
         view: None,
         changes,
         wording: vec![],
         glossary: terms,
         problems,
-        usage: Usage {
-            input: reply.usage.input,
-            output: reply.usage.output,
-        },
-        seconds: reply.seconds,
-        requests: 1,
+        usage,
+        seconds,
+        requests: u8::try_from(batches).unwrap_or(u8::MAX),
     })
 }
 
@@ -294,5 +664,140 @@ mod tests {
         let parsed = docair_core::glossary::parse("g.md", &md);
         assert_eq!(parsed[0].aliases, vec!["ingress rule"]);
         assert_eq!(parsed[0].see, vec!["k8s.ingress.docair"]);
+    }
+
+    /// A model that answers one request with `content`; the request's body comes back through the channel.
+    fn stub(content: &str) -> (AiConfig, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let body = json!({
+            "choices": [{ "message": { "content": content }, "finish_reason": "stop" }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5 },
+        })
+        .to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().expect("clone"));
+            let mut len = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("header");
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut req = vec![0; len];
+            reader.read_exact(&mut req).expect("body");
+            tx.send(String::from_utf8_lossy(&req).to_string()).ok();
+            write!(
+                sock,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("reply");
+        });
+        let cfg = AiConfig {
+            endpoint: format!("http://{addr}/v1"),
+            model: "stub".into(),
+            api_key: Some("test".into()),
+            key_var: "DOCAIR_AI_API_KEY".into(),
+            key_source: None,
+            max_tokens: 1000,
+        };
+        (cfg, rx)
+    }
+
+    fn graph() -> Graph {
+        let part = |id: &str, kind: &str, name: &str, summary: &str| {
+            json!({ "id": id, "kind": kind, "name": name, "summary": summary, "description": "",
+                    "source": { "file": "src/lib.rs", "line": 1 }, "docs": [], "tags": [], "origin": "authored" })
+        };
+        serde_json::from_value(json!({
+            "schema": "x", "system": "books", "generator": "test", "edges": [], "flows": [], "diagnostics": [],
+            "nodes": [
+                part("books.ledger", "module", "ledger", "Ledger: the record of all payments, newest first."),
+                part("books.payment", "component", "Payment", "One payment someone made."),
+                part("books.audit", "module", "audit", "Checks the ledger every night."),
+                part("books.record", "function", "record", "Record a payment in the ledger, then audit it."),
+            ],
+            "glossary": [{
+                "id": "ledger", "term": "ledger", "summary": "The record of all payments, newest first.",
+                "markdown": "The record of all payments, newest first.",
+                "source": { "file": "GLOSSARY.md", "line": 5 }, "from": "code", "node": "books.ledger",
+                "unchecked": "The book of every payment, kept on paper."
+            }],
+            "meanings": {
+                "file": "docs/meanings.toml",
+                "decisions": { "old": { "term": false } },
+                "open": [
+                    { "word": "payment", "parts": ["books.payment"], "uses": 3 },
+                    { "word": "audit", "parts": ["books.audit"], "uses": 2 }
+                ],
+                "unchecked": [{ "word": "ledger", "node": "books.ledger", "term": "ledger", "fingerprint": "0badcafe" }]
+            }
+        }))
+        .expect("graph")
+    }
+
+    #[test]
+    fn explain_settles_open_words_and_checks_the_glossary_against_the_code() {
+        let answer = json!({
+            "terms": [],
+            "decisions": [
+                { "word": "payment", "term": true, "from": "books.payment", "definition": "A payment: money someone paid, recorded in the ledger.", "why": "the struct says it" },
+                { "word": "audit", "term": false, "why": "the nightly check" },
+                { "word": "ghost", "term": false }
+            ],
+            "checks": [{ "word": "ledger", "agrees": false, "definition": "The record of all payments, newest first." }]
+        })
+        .to_string();
+        let (cfg, sent) = stub(&answer);
+        let g = graph();
+        let reply = explain(&cfg, &g, 5).expect("explain");
+        let request = sent.recv().expect("request");
+        assert!(request.contains("Open words:"), "{request}");
+        assert!(request.contains("Entries to check:"), "{request}");
+        assert!(request.contains("The book of every payment, kept on paper."));
+
+        assert_eq!(
+            reply.glossary.len(),
+            1,
+            "the entry built from the code is shown at once"
+        );
+        assert_eq!(reply.glossary[0].see, vec!["books.payment"]);
+        assert!(
+            reply.problems.iter().any(|p| p.contains("`ghost`")),
+            "{:?}",
+            reply.problems
+        );
+        let modes: Vec<_> = reply.changes.iter().map(|c| c.mode.as_str()).collect();
+        assert_eq!(modes, ["text", "section", "file"]);
+        let section = &reply.changes[1];
+        assert_eq!((section.file.as_str(), section.line), ("GLOSSARY.md", 5));
+        assert!(
+            section
+                .summary
+                .as_deref()
+                .unwrap()
+                .starts_with("## ledger\n\nSee: books.ledger\n\nThe record")
+        );
+        let toml = reply.changes[2].summary.as_deref().unwrap();
+        let decided = meanings::parse(toml).expect("the decisions parse");
+        assert!(!decided["old"].term, "earlier decisions stay");
+        assert!(!decided["audit"].term);
+        assert_eq!(decided["payment"].from.as_deref(), Some("books.payment"));
+        assert!(
+            decided["payment"].checked.is_some(),
+            "the new entry was written from the code"
+        );
+        assert_eq!(decided["ledger"].checked.as_deref(), Some("0badcafe"));
+        assert_eq!(decided["ledger"].from.as_deref(), Some("books.ledger"));
+        assert!(reply.answer.contains("Settled 2 words"), "{}", reply.answer);
+        assert!(reply.answer.contains("1 rewritten"), "{}", reply.answer);
     }
 }

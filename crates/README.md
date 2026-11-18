@@ -6,6 +6,8 @@
 | `docair-adapters` | the adapter registry, in the order that decides who says what a symbol is |
 | `docair-lang-rust` | the Rust adapter (tree-sitter) |
 | `docair-lang-infra` | the infrastructure adapter: Terraform, Helm charts, Kubernetes manifests |
+| `docair-lang-ts` | the TypeScript/JavaScript adapter: declarations, tests, HTTP requests, calls |
+| `docair-scip` | reads SCIP code indexes: which function each call reaches |
 | `docair-lang-generic` | the generic adapter: guesses from the line after a block, for code no other adapter knows |
 | `docair-viewer` | renders a graph into one self-contained HTML page |
 | `docair-ai` | asks an AI model about the graph: answers, walkthroughs, view changes, doc-block edits |

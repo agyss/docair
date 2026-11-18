@@ -1,0 +1,19 @@
+#***
+# Reader for SCIP code indexes: the languages' own tools (rust-analyzer,
+# scip-typescript) say which function each reference reaches; the language
+# adapters turn that into calls between their parts (docs/ADAPTERS.md §5.4).
+#
+# @id      docair-scip
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-scip"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+protobuf.workspace = true
+scip.workspace = true

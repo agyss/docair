@@ -90,10 +90,10 @@ test.describe('generate the docs', () => {
     fs.writeFileSync(path.join(shop, 'infra', 'terraform.tfstate'), '{"secret": true}\n');
     await page.goto('/');
     await page.getByTestId('folder-input').setInputFiles(shop);
-    await expect(page.getByTestId('picked')).toContainText('11 files');
+    await expect(page.getByTestId('picked')).toContainText('12 files');
     await expect(page.getByTestId('picked')).toContainText('2 left out');
     await page.getByTestId('generate').click();
-    await expect(page.locator('.stats li').first()).toHaveText('11 files');
+    await expect(page.locator('.stats li').first()).toHaveText('12 files');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

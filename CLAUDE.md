@@ -76,6 +76,7 @@ cargo run -p docair-cli -- scan .           # .docair/docair.html, docair's own 
 - e2e: `cd e2e && npm run build && npm test` (builds the release binaries and the web
   app first). A run uses ports 9555 (fake AI) and 9556 (server), and rewrites
   `e2e/.out` and `e2e/test-results/results.json`, which `docair check` reads.
+  Don't pass `--reporter`: it replaces that JSON report, and the file is gone.
 
 ## Architecture Overview
 

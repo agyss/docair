@@ -57,3 +57,11 @@ The glossaries: `GLOSSARY.md` files (and those listed in `glossary` in docair.to
 @kind    store
 @part-of project-files
 ```
+
+```docair
+The decisions about words: `docs/meanings.toml` (or `meanings` in docair.toml). Which part's docs define a word, which words are ordinary, and which glossary entries were compared with the code (docs/MEANINGS.md). `docair glossary` writes it; every scan reads it.
+
+@id      meanings-file
+@kind    store
+@part-of project-files
+```

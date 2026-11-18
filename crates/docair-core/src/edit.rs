@@ -64,6 +64,25 @@ pub fn resolve(change: &Change, nodes: &[Node]) -> Result<Change, String> {
         }
         return Ok(c);
     }
+    // One glossary entry rewritten, from its heading line (docs/MEANINGS.md §4).
+    if c.mode == "section" {
+        if !c.file.ends_with(".md")
+            || c.line == 0
+            || c.summary.as_deref().is_none_or(|t| t.trim().is_empty())
+        {
+            return Err(
+                "a section edit needs a Markdown file, its heading line and the text".into(),
+            );
+        }
+        return Ok(c);
+    }
+    // A whole file written anew, such as the decisions about words (docs/MEANINGS.md §3).
+    if c.mode == "file" {
+        if !(c.file.ends_with(".toml") || c.file.ends_with(".md")) || c.summary.is_none() {
+            return Err("a file edit needs a TOML or Markdown file and its text".into());
+        }
+        return Ok(c);
+    }
     c.node = c.node.trim().to_string();
     for line in c.add.iter().chain(&c.remove) {
         parse_tag(line)?;
@@ -152,7 +171,7 @@ pub fn patch(
         if before.is_none()
             && idx
                 .iter()
-                .any(|&i| changes[i].mode != "append" && changes[i].mode != "text")
+                .any(|&i| !["append", "text", "file"].contains(&changes[i].mode.as_str()))
         {
             out.problems.push(format!("{file}: file not found"));
             continue;
@@ -160,7 +179,7 @@ pub fn patch(
         // Bottom up; appends first (they touch only the end).
         idx.sort_by_key(|&i| {
             std::cmp::Reverse(
-                if changes[i].mode == "append" || changes[i].mode == "text" {
+                if ["append", "text", "file"].contains(&changes[i].mode.as_str()) {
                     usize::MAX
                 } else {
                     changes[i].line
@@ -175,6 +194,8 @@ pub fn patch(
                 "insert" => insert_block(&text, c),
                 "append" => Ok(append_block(&text, c, before.is_none())),
                 "text" => Ok(append_text(&text, c, before.is_none())),
+                "section" => replace_section(&text, c),
+                "file" => Ok(c.summary.clone().unwrap_or_default()),
                 other => Err(format!("unknown mode `{other}`")),
             };
             match result {
@@ -257,6 +278,11 @@ fn ref_of<'a>(name: &str, value: &'a str) -> Option<&'a str> {
 
 fn still_parses(file: &str, text: &str) -> Result<(), String> {
     let mut diags = Vec::new();
+    if file.ends_with(".toml") {
+        return toml::from_str::<toml::Table>(text)
+            .map(|_| ())
+            .map_err(|e| e.message().to_string());
+    }
     if file.ends_with(".md") {
         read_markdown_text(file, text, &mut diags);
     } else if let Some(lang) = language_for_file(file) {
@@ -548,6 +574,34 @@ fn append_text(text: &str, c: &Change, new_file: bool) -> String {
     out
 }
 
+/// A Markdown section replaced: from the heading at `c.line` to the next `##`/`###` heading outside a fence.
+fn replace_section(text: &str, c: &Change) -> Result<String, String> {
+    let lines = lines_of(text);
+    let start = c.line - 1;
+    let heading = |l: &str| l.starts_with("## ") || l.starts_with("### ");
+    if !lines.get(start).is_some_and(|l| heading(l)) {
+        return Err(format!("line {} is not a heading", c.line));
+    }
+    let mut end = lines.len();
+    let mut fence = false;
+    for (k, l) in lines.iter().enumerate().skip(start + 1) {
+        if l.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+        if !fence && heading(l) {
+            end = k;
+            break;
+        }
+    }
+    let mut out: Vec<String> = lines[..start].to_vec();
+    out.extend(lines_of(c.summary.as_deref().unwrap_or("").trim()));
+    if end < lines.len() {
+        out.push(String::new());
+    }
+    out.extend(lines[end..].iter().cloned());
+    Ok(join(&out))
+}
+
 /// A unified diff of one file, as `git diff` writes it.
 pub fn unified(path: &str, before: Option<&str>, after: &str) -> String {
     let old = before.unwrap_or("");
@@ -812,6 +866,45 @@ mod tests {
         bad.mode = "text".into();
         bad.file = "a.rs".into();
         assert!(resolve(&bad, &[]).is_err());
+    }
+
+    #[test]
+    fn section_edits_rewrite_one_entry_and_file_edits_write_toml() {
+        let glossary = "# G\n\n## a\n\nOld A.\n\n```md\n## not a heading\n```\n\n## b\n\nB.\n";
+        let mut s = change("glossary", &[], &[]);
+        s.mode = "section".into();
+        s.file = "docs/GLOSSARY.md".into();
+        s.line = 3;
+        s.summary = Some("## a\n\nSee: x\n\nNew A.".into());
+        let s = resolve(&s, &[]).unwrap();
+        let mut text = change("glossary", &[], &[]);
+        text.mode = "text".into();
+        text.file = "docs/GLOSSARY.md".into();
+        text.summary = Some("## c\n\nC.".into());
+        let r = patch(&[s.clone(), text], &|_| Some(glossary.into()), &ids());
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert_eq!(
+            r.files[0].after,
+            "# G\n\n## a\n\nSee: x\n\nNew A.\n\n## b\n\nB.\n\n## c\n\nC.\n"
+        );
+        let r = patch(&[s], &|_| Some("# G\n\nno heading here\n".into()), &ids());
+        assert!(r.problems[0].contains("not a heading"), "{:?}", r.problems);
+
+        let mut f = change("meanings", &[], &[]);
+        f.mode = "file".into();
+        f.file = "docs/meanings.toml".into();
+        f.summary = Some("[facts]\nfrom = \"a.b\"\n".into());
+        let f = resolve(&f, &[]).unwrap();
+        let r = patch(std::slice::from_ref(&f), &|_| None, &ids());
+        assert_eq!(r.files[0].after, "[facts]\nfrom = \"a.b\"\n");
+        let mut broken = f.clone();
+        broken.summary = Some("[facts\n".into());
+        let r = patch(&[broken], &|_| None, &ids());
+        assert!(
+            r.files.is_empty() && !r.problems.is_empty(),
+            "{:?}",
+            r.problems
+        );
     }
 
     #[test]

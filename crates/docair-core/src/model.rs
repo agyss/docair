@@ -39,6 +39,21 @@ pub struct Tag {
     /// Why an adapter inferred this tag, e.g. `tree-sitter: function_item`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// How sure the code is about where this line goes; none means certain (docs/ADAPTERS.md §5.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<Reach>,
+}
+
+/// How sure the code is about where a line goes (docs/ADAPTERS.md §5.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reach {
+    /// Exactly this target.
+    Certain,
+    /// Exactly one of several targets runs, decided at runtime: a trait method and its implementations.
+    OneOf,
+    /// Any of several targets, or something outside the project.
+    Could,
 }
 
 impl Tag {
@@ -49,6 +64,7 @@ impl Tag {
             line,
             origin: Origin::Authored,
             reason: None,
+            reach: None,
         }
     }
 
@@ -59,6 +75,7 @@ impl Tag {
             line,
             origin: Origin::Inferred,
             reason: Some(reason.to_string()),
+            reach: None,
         }
     }
 }
@@ -299,15 +316,22 @@ pub struct Edge {
     /// What happens along the edge, in words: the tag's `"…"` (SPEC §4.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    /// Data nodes the edge carries: their names occur in its payload (SPEC §3.6).
+    /// Data nodes the edge carries on the way there: their names occur in its payload,
+    /// or in its label outside a call's reply (SPEC §3.6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carries: Vec<String>,
+    /// Calls only: data nodes the reply carries back: their names occur in the reply (SPEC §3.6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries_back: Vec<String>,
     /// The payload and reply were taken from the callee's signature, not from the tag (SPEC §4.2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub from_code: bool,
     /// The payload and reply were taken from this API description (docs/IMPORTS.md).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_api: Option<String>,
+    /// How sure the code is about where this line goes; none means certain (docs/ADAPTERS.md §5.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<Reach>,
     /// The tag that created the edge.
     pub tag: String,
     pub source: SourceRef,
@@ -456,6 +480,27 @@ pub struct Term {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see: Vec<String>,
     pub source: SourceRef,
+    /// Where the meaning comes from: `code` or `doc`; empty for a glossary entry (docs/MEANINGS.md §7).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from: String,
+    /// The part whose docs define the word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// A doc heading that defines the word: "read more" opens it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<TermSection>,
+    /// The glossary's text while it is not checked against the code that defines the word (Markdown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unchecked: Option<String>,
+}
+
+/// A heading of a doc that defines a word: `## 4. Facts: the contract between adapters and core`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermSection {
+    pub file: String,
+    /// GitHub's anchor of the heading.
+    pub anchor: String,
+    pub title: String,
 }
 
 /// A Markdown file of the project that a glossary entry links to; the page embeds it (SPEC §13.3).
@@ -484,5 +529,8 @@ pub struct Graph {
     /// Docs the glossary links to, embedded so the page can show them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub library: Vec<LibraryDoc>,
+    /// The decisions about words and what is still to settle (docs/MEANINGS.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meanings: Option<crate::meanings::Meanings>,
     pub diagnostics: Vec<Diagnostic>,
 }

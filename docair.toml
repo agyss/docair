@@ -13,6 +13,12 @@ exclude = ["crates/docair-viewer/vendor/**", "e2e/fixtures/**", "e2e/.out/**", "
 [tests]
 results = ["e2e/test-results/results.json"]
 
+# Calls between functions: rust-analyzer indexes the Rust code when it is
+# installed (docs/ADAPTERS.md §5.4); without it, docair keeps the calls the
+# syntax makes certain.
+[code]
+run_indexers = true
+
 # The model that answers `docair ask` (SPEC §10.1). The key is not here: put
 # DOCAIR_AI_API_KEY into .env (gitignored, see .env.example) or the environment.
 [ai]

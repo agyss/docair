@@ -1,0 +1,10 @@
+# What the words of the docs mean: decisions written by `docair glossary`
+# (docs/MEANINGS.md in docair). Review them like code.
+
+[cart]
+why = "Cart is the cart page; the word means the list of items, as the glossary says"
+
+[order]
+from = "data.order"
+checked = "ada35fb2"
+why = "the data the shopper places; the glossary entry agrees with it"

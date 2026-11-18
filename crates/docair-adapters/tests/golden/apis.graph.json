@@ -473,7 +473,7 @@
           "value": "component",
           "line": 10,
           "origin": "inferred",
-          "reason": "keyword `class`"
+          "reason": "tree-sitter: class_declaration"
         }
       ],
       "origin": "authored"

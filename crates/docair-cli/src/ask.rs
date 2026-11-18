@@ -50,7 +50,14 @@ impl Session {
             );
         }
         let config = docair_core::config::load(root)?;
-        let graph = scan(root, docair_adapters::all(), &Options { lenient })?;
+        let graph = scan(
+            root,
+            docair_adapters::all(),
+            &Options {
+                lenient,
+                ..Options::default()
+            },
+        )?;
         Ok(Some(Session {
             root: root.to_path_buf(),
             out: out.unwrap_or_else(|| root.join(".docair")),
@@ -70,6 +77,7 @@ impl Session {
             docair_adapters::all(),
             &Options {
                 lenient: self.lenient,
+                ..Options::default()
             },
         )?;
         for w in walkthroughs {
@@ -185,7 +193,8 @@ impl Session {
             let mut changes = Vec::new();
             for c in &pending.changes {
                 let mut fresh = c.clone();
-                if fresh.mode != "text" {
+                // Glossary text, a glossary section and whole files keep their mode (docs/MEANINGS.md §6).
+                if !["text", "section", "file"].contains(&fresh.mode.as_str()) {
                     fresh.mode.clear();
                 }
                 match edit::resolve(&fresh, &self.graph.nodes) {
@@ -472,7 +481,14 @@ pub fn cmd_apply(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<Exi
     let out = out.unwrap_or_else(|| root.join(".docair"));
     let pending = read_pending(&out)?;
     let config = docair_core::config::load(root)?;
-    let graph = scan(root, docair_adapters::all(), &Options { lenient })?;
+    let graph = scan(
+        root,
+        docair_adapters::all(),
+        &Options {
+            lenient,
+            ..Options::default()
+        },
+    )?;
     let ai = AiConfig::resolve(config.ai.as_ref(), &Env::load(Some(root))).unwrap_or(AiConfig {
         endpoint: String::new(),
         model: String::new(),

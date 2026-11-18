@@ -277,7 +277,19 @@ get(a))`, also `get(a).post(b)` chains, gives the routes the handlers serve
 and the router's calls to them. In an `any`, list the longest pattern first:
 ast-grep keeps the first pattern that fits and doesn't try the next one when
 a constraint then fails. Not yet: axum `nest` prefixes (beads, a follow-up of
-step 4); `requests` and `where:` come in step 5.
+step 4).
+
+**Added in step 5:** `requests: http` facts (`method`, `path`, an optional
+`reply`); `payload` and `reply` are left out when a match has none; and
+`where:`, docair's one addition to ast-grep: `where: { CLIENT: { type:
+HttpClient } }` asks the language adapter whether the captured field has that
+type, and drops the fact when it hasn't. The TypeScript adapter
+(`docair-lang-ts`) knows a class's field types from `inject(X)`, type
+annotations and constructor parameters. Rules: `angular.http-client.yaml`,
+`fetch.yaml` (a method in the options) and `fetch-get.yaml` (none: GET). A
+request is a `Request` fact; until step 6 it shows as an inferred
+`@requests POST /api/scan -> ScanResult` tag on the method that sends it.
+All six of docair-web's requests come from code this way.
 
 ### 5.3 Registry
 
@@ -320,6 +332,42 @@ shows many types: Rust declares them on parameters and fields, and
 `parser.parse(…)` a certain call outside the project. Calls whose target the
 syntax can't pin down become could lines (§5.5).
 
+**Built (step 7, 2026-11-18):** crate `docair-scip` reads SCIP indexes
+(`scip` 0.10.0): the references to functions and methods per file, where each
+is defined, and the implementations of a trait method. rust-analyzer writes
+no "implements" relationships, so those come from the symbols themselves:
+`impl#[RustAdapter][Adapter]file().` implements `Adapter#file().`. The Rust
+adapter maps each reference to the innermost item around it (the caller) and
+the item defined at the reference's definition (the callee), in its project
+pass. `docair.toml`'s `[code] run_indexers = true` runs `rust-analyzer scip`
+(docair: +4.5 s per scan), `[code] scip = [...]` reads index files built
+elsewhere; W119 when rust-analyzer fails, nothing when it isn't installed.
+An indexer builds the code (build scripts and procedural macros run), so an
+upload to the server never runs one (`Options::untrusted`), and a `scip`
+path must stay inside the root (`config::inside`).
+Without an index, Rust keeps `self.save()`, `load()` in the same file,
+`config::load()` and `Self::new()`; TypeScript keeps `this.save()` and
+`load()` in the same file (no scip-typescript yet). Across files, the
+TypeScript adapter reads every file first and then links what the syntax
+says (docair-4wk.20):
+
+| Code | Line |
+|------|------|
+| `this.scanner.scan(files)`, `scanner = inject(ScanService)` or a constructor parameter | to `ScanService.scan`, the class found through the file's imports |
+| `<app-chat-panel (asked)="ask($event)">` in the parent's template, `this.asked.emit(q)` in `submit()` | `submit` → the parent's `ask`; from the child component itself when its template emits (`(click)="closed.emit()"`) |
+| `this.post({ type: 'docair:wording', … })`, where `post` passes its parameter to `postMessage` | to the function a `message` listener in another file calls when `m.type === 'docair:wording'`; `one-of` when listeners in several files take the type |
+| `bootstrapApplication(App, appConfig)` (rule `angular.bootstrap`) | to the class `App` |
+
+Templates are the project's HTML files, found by their path from
+`templateUrl`; nothing is read from disk. Lines carry `reach`
+(`one-of` for a call through a trait with several implementations, one line
+to each); a block that names one implementation picks it. Measured with
+`docair check --coverage`: of 108 hand-written calls between functions, 79
+come from code (77 of 92 in Rust, from the index; 2 of 16 in TypeScript, from
+the syntax); of all 150 hand-written `@calls`, 90. docair's page went from 304
+to 1548 lines. Not yet: could lines (names without types),
+scip-typescript.
+
 ### 5.5 Could and does: scenarios pick
 
 Code shows what **could** happen. Scenarios and blocks say what **does**
@@ -360,6 +408,70 @@ tag.
   (`format!("{}/chat/completions", cfg.endpoint)` in `docair-ai`) is a certain
   request to an unknown host. The block says which system that is. That is
   what blocks are for.
+
+### 5.6 Data between calls
+
+Built in docair-4wk.19, for Rust. Inside one function, the code says which
+call makes a value and which later call takes it:
+
+```rust
+let files = discover::discover(root, &config)?;          // discover makes files
+let blocks: Vec<_> = code_files.iter()                     // code_files: files, partitioned
+    .map(|f| extract::extract(f, &mut diags)).collect();   // extract takes files, makes blocks
+let project = adapter::Project { blocks: &blocks, .. };   // project holds blocks
+let facts = adapter::collect(&project, adapters);         // collect takes blocks
+```
+
+Each pair becomes a data line on the taker, as if its block said
+`@in blocks: RawBlock[] from docair-core.extract.extract`:
+
+| Code | Data |
+|------|------|
+| `let x = f(…)`, `x = f(…)` | f makes x; `?`, `.unwrap()`, `.collect()`, `.iter()` and the like hand the value on |
+| `let y = x.iter().cloned()`, `let (a, b) = x.partition(…)`, `Project { blocks: &x }` | y, a, b and the struct hold what x holds |
+| `xs.iter().map(\|f\| g(f))`, `for f in &xs { g(f) }` | f holds what xs holds; the map's value is g's |
+| `g(&mut x)` | g takes x, and makes it from then on |
+| `g(…x…)`, `x.g()` | g takes x from its last maker |
+| `g(f(x))` | g takes f's value |
+
+The type is what the `let` says, else what the maker returns (its
+signature, without `Result` and `Option`). Both calls must reach functions
+of the project, through the code index or the syntax (§5.4); a value
+through a trait with several implementations gives no line. Blocks, loops
+and branches aren't told apart, and a value that comes in as a parameter or
+in a field (`self.graph`) isn't followed. On docair: 260 data lines; of the
+23 hand-written `@in … from`, 15 are the same and 7 come through other
+makers, the caller or what a maker called (§9.5).
+
+### 5.7 Reads and writes: the code says that, the block says where
+
+Built in docair-4wk.18. What the code reads and writes splits in two:
+
+| The code | It knows | Becomes |
+|----------|----------|---------|
+| `std::env::var("DOCAIR_MAX_FILES")`, `process.env.PORT` | the variable, by name | a request at `Meet::Env`; `env::link` gives it a certain `@reads` from what sets the variable: a Deployment's `env` value, a `configMapKeyRef`/`secretKeyRef`, or every key of an `envFrom` ConfigMap or Secret. `one-of` when several set it; nothing in the project sets it → `@requests env:NAME` |
+| `fs::read_to_string(…)`, `fs::write(…)`, `fs.readFileSync(…)`, Terraform `file(…)` | that a file is read or written, not which store | `@reads file:` / `@writes file:` |
+| a request through an HTTP client crate (`ureq`, `reqwest`, from the code index) | that a request goes out, not to which system | `@calls net:` |
+
+`file:` and `net:` are open refs. Resolve binds one to the targets of a
+fitting kind (`store`; `external`, `host`) that the part's own block names
+with a tag of the same name, else those its callers' blocks name, up to
+three calls up (a helper `post(agent, url)` sends what `chat`'s block
+names). One of them when there are several. With none, the open ref is
+dropped, without a line or a warning: the code is right that it reads a
+file, but only a block can say which.
+
+A name the code passes in is followed inside one file: a closure or a
+function that hands its parameter to `env::var` reads what each call
+passes, as a string, a `const`, or a `let` of a `const`
+(`let num = |key| env::var(key); num("DOCAIR_MAX_FILES")`; `pick("X")` →
+`env.get(var)` → `env::var(key)`). Free functions and closures match
+`f(…)` calls, methods `x.f(…)` calls.
+
+Not yet: (b) a store that says where it is, so that code with the path
+written out gets a certain line without a block (docair-4wk.25); reads of
+`const` tables (`LANGUAGES`); Dockerfiles and Terraform `local-exec`. On
+docair: `@reads` 12 of 20 confirmed and 1 behind a call, `@writes` 5 of 7.
 
 ---
 
@@ -433,11 +545,35 @@ serves `POST /api/scan`.
 * **Through the network.** A browser request to `/api/scan` goes to the page's
   origin and reaches the handler through the published port, Traefik, the
   Ingress and the Service. The infra adapter already knows that path (Ingress
-  `@routes`, Service `@selects`). The edge goes client → handler with
-  `via http:POST /api/scan`, and the Network layer keeps drawing the hops. How
-  exactly those two fit together is settled in step 6 of the plan.
+  `@routes`, Service `@selects`). **Settled in step 6:** when calls, routes
+  and selections already lead from the client to the handler (the network
+  path, at most 8 hops), the request only confirms them, and the viewer keeps
+  joining that path into one line ("via host-port › traefik › Ingress"). When
+  nothing leads there, the request becomes a call line client → handler,
+  `via http:POST /api/scan`, like a hand-written `@calls http:` ref. On docair
+  itself all six web requests are confirmed; with the hand-written
+  `@calls host-port` lines removed, all six become lines from code.
 
 ---
+
+### 7.1 The way into the cluster
+
+Built in docair-4wk.21. The infra adapter reads the blocks inside Terraform
+resources (`node {`, `extra_port_mappings {`, `values = [yamlencode({`) and
+a chart's `values.yaml`:
+
+| Code | Line |
+|------|------|
+| `extra_port_mappings { container_port = 30080, host_port = 8080 }` inside `node { }` | the mapping → its node (`TCP 127.0.0.1:8080 → :30080`) |
+| the node's `container_port` = `nodePort` in a `helm_release`'s values | the node → that release's values (`NodePort 30080`) |
+| values with `ingressClass` / `isDefaultClass`, the release's `name` | → each Ingress whose `ingressClassName` is that name (or none, for the default) |
+| `ingressClassName: {{ .Values.ingress.className }}` | the class from the chart's `values.yaml` |
+| `port: name: http` in an Ingress path | the path keeps its Service (before, only `port: number:` closed a path) |
+
+A line goes to the `@id` of the block that documents the other end, else to
+the Terraform resource. Not yet: from a Service to the program its pods run
+(the image, the Dockerfile that builds it, the crate or app in it,
+docair-4wk.26).
 
 ## 8. What becomes a node
 
@@ -510,17 +646,46 @@ confirms but never contradicts.
 | Code | Change |
 |------|--------|
 | `W103` | widened: any block/code conflict (route, a missing edge under completeness), not only `@http`; a warning also in strict mode |
-| new | a request that nothing serves: `POST /api/x` from `scan-service.scan`, while some adapter serves HTTP in this project |
-| new | a route that nothing requests (off by default: public APIs are requested from outside) |
-| new | ambiguous rendezvous: two symbols serve the same route |
-| new | a file that could not be parsed (today wrongly W103) |
+| `W117` (step 6) | a request that nothing serves: `POST /api/x` from `scan-service.scan` (a request to another origin is left alone) |
+| `W118` (step 6) | a route that nothing requests (off by default: `[checks] unrequested_routes = true`; public APIs are requested from outside) |
+| `W116` (step 6) | ambiguous rendezvous: two parts serve the same request |
+| `W113` (step 6) | a file that could not be parsed (was W103) |
 | new | a rule that failed to load or match, with its id |
 
 ### 9.5 Measured on ourselves
 
-`docair check --coverage` prints, per adapter: facts found, authored edges
-confirmed, stale, and added. The numbers in §1 are the baseline. Every step
-below says which number it moves.
+`docair check --coverage` prints, per kind of line (`@calls`, `@in`,
+`@reads`, …), how many authors wrote and how the code accounts for them:
+
+| Column | A hand-written line counts here when |
+|--------|--------------------------------------|
+| confirmed | the same part has an inferred tag of the same kind to the same target (for a call, also a route or a selection: an Ingress routes to its Service) |
+| via helpers | a call: inferred calls lead from the part, or a part inside it, to the target (the author wrote a shortcut, or wrote on the component what its method does); data (`@in … from`): inferred data lines lead back to the target through other makers, or the target calls the part over one or more calls (the caller hands it over), or a maker found so calls the target (it hands on what that returns); reads and writes: a function the part calls reads or writes it |
+| by a request | a call: the part sends a request (`@requests`), and calls, routes and selections lead from the target to what serves it (the network path, §7) |
+| missing | none of these |
+| only in code | (not hand-written) an inferred line no author wrote |
+
+`@in`/`@out` without `from`/`to` are signatures, not lines, and aren't
+counted. On docair (2026-11-18, after step 7): the code accounts for 117 of
+212 hand-written lines (55%): calls 91 confirmed, 20 via helpers, 6 by a
+request, 34 missing; none of the 23 `@in`, 20 `@reads`, 7 `@writes` and 11
+`@creates` yet. With the TypeScript calls across files (docair-4wk.20): 136
+of 213 (63%), calls 109 confirmed, 21 via helpers, 6 by a request, 16
+missing: 9 network hops (docair-4wk.21), 1 request to the AI endpoint
+(docair-4wk.18), 5 intent (who starts what: developer, browser; a page
+shown in a frame), 2 stale in viewer.js, 2 in Rust (a type, a call deeper
+than 8 hops). With data between calls (docair-4wk.19, §5.6): 159 of 216
+(73%); `@in` 15 confirmed, 7 via helpers, 1 missing (a value handed down
+as a parameter). With reads and writes (docair-4wk.18, §5.7): 181 of 218
+(83%); `@reads` 12 + 1 of 20, `@writes` 5 of 7. The code's own lines come
+from the inferred tags, not from edge origins: an edge merges the code's
+line with the author's. With the way into the cluster (docair-4wk.21, §7):
+185 of 218 (84%); calls 114 confirmed, 24 via helpers, 6 by a request, 12
+missing: 3 from a Service to the program its pods run (docair-4wk.26), 3
+inside the viewer's layout worker, 5 intent (developer, browser, a page in a
+frame), 1 stale. Targets are compared as resolve finds them
+(`tf:helm_release.traefik` is `tf.traefik`). Every step below says which
+number it moves.
 
 ---
 
