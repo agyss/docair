@@ -28,7 +28,13 @@
     }
 
     @if (busy()) {
-      <span class="regen" data-test="regenerating">Generating the page again…</span>
+      <span class="regen" data-test="regenerating">
+        @if (progress(); as p) {
+          <app-progress-line [progress]="p" [compact]="true" />
+        } @else {
+          Generating the page again…
+        }
+      </span>
     }
 
     <div class="actions">
@@ -42,7 +48,14 @@
   </header>
 
   <div class="body">
-    <iframe #frame title="docair page" sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox" [srcdoc]="page()" (load)="frameLoaded()" data-test="page"></iframe>
+    <div class="frame">
+      <iframe #frame title="docair page" sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox" [srcdoc]="page()" (load)="frameLoaded()" data-test="page"></iframe>
+      @if (drawing(); as d) {
+        <div class="drawing" data-test="drawing-page">
+          <div class="card"><app-progress-line [progress]="d" /></div>
+        </div>
+      }
+    </div>
     @if (ai()?.enabled && chatOpen()) {
       <app-chat-panel
         class="side"

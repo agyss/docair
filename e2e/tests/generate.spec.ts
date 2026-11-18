@@ -31,6 +31,52 @@ test.describe('generate the docs', () => {
   });
 
   /***
+   * A generation says where it is, step by step: the upload in bytes and percent, docair reading the
+   * files on the server, the page coming back, and the page drawing itself, until it is ready.
+   *
+   * @part-of e2e.generate
+   * @covers  docair-web.progress "checks each step of a generation shows how far it is"
+   * @covers  docair-web.app.generate "checks the steps follow each other"
+   * @covers  docair-viewer.drawing "checks the page says what it draws and when it is ready"
+   ***/
+  test('each step of a generation shows how far it is', async ({ page }) => {
+    // Every line the user sees, in order.
+    await page.addInitScript(() => {
+      const w = window as any;
+      w.__seen = [];
+      const look = () => {
+        const now = [...document.querySelectorAll<HTMLElement>('[data-test="progress"]')].map((e) => `${e.dataset['phase']}: ${e.textContent!.replace(/\s+/g, ' ').trim()}`).join(' | ');
+        if (now !== w.__seen[w.__seen.length - 1]) w.__seen.push(now);
+      };
+      new MutationObserver(look).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+    });
+    // The shop with some notes, so the upload has a size worth showing.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docair-e2e-'));
+    const shop = path.join(dir, 'shop');
+    fs.cpSync(fixture('shop'), shop, { recursive: true });
+    fs.writeFileSync(path.join(shop, 'docs', 'notes.md'), `# Notes\n\n${'The shop keeps its notes here, so that the upload has some size.\n'.repeat(9000)}`);
+    await page.goto('/');
+    await page.getByTestId('folder-input').setInputFiles(shop);
+    const files = (await page.getByTestId('picked').innerText()).match(/(\d+) files/)![1];
+    // A slow network, so that each step lasts long enough to be seen.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 150, uploadThroughput: 200 * 1024, downloadThroughput: 2 * 1024 * 1024 });
+    await page.getByTestId('generate').click();
+    await expect(page.getByTestId('progress')).toContainText(new RegExp(`1 of 4 Uploading ${files} files · \\d+ kB of \\d+ kB · [1-9]\\d?%`));
+    await expect(page.getByTestId('result')).toBeVisible();
+    await expect(page.frameLocator('[data-test="page"]').locator('body[data-ready="true"]')).toBeAttached();
+    await expect(page.getByTestId('drawing-page')).toHaveCount(0);
+    const seen: string[] = await page.evaluate(() => (window as any).__seen.filter(Boolean));
+    const phases = seen.map((line) => line.split(':')[0]).filter((p, i, all) => p !== all[i - 1]);
+    expect(phases).toEqual(['upload', 'scan', 'download', 'draw']);
+    expect(seen).toContainEqual(expect.stringMatching(new RegExp(`^scan: 2 of 4 docair reads the ${files} files on the server`)));
+    expect(seen).toContainEqual(expect.stringMatching(/^download: 3 of 4 Receiving the page · [\d.]+ (kB|MB) of [\d.]+ (kB|MB) · \d+%/));
+    expect(seen).toContainEqual(expect.stringMatching(/^draw: 4 of 4 Drawing the page: \w+ · \d+ parts, \d+ lines/));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /***
    * `.env` and Terraform state stay on the machine: the upload panel leaves them out.
    *
    * @part-of e2e.generate

@@ -1,0 +1,2 @@
+# A tiny app, used by the e2e tests to follow data that is made, returned and sent on.
+system = "answer"

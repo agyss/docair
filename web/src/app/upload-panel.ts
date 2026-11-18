@@ -1,4 +1,5 @@
 import { Component, computed, input, output, signal } from '@angular/core';
+import { Progress, ProgressLine } from './progress-line';
 import { PickedFile } from './scan.service';
 
 /** Folders that only make an upload big: dependencies, build output, VCS data, provider caches. */
@@ -21,10 +22,11 @@ function useful(path: string): boolean {
   return !parts.some((part) => SKIPPED.includes(part)) && !secret(parts[parts.length - 1]);
 }
 
-/** All files under a dropped file or folder, with their paths. */
-async function filesOf(entry: FileSystemEntry): Promise<PickedFile[]> {
+/** All files under a dropped file or folder, with their paths; `found` hears of each one. */
+async function filesOf(entry: FileSystemEntry, found: () => void = () => {}): Promise<PickedFile[]> {
   if (entry.isFile) {
     const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
+    found();
     return [{ path: entry.fullPath.replace(/^\//, ''), file }];
   }
   if (!entry.isDirectory || !useful(entry.fullPath)) {
@@ -37,7 +39,7 @@ async function filesOf(entry: FileSystemEntry): Promise<PickedFile[]> {
     if (!batch.length) break;
     entries.push(...batch);
   }
-  return (await Promise.all(entries.map(filesOf))).flat();
+  return (await Promise.all(entries.map((e) => filesOf(e, found)))).flat();
 }
 
 /***
@@ -54,13 +56,18 @@ async function filesOf(entry: FileSystemEntry): Promise<PickedFile[]> {
  ***/
 @Component({
   selector: 'app-upload-panel',
+  imports: [ProgressLine],
   templateUrl: './upload-panel.html',
   styleUrl: './upload-panel.css',
 })
 export class UploadPanel {
   readonly busy = input(false);
-  readonly progress = input(0);
+  /** Where the generation is, while it runs. */
+  readonly progress = input<Progress | null>(null);
   readonly generate = output<PickedFile[]>();
+
+  /** A dropped folder being read: how many files so far. */
+  protected readonly reading = signal<Progress | null>(null);
 
   protected readonly files = signal<PickedFile[]>([]);
   protected readonly skipped = signal(0);
@@ -95,7 +102,14 @@ export class UploadPanel {
     const entries = Array.from(event.dataTransfer?.items ?? [])
       .map((item) => item.webkitGetAsEntry())
       .filter((entry): entry is FileSystemEntry => entry !== null);
-    this.take((await Promise.all(entries.map(filesOf))).flat());
+    const since = Date.now();
+    let found = 0;
+    this.reading.set({ phase: 'read', done: 0, since });
+    try {
+      this.take((await Promise.all(entries.map((e) => filesOf(e, () => this.reading.set({ phase: 'read', done: ++found, since }))))).flat());
+    } finally {
+      this.reading.set(null);
+    }
   }
 
   protected over(event: DragEvent): void {

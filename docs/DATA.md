@@ -2,9 +2,10 @@
 
 The chart's boxes are the working parts: code, and the places it runs. The
 data below is what those parts and you make, and what travels along the lines
-between them. A line carries a datum when its payload names it; the page's
-**Data** list shows who makes each one and which lines carry it, and *Follow*
-lights up its way through the system (SPEC §3.6).
+between them. A line carries a datum when what it sends names it, or when a
+call's answer does; the page's **Data** list shows who makes each one and
+which lines carry it, and *Follow* walks its way through the system, there and
+back (SPEC §3.6).
 
 ```docair
 The data docair makes and carries, as opposed to the code that does the work.

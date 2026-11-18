@@ -1,6 +1,7 @@
 import { HttpErrorResponse, HttpEventType } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { ConversationService } from './conversation.service';
+import { Progress } from './progress-line';
 import { ResultView } from './result-view';
 import { PickedFile, ScanResult, ScanService } from './scan.service';
 import { UploadPanel } from './upload-panel';
@@ -24,7 +25,8 @@ export class App {
   private readonly conversation = inject(ConversationService);
 
   protected readonly busy = signal(false);
-  protected readonly progress = signal(0);
+  /** Where the generation is: the files go up, docair reads them, the page comes back. */
+  protected readonly progress = signal<Progress | null>(null);
   protected readonly error = signal('');
   protected readonly result = signal<ScanResult | null>(null);
   /** The files of the current page, kept so edits can be applied to them. */
@@ -40,12 +42,13 @@ export class App {
     this.result.set(null);
     this.files.set([]);
     this.error.set('');
-    this.progress.set(0);
+    this.progress.set(null);
     this.conversation.clear();
   }
 
   /***
-   * Send the picked files and show the page when the answer arrives.
+   * Send the picked files and show the page when the answer arrives. Each step says how far it
+   * is: the upload in bytes, docair's reading in seconds, the answer in bytes.
    *
    * @id      docair-web.app.generate
    * @part-of docair-web.app
@@ -56,12 +59,23 @@ export class App {
     this.files.set(files);
     this.busy.set(true);
     this.error.set('');
-    this.progress.set(0);
+    const count = files.length;
+    const bytes = files.reduce((n, f) => n + f.file.size, 0);
+    this.progress.set({ phase: 'upload', done: 0, total: bytes, files: count, since: Date.now() });
     this.scanner.scan(files).subscribe({
       next: (event) => {
-        if (event.type === HttpEventType.UploadProgress && event.total) {
-          this.progress.set(Math.round((100 * event.loaded) / event.total));
+        const now = Date.now();
+        const p = this.progress();
+        if (event.type === HttpEventType.UploadProgress) {
+          // Everything sent: docair reads the files now.
+          if (event.total && event.loaded < event.total) this.progress.set({ phase: 'upload', done: event.loaded, total: event.total, files: count, since: p?.since ?? now });
+          else if (p?.phase === 'upload') this.progress.set({ phase: 'scan', files: count, since: now });
+        } else if (event.type === HttpEventType.ResponseHeader) {
+          this.progress.set({ phase: 'download', done: 0, total: Number(event.headers.get('content-length')) || undefined, since: now });
+        } else if (event.type === HttpEventType.DownloadProgress) {
+          this.progress.set({ phase: 'download', done: event.loaded, total: event.total ?? p?.total, since: p?.phase === 'download' ? p.since : now });
         } else if (event.type === HttpEventType.Response) {
+          this.progress.set(null);
           this.result.set(event.body);
           this.busy.set(false);
         }
@@ -69,6 +83,7 @@ export class App {
       error: (err: HttpErrorResponse) => {
         this.error.set(err.error?.error ?? err.message);
         this.busy.set(false);
+        this.progress.set(null);
       },
     });
   }

@@ -96,6 +96,11 @@ const S = {
   needed: new Set(),
   playing: false,
   layoutRun: 0,
+  // The newest layout run drawn on the canvas.
+  shownRun: 0,
+  // Layouts kept per picture (SPEC §3.5): key → result, newest last.
+  layouts: new Map(),
+  layoutKey: null,
   tokenRun: 0,
   direction: 'auto',
   dirUsed: 'RIGHT',
@@ -185,11 +190,14 @@ function boot() {
 
   wireMessages();
   wireTerms();
-  return firstLayer().then(render).then(() => {
+  return firstLayer().then(render).then(async () => {
     const id = decodeURIComponent(location.hash.slice(1));
-    if (id && S.byId.has(id)) select(id, true);
+    // A part named in the URL is shown before the page says it is ready.
+    if (id && S.byId.has(id)) await select(id, true);
     else renderDetails(null);
     document.body.dataset.ready = 'true';
+    // The page around this one (the web app) stops showing that it is drawn.
+    tellParent({ type: 'docair:ready' });
   });
 }
 
@@ -239,7 +247,18 @@ function makeStyle() {
     { selector: ':parent[kind = "cluster"], :parent[kind = "host"]', style: { 'border-width': 2.5 } },
     { selector: ':parent[kind = "namespace"], :parent[kind = "network"]', style: { 'border-style': 'dashed', 'border-width': 1.5 } },
     { selector: ':parent[kind = "container"]', style: { 'border-width': 2, 'border-style': 'double' } },
-    { selector: 'node:selected', style: { 'border-width': 3, 'border-color': v('--accent'), 'overlay-opacity': 0 } },
+    // A selected part has a halo, so it stands out from the search's hits; the halo is scaled with the part (SPEC §3.5).
+    {
+      selector: 'node:selected',
+      style: {
+        'border-width': 3,
+        'border-color': v('--accent'),
+        'overlay-opacity': 0,
+        'underlay-color': v('--accent'),
+        'underlay-opacity': 0.3,
+        'underlay-padding': (n) => 8 * (n.data('sc') ?? 1),
+      },
+    },
     {
       selector: 'edge',
       style: {
@@ -279,7 +298,8 @@ function makeStyle() {
     },
     { selector: 'edge[?dangling]', style: { 'line-style': 'dashed', 'line-color': v('--error'), 'target-arrow-color': v('--error') } },
     { selector: 'edge.hl', style: { width: 3, 'z-index': 9 } },
-    { selector: '.dim, .flow-dim', style: { opacity: 0.16 } },
+    // The selected part is never dimmed: not by the search, not by a walk's step (SPEC §3.5).
+    { selector: '.dim:unselected, .flow-dim:unselected', style: { opacity: 0.16 } },
     { selector: 'node.hit', style: { 'border-color': v('--accent'), 'border-width': 3 } },
     { selector: 'node.flow-done', style: { 'border-color': v('--flow'), 'border-width': 2.5 } },
     { selector: 'node.flow-current', style: { 'border-color': v('--flow'), 'border-width': 4, 'background-color': v('--flow-soft') } },
@@ -322,7 +342,8 @@ function makeStyle() {
     },
     // Following a datum (SPEC §3.6): the lines that carry it.
     { selector: 'edge.carry', style: { width: 3.5, 'line-color': v('--data'), 'target-arrow-color': v('--data'), 'z-index': 60 } },
-    { selector: '.carry-dim', style: { opacity: 0.18 } },
+    // A selected part is never dimmed by following a datum either.
+    { selector: '.carry-dim:unselected', style: { opacity: 0.18 } },
     // An answer goes back along its call: a hollow token.
     { selector: 'node.token.reply', style: { 'background-color': v('--canvas'), 'border-color': v('--flow'), 'border-width': 3 } },
   ];
@@ -346,7 +367,8 @@ function descendants(id) {
 }
 
 const measure = (() => {
-  const ctx = document.createElement('canvas').getContext('2d');
+  // In the layout worker (no document), an offscreen canvas measures the same.
+  const ctx = (typeof document === 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas')).getContext('2d');
   return (text, size = 12) => {
     ctx.font = `${size}px ${S.font}`;
     return ctx.measureText(text).width;
@@ -372,20 +394,57 @@ function nodeSize(kind, label) {
  * @calls   docair-viewer.show-details "highlights a node and shows its details"
  ***/
 function render() {
-  S.lastRender = renderNow();
+  const run = S.layoutRun + 1;
+  // The note goes once the newest run has drawn.
+  S.lastRender = renderNow().finally(() => run === S.layoutRun && drawing(null));
   return S.lastRender;
+}
+
+/** The next frame has been painted, or a moment has passed in a page that paints none (hidden, in the background). */
+function nextPaint() {
+  return new Promise((done) => {
+    requestAnimationFrame(() => setTimeout(done, 0));
+    setTimeout(done, 60);
+  });
+}
+
+/***
+ * Say what is being drawn: the layer, its parts and its lines. The page shows it in the middle of
+ * the canvas once the layout takes a moment (a quick one never flashes it), and tells the page
+ * around it (the web app), which shows it until this page is ready.
+ *
+ * @id      docair-viewer.drawing
+ * @part-of docair-viewer.page
+ ***/
+function drawing(what) {
+  const box = $('#drawing');
+  if (box) {
+    // Inside the web app, the app says it while the page starts.
+    const told = window.parent !== window && !document.body.dataset.ready;
+    box.classList.toggle('show', !!what && !told);
+    if (!what) box.classList.remove('now');
+    if (what) $('#drawing-text').textContent = `Drawing ${what}…`;
+  }
+  if (what) tellParent({ type: 'docair:drawing', what });
 }
 
 /** One layout run; a newer run makes an older one stop before it draws. */
 async function renderNow() {
   const run = ++S.layoutRun;
   const { nodes, edges } = visibleElements();
+  // Say what is drawn, and let the page paint that before the layout holds it.
+  drawing(`${layerName(S.layer)} · ${nodes.length} ${nodes.length === 1 ? 'part' : 'parts'}, ${edges.length} ${edges.length === 1 ? 'line' : 'lines'}`);
+  await nextPaint();
+  if (run !== S.layoutRun) return;
   let pos = new Map();
   let routes = new Map();
   let labels = new Map();
   try {
     const best = await layoutFor(nodes, edges);
+    if (run !== S.layoutRun) return;
     ({ pos, routes, labels } = best);
+    S.layoutKey = best.key;
+    S.noWay = best.none;
     S.placed = { pos, scale: best.scale };
     S.dirUsed = best.direction;
     updateDirButton();
@@ -400,6 +459,8 @@ async function renderNow() {
       S.cy.maxZoom(Math.min(20, 3 / Math.min(1, ...best.scale.values())));
     } else S.cy.maxZoom(3);
   } catch (err) {
+    // A newer picture stopped this layout (SPEC §3.5): nothing failed.
+    if (run !== S.layoutRun) return;
     console.error('docair: layout failed', err);
   }
   if (run !== S.layoutRun) return;
@@ -465,6 +526,12 @@ async function renderNow() {
   applySearch();
   renderLayers();
   renderCrumbs();
+  S.shownRun = run;
+}
+
+/** Once the newest picture is drawn: the canvas shows what S.view says. */
+async function drawn() {
+  while (S.shownRun !== S.layoutRun) await S.lastRender;
 }
 
 function visibleElements() {
@@ -481,7 +548,9 @@ function visibleElements() {
     const isGroup = real.length > 0;
     let name = isGroup ? groupLabel(n.id) : n.name;
     if (n.kind === 'test' && !isGroup) name = `${TEST_ICON[n.test?.status] || '○'} ${name}`;
-    const label = collapsed || (isGroup && !compound) ? `${name} (${descendants(n.id)})` : name;
+    // A box of code with parts docair only found in the code, left out here: it says how many (zoom in to see them).
+    const quiet = compound ? quietIn(n.id, v) : 0;
+    const label = collapsed || (isGroup && !compound) ? `${name} (${descendants(n.id)})` : quiet ? `${name} · ${quiet} more` : name;
     const size = compound ? { w: 10, h: 10 } : nodeSize(kindOf(n.kind), label);
     nodes.push({
       group: 'nodes',
@@ -491,7 +560,7 @@ function visibleElements() {
         kind: kindOf(n.kind),
         parent: v.parent.get(n.id) || undefined,
         compound,
-        minW: Math.ceil(measure(n.name)) + 34,
+        minW: Math.ceil(measure(quiet ? label : n.name)) + 34,
         w: size.w,
         h: size.h,
       },
@@ -612,20 +681,199 @@ function flowHints(nodes, edges) {
   return { flips, priority: (e) => aheadPriority(e, clients, walked) };
 }
 
-/** Zoom at which a layout of this size fits the canvas. */
-function fitZoom(width, height) {
-  const pad = 72;
-  return Math.min((S.cy.width() - pad) / width, (S.cy.height() - pad) / height);
+/** The way things happen, as data for the layout worker and the kept layouts: the lines laid out against their arrow, and how much each line points ahead. */
+function hintsData(nodes, edges) {
+  const h = flowHints(nodes, edges);
+  return { flips: edges.filter((e) => h.flips(e)).map((e) => e.data.id), ahead: edges.map((e) => h.priority(e)) };
 }
 
-/** Positions, lines and their words: top-down (SPEC §3.5). */
-async function layoutFor(nodes, edges) {
-  const best = await topdownPlace(nodes, edges);
-  if (best.scale) for (const e of edges) e.data.fs = LABEL_FONT * Math.min(best.scale.get(e.data.source) ?? 1, best.scale.get(e.data.target) ?? 1);
+/** The way things happen, from that data again. */
+function hintsFrom(data, edges) {
+  const flips = new Set(data.flips);
+  const ahead = new Map(edges.map((e, i) => [e.data.id, data.ahead[i]]));
+  return { flips: (e) => flips.has(e.data.id), priority: (e) => ahead.get(e.data.id) ?? 1 };
+}
+
+/** What a layout needs of the page: the canvas it has to fit, the direction asked for, the font of the words. */
+function layoutContext() {
+  return { width: S.cy.width(), height: S.cy.height(), direction: S.direction, font: S.font };
+}
+
+/** Zoom at which a layout of this size fits the canvas. */
+function fitZoom(width, height, ctx) {
+  const pad = 72;
+  return Math.min((ctx.width - pad) / width, (ctx.height - pad) / height);
+}
+
+/** The size of a line's words: as small as the smaller of its two ends is drawn. */
+const lineFont = (e, scale) => LABEL_FONT * Math.min(scale.get(e.data.source) ?? 1, scale.get(e.data.target) ?? 1);
+
+/** Positions, lines and their words: top-down (SPEC §3.5). Runs in the layout worker, or on the page when it has none. */
+async function computeLayout(nodes, edges, hints, ctx) {
+  const best = await topdownPlace(nodes, edges, hints, ctx);
+  if (best.scale) for (const e of edges) e.data.fs = lineFont(e, best.scale);
   // A small picture was routed while its placement was chosen.
-  const { routes, none } = best.lines || gridLines(nodes, edges, best);
-  S.noWay = none;
-  return { ...best, routes, labels: placeLabels(nodes, edges, best.pos, routes, best.scale) };
+  const { lines, ...placed } = best;
+  const { routes, none } = lines || gridLines(nodes, edges, best);
+  return { ...placed, routes, none, labels: placeLabels(nodes, edges, best.pos, routes, best.scale) };
+}
+
+/***
+ * Lay out a picture. One laid out before comes back at once from the kept layouts; a new one is laid
+ * out in the layout worker, beside the page (SPEC §3.5).
+ *
+ * @id      docair-viewer.layout
+ * @part-of docair-viewer.page
+ * @calls   docair-viewer.layout-worker "lays out a new picture beside the page"
+ ***/
+async function layoutFor(nodes, edges) {
+  const hints = hintsData(nodes, edges);
+  const ctx = layoutContext();
+  const key = layoutKey(nodes, edges, hints, ctx);
+  let best = keptLayout(key);
+  if (!best) {
+    best = await layoutJob(key, { op: 'layout', nodes, edges, hints, ctx });
+    keepLayout(key, best);
+  }
+  // The worker set the words' sizes on its own copy of the lines.
+  if (best.scale) for (const e of edges) e.data.fs = lineFont(e, best.scale);
+  return { ...best, key };
+}
+
+/** How many pictures keep their layout: the layers the reader goes between, and a walk's view of one. */
+const KEEP_LAYOUTS = 6;
+
+/** A picture's key in the kept layouts: everything its layout depends on, hashed. */
+function layoutKey(nodes, edges, hints, ctx) {
+  const text = JSON.stringify([nodes.map((n) => [n.data, n.classes]), edges.map((e) => [e.data, e.classes]), hints, ctx]);
+  // cyrb53: 53 bits, so two pictures practically never share a key.
+  let [h1, h2] = [0xdeadbeef, 0x41c6ce57];
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${text.length}:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+}
+
+/** The kept layout of a picture, now the newest; null when it has none. */
+function keptLayout(key) {
+  const r = S.layouts.get(key);
+  if (!r) return null;
+  S.layouts.delete(key);
+  S.layouts.set(key, r);
+  return r;
+}
+
+/** Keep a picture's layout; the one used longest ago goes when there are too many. */
+function keepLayout(key, r) {
+  S.layouts.delete(key);
+  S.layouts.set(key, r);
+  while (S.layouts.size > KEEP_LAYOUTS) S.layouts.delete(S.layouts.keys().next().value);
+}
+
+/***
+ * The layout worker: it lays out pictures beside the page, so the page keeps answering while a large
+ * picture is laid out (SPEC §3.5). It runs ELK and this script, read from the page's own script tags.
+ * A newer picture stops an older layout. Without a worker, the page lays out itself, as before.
+ *
+ * @id      docair-viewer.layout-worker
+ * @part-of docair-viewer.page
+ * @calls   docair-viewer.top-down "places the parts box by box"
+ * @calls   docair-viewer.grid-lines "draws the lines"
+ ***/
+const LAYOUT = { worker: null, url: null, off: false, job: null, next: 0 };
+
+/** The layout worker, started when first needed; null when the page has none. */
+function layoutWorker() {
+  if (LAYOUT.off) return null;
+  if (LAYOUT.worker) return LAYOUT.worker;
+  try {
+    if (!LAYOUT.url) {
+      const text = (id) => document.getElementById(id).textContent;
+      // The function keeps this script's 'use strict' (it is the first line of the function's body).
+      LAYOUT.url = URL.createObjectURL(new Blob([text('docair-elk'), '\n;\n(function () {\n', text('docair-app'), '\n})();\n'], { type: 'text/javascript' }));
+    }
+    const w = new Worker(LAYOUT.url);
+    w.onmessage = ({ data }) => {
+      const job = LAYOUT.job;
+      if (!job || data.id !== job.id) return;
+      LAYOUT.job = null;
+      if (data.ok) job.resolve(data.result);
+      else job.reject(new Error(data.error));
+    };
+    w.onerror = (ev) => {
+      ev.preventDefault();
+      workerFailed(ev.message);
+    };
+    LAYOUT.worker = w;
+    return w;
+  } catch (err) {
+    workerFailed(err.message);
+    return null;
+  }
+}
+
+/** Lay out in the worker; the same picture again shares the layout under way, a newer one stops it. */
+function layoutJob(key, msg) {
+  if (LAYOUT.job && key != null && LAYOUT.job.key === key) return LAYOUT.job.promise;
+  if (LAYOUT.job) stopLayout();
+  const w = layoutWorker();
+  if (!w) return layoutHere(msg);
+  const job = { id: ++LAYOUT.next, key, msg };
+  job.promise = new Promise((resolve, reject) => Object.assign(job, { resolve, reject }));
+  LAYOUT.job = job;
+  w.postMessage({ id: job.id, ...msg });
+  return job.promise;
+}
+
+/** Stop the layout under way: the worker goes, the next layout starts a new one. */
+function stopLayout() {
+  const job = LAYOUT.job;
+  LAYOUT.job = null;
+  LAYOUT.worker?.terminate();
+  LAYOUT.worker = null;
+  job?.reject(new Error('stopped: a newer picture is laid out'));
+}
+
+/** A layout on the page itself: without a worker. */
+function layoutHere(msg) {
+  const hints = hintsFrom(msg.hints, msg.edges);
+  return msg.op === 'first' ? topdownFirst(msg.nodes, msg.edges, hints, msg.ctx) : computeLayout(msg.nodes, msg.edges, hints, msg.ctx);
+}
+
+/** The worker did not start (or broke): the page lays out itself from now on, the layout under way too. */
+function workerFailed(why) {
+  console.warn(`docair: no layout worker (${why}); the page lays out itself`);
+  LAYOUT.off = true;
+  LAYOUT.worker?.terminate();
+  LAYOUT.worker = null;
+  const job = LAYOUT.job;
+  LAYOUT.job = null;
+  if (job) layoutHere(job.msg).then(job.resolve, job.reject);
+}
+
+/** The layout the first view needs to see whether a layer is readable: the placement as it is. */
+function layoutFirst(nodes, edges) {
+  return layoutJob(null, { op: 'first', nodes, edges, hints: hintsData(nodes, edges), ctx: layoutContext() });
+}
+
+/** In the layout worker: lay out what the page sends, and send the result back. */
+function serveLayouts() {
+  // ELK's own worker code takes the worker's messages when it first loads: take them back.
+  new ELK();
+  self.onmessage = async ({ data: m }) => {
+    try {
+      S.font = m.ctx.font;
+      const hints = hintsFrom(m.hints, m.edges);
+      const result = m.op === 'first' ? await topdownFirst(m.nodes, m.edges, hints, m.ctx) : await computeLayout(m.nodes, m.edges, hints, m.ctx);
+      self.postMessage({ id: m.id, ok: true, result });
+    } catch (err) {
+      self.postMessage({ id: m.id, ok: false, error: String(err?.stack || err) });
+    }
+  };
 }
 
 /** The side of box `a` that faces box `b`. */
@@ -780,10 +1028,9 @@ const BOX_PAD = { top: 28, left: 10, right: 10, bottom: 10 };
  * @flow    view 3 "the parts are placed box by box"
  * @calls   docair-viewer.grid-lines "routes a small picture to price a placement"
  ***/
-async function topdownPlace(nodes, edges) {
-  const hints = flowHints(nodes, edges);
+async function topdownPlace(nodes, edges, hints, ctx) {
   const cache = { elk: new ELK(), laid: new Map() };
-  const first = await topdownFirst(nodes, edges, hints, cache);
+  const first = await topdownFirst(nodes, edges, hints, ctx, cache);
   const small = edges.length <= ROUTER.exactUpTo;
   const priceOf = (r) => {
     if (!small) return straightPrice(edges, r.pos);
@@ -809,12 +1056,12 @@ async function topdownPlace(nodes, edges) {
 }
 
 /** The picture placed as it is, in the direction that fits the canvas best (the other has to fit 1.1 times larger). */
-async function topdownFirst(nodes, edges, hints = flowHints(nodes, edges), cache = { elk: new ELK(), laid: new Map() }) {
-  const dirs = S.direction === 'auto' ? ['DOWN', 'RIGHT'] : [S.direction];
+async function topdownFirst(nodes, edges, hints, ctx, cache = { elk: new ELK(), laid: new Map() }) {
+  const dirs = ctx.direction === 'auto' ? ['DOWN', 'RIGHT'] : [ctx.direction];
   let first = null;
   for (const d of dirs) {
     const r = await topdownLayout(nodes, edges, d, hints, cache);
-    r.zoom = fitZoom(r.width, r.height);
+    r.zoom = fitZoom(r.width, r.height, ctx);
     if (!first || r.zoom > first.zoom * 1.1) first = r;
   }
   return first;
@@ -1797,6 +2044,16 @@ const PULLABLE = new Set(['external', 'store', 'topic']);
 function classify() {
   S.cls = new Map();
   const sys = S.graph.system;
+  // What speaks at the code layer: a part a doc block is about, a part with a line, and every box around one.
+  const loud = new Set();
+  const raise = (id) => {
+    for (let cur = id; cur && cur !== sys && !loud.has(cur); cur = S.byId.get(cur)?.part_of) loud.add(cur);
+  };
+  for (const n of S.graph.nodes) if (n.origin !== 'discovered' && !isData(n.id)) raise(n.id);
+  // A part a doc block is about, and every box around one.
+  const told = new Set(loud);
+  for (const e of S.graph.edges) if (!isData(e.from) && !isData(e.to)) [e.from, e.to].forEach(raise);
+  const codeBox = (id) => id && id !== sys && (CODE_KINDS.has(S.byId.get(id)?.kind) || !!S.cls.get(id)?.program);
   const visit = (id, up) => {
     const n = S.byId.get(id);
     // Terraform's own parts: its resources and the run itself, not the machines it declares.
@@ -1809,13 +2066,16 @@ function classify() {
       top: n.part_of === sys,
       // At the code layer these stand closed until they are zoomed into or walked through: a module of functions
       // only, and a box of code (a module, a type, a program) whose parts docair only found in the code, with no
-      // doc block about any of them (SPEC §3.4).
+      // doc block about any of them or about anything inside them (SPEC §3.4).
       leaf:
         ((MODULE_KINDS.has(n.kind) || n.kind === 'component') && kids.length > 0 && kids.every((k) => !(S.children.get(k) || []).length)) ||
-        ((CODE_KINDS.has(n.kind) || program) && parts.length > 0 && parts.every((k) => S.byId.get(k)?.origin === 'discovered')),
+        ((CODE_KINDS.has(n.kind) || program) && parts.length > 0 && parts.every((k) => !told.has(k))),
       iac,
       program,
       library: MODULE_KINDS.has(n.kind) && !up.inProgram && !up.inLibrary && !up.inIac,
+      // A part docair only found in the code, with no line, in a box of code: at the code layer it waits until
+      // its box is zoomed into, and the box says how many it holds (SPEC §3.4).
+      quiet: !loud.has(id) && !isData(id) && codeBox(n.part_of),
       gate: !up.inProgram && (n.kind === 'gateway' || (n.kind === 'endpoint' && up.inCluster)),
     };
     S.cls.set(id, c);
@@ -1828,10 +2088,11 @@ function classify() {
       inStore: up.inStore || n.kind === 'store',
       inTest: up.inTest || n.kind === 'test',
       inLeaf: up.inLeaf || c.leaf,
+      inQuiet: up.inQuiet || c.quiet,
     };
     for (const k of kids) visit(k, down);
   };
-  const none = { inCluster: false, inNamespace: false, inProgram: false, inLibrary: false, inIac: false, inStore: false, inTest: false, inLeaf: false };
+  const none = { inCluster: false, inNamespace: false, inProgram: false, inLibrary: false, inIac: false, inStore: false, inTest: false, inLeaf: false, inQuiet: false };
   for (const n of S.graph.nodes) if (n.id !== sys && (!n.part_of || n.part_of === sys || !S.byId.has(n.part_of))) visit(n.id, none);
   S.viewCache = new Map();
   S.layers = LAYERS.filter((L) => L.key === 'overview' || S.graph.nodes.some((n) => S.cls.has(n.id) && LAYER_NEEDS[L.key](n, S.cls.get(n.id))));
@@ -1872,7 +2133,7 @@ const RULES = {
     open: (n, c) => c.library && (S.children.get(n.id) || []).every((k) => MODULE_KINDS.has(S.byId.get(k)?.kind)),
   },
   // Inside the programs, down to their modules; a module of functions only stands closed (zoom in, or a walk opens it).
-  code: { focus: (n, c) => appPart(n, c) || ((c.inProgram || c.inLibrary || c.inIac || c.inStore || c.inTest) && !c.inLeaf), flat: true },
+  code: { focus: (n, c) => appPart(n, c) || ((c.inProgram || c.inLibrary || c.inIac || c.inStore || c.inTest) && !c.inLeaf && !c.quiet && !c.inQuiet), flat: true },
 };
 
 /** A layer is offered when the graph has what it is about. */
@@ -2087,6 +2348,11 @@ function applyView() {
   S.collapsed = new Set([...S.view.closed, ...[...folded].filter((g) => S.view.drawn.has(g) && !S.opened.has(g) && (S.children.get(g) || []).length)]);
 }
 
+/** How many parts of box `id` a picture leaves out because docair only found them in the code (they show once the box is zoomed into). */
+function quietIn(id, v = S.view) {
+  return v ? (S.children.get(id) || []).filter((k) => S.cls.get(k)?.quiet && !v.drawn.has(k) && !hiddenNode(k)).length : 0;
+}
+
 /** The drawn node that stands for `id` now, or null when this layer leaves it out. */
 function drawnRep(id) {
   return S.view ? drawnRepIn(id, S.view, S.collapsed) : id;
@@ -2118,14 +2384,19 @@ function layerFor(id) {
  * @calls   docair-viewer.render "redraws at the chosen layer"
  ***/
 function showLayer(key) {
+  enterLayer(key);
+  applyView();
+  return render();
+}
+
+/** Go to a layer as it is first drawn: no box opened or folded, no zoom-in. */
+function enterLayer(key) {
   if (!S.layers.some((L) => L.key === key)) key = S.layers.some((L) => L.key === 'apps') ? 'apps' : S.layers[0].key;
   S.layer = key;
   S.opened = new Set();
   S.folded = new Set();
   S.focus = null;
   S.tourLevel = null;
-  applyView();
-  return render();
 }
 
 /** The layer to go back up to when zooming out past the whole picture. */
@@ -2224,7 +2495,14 @@ async function firstLayer() {
     applyView();
     const { nodes, edges } = visibleElements();
     // Readable: the smallest words, with the whole picture on the screen (what is inside a box is drawn smaller).
-    const first = await topdownFirst(nodes, edges);
+    let first;
+    try {
+      first = await layoutFirst(nodes, edges);
+    } catch (err) {
+      // The reader went somewhere first (a newer picture stopped this layout): that is the first view.
+      if (LAYOUT.job) return;
+      throw err;
+    }
     if (first.zoom * Math.min(1, ...(first.scale ? first.scale.values() : [])) >= READABLE_ZOOM) return;
   }
   S.layer = 'overview';
@@ -2261,7 +2539,7 @@ function wireSemanticZoom() {
       if (e.deltaY > 0 && zoom < wholeFitZoom() * 0.75 && (S.focus || layerUp(S.layer))) {
         lock = now + 900;
         zoomOut();
-      } else if (e.deltaY < 0 && zoom > 1.6 && S.hover && S.collapsed.has(S.hover)) {
+      } else if (e.deltaY < 0 && zoom > 1.6 && S.hover && (S.collapsed.has(S.hover) || (!S.opened.has(S.hover) && quietIn(S.hover) > 0))) {
         lock = now + 900;
         drill(S.hover);
       }
@@ -2618,6 +2896,8 @@ function wireHeader() {
     S.direction = DIRECTIONS[(DIRECTIONS.indexOf(S.direction) + 1) % DIRECTIONS.length];
     render();
   };
+  // The legend shows from the start; the button hides it and shows it again.
+  $('#btn-legend').classList.toggle('on', !$('#legend').hidden);
   $('#btn-legend').onclick = () => {
     $('#legend').hidden = !$('#legend').hidden;
     $('#btn-legend').classList.toggle('on', !$('#legend').hidden);
@@ -2655,35 +2935,31 @@ function toggleCollapse(id) {
 
 /***
  * Select a node: highlight its edges and show its summary, docs and tags.
+ * Picked from outside the canvas (`center`), it also comes close.
  *
  * @id      docair-viewer.show-details
  * @part-of docair-viewer.page
+ * @calls   docair-viewer.show-picked "brings a part picked from outside the canvas close"
  * @flow    view 4 "the user selects a node"
  ***/
 function select(id, center = false) {
-  if (id && !S.flow && S.view && !drawnRep(id) && S.byId.has(id) && !isData(id)) {
-    const key = layerFor(id);
-    if (key && key !== S.layer) {
-      S.selected = id;
-      return showLayer(key).then(() => {
-        toast(`${layerName(key)} · it shows ${S.byId.get(id).name}`);
-        select(id, center);
-      });
-    }
-  }
+  const way = id ? pickWay(id) : null;
+  // The details first, whatever the picture still has to do (SPEC §3.4).
+  markSelected(id);
+  if (way) return showWay(way, id).then(() => S.selected === id && onCanvas(id, center));
+  // A picture still being laid out: the camera waits for it.
+  if (S.shownRun !== S.layoutRun) return drawn().then(() => S.selected === id && onCanvas(id, center));
+  onCanvas(id, center);
+}
+
+/** The selected part off the canvas: the URL, the tree, the details, the page around this one. */
+function markSelected(id) {
   S.selected = id;
   const url = id ? `#${encodeURIComponent(id)}` : location.pathname + location.search;
   try {
     history.replaceState(null, '', url);
   } catch (_) {
     /* some file:// contexts forbid it */
-  }
-  S.cy.$(':selected').unselect();
-  highlight(id);
-  if (id) {
-    const node = S.cy.getElementById(rep(id));
-    node.select();
-    if (center && node.nonempty()) S.cy.animate({ center: { eles: node }, zoom: Math.max(S.cy.zoom(), 1) }, { duration: 300 });
   }
   document.querySelectorAll('#tree-list .row.sel').forEach((r) => r.classList.remove('sel'));
   const li = id && document.querySelector(`#tree-list li[data-id="${CSS.escape(id)}"]`);
@@ -2695,6 +2971,55 @@ function select(id, center = false) {
   renderDetails(id);
   const n = id && S.byId.get(id);
   tellParent({ type: 'docair:selected', id: id || null, name: n?.name || null, kind: n?.kind || null });
+}
+
+/** The selected part on the canvas: selected, its lines lit, and close when it was picked from outside. */
+function onCanvas(id, center) {
+  S.cy.$(':selected').unselect();
+  highlight(id);
+  if (!id) return;
+  const node = S.cy.getElementById(rep(id));
+  node.select();
+  if (center && node.nonempty()) showPicked(node);
+}
+
+/***
+ * How to show a part picked while the picture leaves it out, or draws only a closed box around it
+ * (SPEC §3.4): open the box it is in on this layer, when the layer draws a box around it; else the
+ * same on Apps; else go to the first layer that is about it. A function picked at Network comes
+ * with its module opened at Apps (0.6 s on docair's page), not with all of Code (14 s).
+ *
+ * @id      docair-viewer.pick-way
+ * @part-of docair-viewer.page
+ ***/
+function pickWay(id) {
+  const n = S.byId.get(id);
+  if (!n || S.flow || !S.view || isData(id) || hiddenNode(id) || drawnRep(id) === id) return null;
+  const box = n.part_of && n.part_of !== S.graph.system && S.byId.has(n.part_of) ? n.part_of : null;
+  const around = (v) => ancestorsOf(id).some((a) => v.drawn.has(a));
+  const shows = (key, opened) => drawnRepIn(id, computeView(key, opened)) === id;
+  if (box && around(S.view) && shows(S.layer, new Set([...S.opened, box]))) return { layer: S.layer, open: box };
+  const apps = S.layers.some((L) => L.key === 'apps') && S.layer !== 'apps';
+  if (box && apps && around(computeView('apps')) && shows('apps', new Set([box]))) return { layer: 'apps', open: box };
+  const key = layerFor(id);
+  return key && key !== S.layer ? { layer: key, open: null } : null;
+}
+
+/** Show the picture a pick needs: another layer, the part's box opened, or both; then say where it is. */
+async function showWay(way, id) {
+  const other = way.layer !== S.layer;
+  if (other) enterLayer(way.layer);
+  if (way.open) {
+    S.opened.add(way.open);
+    // A box the reader folded around it opens too.
+    for (const a of [way.open, ...ancestorsOf(way.open)]) S.folded.delete(a);
+    S.focus = way.open;
+  }
+  applyView();
+  await render();
+  if (S.selected !== id) return;
+  const inside = way.open && `inside ${groupLabel(way.open)}`;
+  toast(other ? `${layerName(way.layer)} · ${inside || `it shows ${S.byId.get(id).name}`}` : `${inside} · scroll out past the picture to close it`);
 }
 
 function highlight(id) {
@@ -2870,6 +3195,7 @@ function edgeTip(edge) {
       el('div', { class: 'tip-words' }, `${S.byId.get(e.from)?.name ?? e.from} ${e.text ? wordsOf(e) : describeEdge(e)}`),
       code ? el('div', { class: 'mono' }, code, e.from_code ? el('span', { class: 'where' }, ' · from the code') : null, e.from_api ? el('span', { class: 'where' }, ` · from ${e.from_api}`) : null) : null,
       e.carries?.length ? el('div', {}, 'carries ', e.carries.map((d, i) => [i ? ', ' : '', `◇ ${S.byId.get(d)?.name ?? d}`])) : null,
+      e.carries_back?.length ? el('div', {}, 'brings back ', e.carries_back.map((d, i) => [i ? ', ' : '', `◇ ${S.byId.get(d)?.name ?? d}`])) : null,
       el('code', {}, e.tag),
       el('div', { class: 'where mono' }, `${e.source.file}:${e.source.line} · ${e.origin}${e.via ? ` · via ${e.via}` : ''}`),
     );
@@ -2878,7 +3204,8 @@ function edgeTip(edge) {
 
 function nodeTip(id) {
   const n = S.byId.get(id);
-  return el('div', {}, el('b', {}, n.name), ` · ${n.kind}`, n.summary ? el('div', {}, n.summary) : null);
+  const quiet = quietIn(id);
+  return el('div', {}, el('b', {}, n.name), ` · ${n.kind}`, n.summary ? el('div', {}, n.summary) : null, quiet ? el('div', { class: 'where' }, `${quiet} more found in the code: zoom into the box to see them`) : null);
 }
 
 function showTip(ev, content) {
@@ -3127,7 +3454,18 @@ async function setFlow(key, step = 0) {
 function walkView(base, key, focus) {
   const opened = new Set();
   // At the code layer, a walk opens the modules it passes through, down to its functions.
-  if (key === 'code') for (const st of base.steps) for (const id of stepIds(st)) ancestorsOf(id).forEach((a) => S.cls.get(a)?.leaf && opened.add(a));
+  // A step on a part left out because docair only found it in the code opens the box it is in.
+  if (key === 'code') {
+    for (const st of base.steps) {
+      for (const id of stepIds(st)) {
+        ancestorsOf(id).forEach((a) => S.cls.get(a)?.leaf && opened.add(a));
+        if (S.cls.get(id)?.quiet || S.cls.get(id)?.inQuiet) {
+          const box = ancestorsOf(id).find((a) => !S.cls.get(a)?.quiet && !S.cls.get(a)?.inQuiet);
+          if (box) opened.add(box);
+        }
+      }
+    }
+  }
   if (focus) {
     opened.add(focus);
     for (const st of base.steps) {
@@ -3200,6 +3538,29 @@ function projectTour(base, key, focus) {
 }
 
 /**
+ * The layer for a datum's walk: the one that draws most of its lines as lines between two parts,
+ * not folded into one box; on a tie, the one with fewer steps that only Open shows, then the
+ * higher layer. A datum that moves between functions inside one app plays at the code layer.
+ */
+function dataLayer(base, focus, skip = null) {
+  const lines = [...new Set(base.steps.flatMap((st) => st.path))];
+  let best = null;
+  for (const L of S.layers) {
+    if (L.key === 'overview' || L.key === skip) continue;
+    const t = projectTour(base, L.key, focus);
+    if (!t.steps.length) continue;
+    const rep = (id) => drawnRepIn(id, t.view, t.collapsed);
+    const drawn = lines.filter((i) => {
+      const [a, b] = [rep(S.graph.edges[i].from), rep(S.graph.edges[i].to)];
+      return a && b && a !== b;
+    }).length;
+    const score = [drawn, -t.steps.filter((s) => s.deeper && !s.passes).length];
+    if (!best || score[0] > best.score[0] || (score[0] === best.score[0] && score[1] > best.score[1])) best = { key: L.key, score };
+  }
+  return best && best.score[0] > 0 ? best.key : null;
+}
+
+/**
  * The layer that suits a walk: the one that shows most of its steps as its
  * own parts, drawn as themselves (the apps also own the code inside them),
  * and has to leave out, or show as mere context, the fewest; on a tie, the
@@ -3208,6 +3569,8 @@ function projectTour(base, key, focus) {
  * show the walk.
  */
 function defaultLayer(base, focus, skip = null) {
+  const data = base.source === 'data' && dataLayer(base, focus, skip);
+  if (data) return data;
   const want = Math.min(3, base.steps.length);
   let best = null;
   for (const L of S.layers) {
@@ -3261,7 +3624,7 @@ function openStep() {
   if (!st || !st.deeper) return;
   S.walkStack.push({ tour: S.flow, step: S.step });
   const outer = S.flow.base;
-  if (!outer.messages) outer.messages = walkMessages(outer.steps);
+  if (!outer.messages) outer.messages = walkMessages(outer.steps, outer.source === 'data' ? outer.name : null);
   // The inner steps keep the outer walk's messages: answers come back where they do in the whole walk.
   const base = { ...outer, steps: st.inner.map((k) => outer.steps[k]), messages: st.inner.map((k) => outer.messages[k]), title: st.title };
   // One box: the same layer, with the box opened down to the parts the inner steps pass.
@@ -3379,6 +3742,67 @@ function moveCamera(cam, duration = 450) {
   S.cy.animate({ zoom: cam.zoom, pan: cam.pan }, { duration, easing: 'ease-in-out-cubic' });
 }
 
+/***
+ * A part picked from outside the canvas (a link, the tree, a diagnostic, a
+ * step's chip, a word's popup, the page's #id) comes close: the camera stops
+ * where its words are readable, and once it stops, the part's halo swells
+ * twice to draw the eye (SPEC §3.5).
+ *
+ * @id      docair-viewer.show-picked
+ * @part-of docair-viewer.page
+ ***/
+function showPicked(node) {
+  const cam = pickCamera(node);
+  S.cy.stop();
+  S.cy.animate({ zoom: cam.zoom, pan: cam.pan }, { duration: 450, easing: 'ease-in-out-cubic', complete: () => node.selected() && pulse(node) });
+}
+
+/**
+ * Where the camera stops for a picked part: the part in the middle, its words
+ * readable (zoom × the scale it is drawn at ≥ TOUR_MIN_ZOOM) and at the size
+ * they are drawn for when the part fits, its box in view too when the box
+ * fits at a readable zoom. A part too large to read whole is shown whole. A
+ * reader who is closer already keeps their zoom while the part fits.
+ */
+function pickCamera(node) {
+  const cy = S.cy;
+  const bb = node.boundingBox({ includeLabels: true });
+  const mid = { x: bb.x1 + bb.w / 2, y: bb.y1 + bb.h / 2 };
+  // The zoom at which `b` fits the canvas with the part still in the middle.
+  const fits = (b) =>
+    Math.min((cy.width() / 2 - 60) / Math.max(mid.x - b.x1, b.x2 - mid.x, 1), (cy.height() / 2 - 60) / Math.max(mid.y - b.y1, b.y2 - mid.y, 1));
+  const sc = Math.min(1, node.data('sc') ?? 1);
+  const readable = TOUR_MIN_ZOOM / sc;
+  const own = fits(bb);
+  if (own < readable) return cameraAt(mid, Math.max(cy.minZoom(), own));
+  const zoom = Math.min(own, 1 / sc, cy.maxZoom());
+  const box = node.parent();
+  const around = box.nonempty() ? fits(box.boundingBox({ includeLabels: true })) : 0;
+  return cameraAt(mid, Math.max(around >= readable ? Math.min(around, zoom) : zoom, Math.min(cy.zoom(), own)));
+}
+
+let pulsing = null;
+/** The halo of a part just picked swells and fades twice, then settles; with reduced motion it only settles. */
+function pulse(node) {
+  if (pulsing && pulsing.inside()) pulsing.stop(true).removeStyle('underlay-padding underlay-opacity');
+  pulsing = node;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const px = 1 / node.cy().zoom();
+  const swell = () =>
+    node
+      .style({ 'underlay-padding': 4 * px, 'underlay-opacity': 0.5 })
+      .animation({ style: { 'underlay-padding': 30 * px, 'underlay-opacity': 0 } }, { duration: 650, easing: 'ease-out-cubic' })
+      .play()
+      .promise();
+  swell()
+    .then(() => pulsing === node && swell())
+    .then(() => {
+      if (pulsing !== node) return;
+      node.removeStyle('underlay-padding underlay-opacity');
+      pulsing = null;
+    });
+}
+
 /**
  * Bring the step into view at a zoom the reader can read.
  *
@@ -3481,7 +3905,9 @@ const MSG_ICON = { call: '→', return: '↩', read: '⇠', write: '✎', emit: 
  * @id      docair-viewer.messages
  * @part-of docair-viewer.page
  ***/
-function walkMessages(steps) {
+function walkMessages(steps, datum = null) {
+  // Following one datum, each step is one line it travels, there or back: no call stack.
+  if (datum) return steps.map((st) => st.path.filter((i) => S.graph.edges[i]).map((i) => ({ kind: st.back ? 'return' : S.graph.edges[i].kind, i, e: S.graph.edges[i] })));
   const seq = steps.flatMap((st, k) => st.path.map((i) => ({ k, i, e: S.graph.edges[i] }))).filter((m) => m.e);
   const per = steps.map(() => []);
   const stack = [];
@@ -3522,11 +3948,12 @@ function walkMessages(steps) {
 /** The messages of a step: from its walk, so answers come back when they really do. */
 function stepMessages(st) {
   const base = S.flow?.base;
+  const datum = S.flow?.source === 'data' ? S.flow.name : null;
   if (base && st.inner) {
-    if (!base.messages) base.messages = walkMessages(base.steps);
+    if (!base.messages) base.messages = walkMessages(base.steps, datum);
     return st.inner.flatMap((k) => base.messages[k] || []);
   }
-  return walkMessages([st])[0];
+  return walkMessages([st], datum)[0];
 }
 
 /** A node's name, with its group's when several nodes share it: `ConversationService.ask`. */
@@ -3553,7 +3980,7 @@ function messageParts(m) {
     case 'call':
       return { who: [a, 'calls', b], why: e.text, carry: [e.payload && `sends ${e.payload}`, e.reply && `gets ${e.reply} back`].filter(Boolean).join(' · '), token: e.payload || '', has: null };
     case 'return':
-      return { who: [b, 'answers', a], why: `with ${e.reply}`, carry: '', token: e.reply, has: `${e.reply} from ${b}` };
+      return { who: [b, 'answers', a], why: e.reply ? `with ${e.reply}` : '', carry: '', token: e.reply || '', has: e.reply ? `${e.reply} from ${b}` : null };
     case 'read':
       return { who: [b, 'reads', a], why: e.text, carry: data ? `gets ${data}` : '', token: data || '', has: `${data || 'the data'} from ${a}` };
     case 'write':
@@ -3598,6 +4025,46 @@ function richText(text) {
   return text.split('`').map((part, i) => (i % 2 ? el('code', {}, part) : part));
 }
 
+/***
+ * What a datum's walk covers, in its card: how many lines carry the datum, how many of them start a
+ * stretch of their own (not reached from where it is made), and the ones this layer does not draw.
+ *
+ * @id      docair-viewer.data-cover
+ * @part-of docair-viewer.page
+ ***/
+function carriedLines(t) {
+  const id = t.name;
+  const lines = S.graph.edges.flatMap((e, i) => (carriedBy(e).includes(id) ? [i] : []));
+  if (!lines.length) return null;
+  const base = t.base || t;
+  const walked = new Set(base.steps.flatMap((st) => st.path));
+  const missing = lines.filter((i) => !walked.has(i));
+  const hidden = lines.filter((i) => walked.has(i) && !S.edgeOf.has(i));
+  const apart = base.steps.filter((st) => st.apart).length;
+  const count = (k, word) => `${k} ${k === 1 ? word : `${word}s`}`;
+  const list = (ids) =>
+    el(
+      'ul',
+      { class: 'edges' },
+      ids.slice(0, 8).map((i) => el('li', {}, ...[S.graph.edges[i].from, ' → ', S.graph.edges[i].to].map((x, k) => (k === 1 ? x : el('a', { class: 'link', onclick: () => select(x, true), title: x }, nameOf(x)))))),
+      ids.length > 8 ? el('li', { class: 'muted' }, `… ${ids.length - 8} more`) : null,
+    );
+  return el(
+    'div',
+    { class: 'card-carried', 'data-test': 'carried' },
+    el(
+      'p',
+      {},
+      `Carried by ${count(lines.length, 'line')}`,
+      missing.length ? `; ${missing.length} of them are not in this walk:` : lines.length > 1 ? ', all in this walk' : ', in this walk',
+      !missing.length && apart ? `; ${apart} of them ${apart === 1 ? 'starts a stretch of its own' : 'start stretches of their own'}, not reached from where it is made` : '',
+      missing.length ? '' : '.',
+    ),
+    missing.length ? list(missing) : null,
+    hidden.length ? [el('p', {}, `${count(hidden.length, 'line')} of them ${hidden.length === 1 ? 'is' : 'are'} not drawn at this layer:`), list(hidden)] : null,
+  );
+}
+
 /** The card on top of the details panel: the tour, the step in words, links to its nodes. */
 function stepCard() {
   const t = S.flow;
@@ -3610,6 +4077,7 @@ function stepCard() {
     el('div', { class: 'card-head' }, el('span', { class: 'card-glyph' }, tourGlyph(t)), el('b', {}, t.title), el('button', { class: 'card-close', title: 'Close the walkthrough', onclick: () => setFlow('') }, '×')),
     t.question ? el('div', { class: 'card-q' }, `asked: ${t.question}`) : null,
     S.step <= 0 && t.summary ? el('p', { class: 'card-summary' }, richText(t.summary)) : null,
+    S.step <= 0 && t.source === 'data' ? carriedLines(t) : null,
     S.walkStack?.length ? el('div', { class: 'card-back' }, el('a', { class: 'link', onclick: closeStep, 'data-test': 'close-step' }, `◂ Back to ${S.walkStack[S.walkStack.length - 1].tour.title}`)) : null,
     el(
       'div',
@@ -3765,7 +4233,6 @@ function tellParent(message) {
  *
  * @id      docair-viewer.play-messages
  * @part-of docair-viewer.page
- * @calls   docair-viewer.messages
  ***/
 async function playMessages(msgs) {
   const cy = S.cy;
@@ -4186,12 +4653,48 @@ function termSummary(t, full = false) {
   return el('div', { class: 'md' }, el('p', {}, t.definition || t.summary || ''), full && t.link ? el('p', {}, el('a', { href: t.link }, 'Read more ↗')) : null);
 }
 
-/** The first "read more" link of a term: a doc in the page, or a web page. */
+/** The first "read more" link of a term: a doc in the page, a web page, or the doc heading that defines it. */
 function termLink(t) {
   if (t.link) return t.link;
   const body = S.html[`term:${t.id}`]?.body || '';
   const m = body.match(/href="((?:docair-doc:|https?:)[^"]+)"/);
-  return m ? m[1].replace(/&amp;/g, '&') : null;
+  if (m) return m[1].replace(/&amp;/g, '&');
+  return t.section && S.html[`doc:${t.section.file}`] ? `docair-doc:${t.section.file}#${t.section.anchor}` : null;
+}
+
+/** A doc heading as a short name: `ADAPTERS.md §4`, else the file and the heading. */
+function sectionName(sec) {
+  const file = sec.file.split('/').pop();
+  const num = sec.title.match(/^(\d+(?:\.\d+)*)\.?\s/);
+  return num ? `${file} §${num[1]}` : `${file}: ${sec.title}`;
+}
+
+/***
+ * Where a word's meaning comes from (docs/MEANINGS.md §2): the part whose docs define it, a doc heading, or the glossary.
+ *
+ * @id      docair-viewer.term-from
+ * @part-of docair-viewer.page
+ ***/
+function termFrom(t) {
+  if (t.preview) return null;
+  const parts = [];
+  if (t.from === 'code' && t.node) {
+    parts.push('from ', S.byId.has(t.node) ? nodeLink(t.node) : el('code', {}, t.node));
+    const own = S.byId.get(t.node)?.source?.file;
+    if (t.unchecked) parts.push(' · the glossary is not checked against it');
+    else if (t.source?.file && t.source.file !== own) parts.push(' · worded in the glossary');
+  } else if (t.from === 'doc' && t.section) {
+    parts.push('in ', el('a', { class: 'link', href: `docair-doc:${t.section.file}#${t.section.anchor}` }, sectionName(t.section)));
+  } else parts.push('in the glossary');
+  return el('div', { class: 'pop-see', 'data-test': 'term-from' }, parts);
+}
+
+/** Read more for a word from code with no doc to open: the part's details. */
+function termMore(t, close) {
+  const link = termLink(t);
+  if (link) return el('a', { class: 'link', href: link, 'data-test': 'pop-more' }, link.startsWith('docair-doc:') ? 'Read more' : 'Read more ↗');
+  if (t.from === 'code' && S.byId.has(t.node)) return el('a', { class: 'link', onclick: () => (close(), select(t.node, true)), 'data-test': 'pop-more' }, 'Read more');
+  return null;
 }
 
 function wireTerms() {
@@ -4219,18 +4722,15 @@ function wireTerms() {
     } else if (termId) {
       const t = S.termById.get(termId);
       if (!t) return;
-      const link = termLink(t);
+      const more = termMore(t, () => (pop.hidden = true));
+      const see = (t.see || []).filter((id) => S.byId.has(id) && id !== t.node);
       pop.replaceChildren(
         ...[
           el('div', { class: 'pop-title' }, t.term, t.preview ? el('span', { class: 'badge inferred' }, '✦ proposed') : null),
           termSummary(t),
-          t.see?.length ? el('div', { class: 'pop-see' }, 'see ', t.see.filter((id) => S.byId.has(id)).slice(0, 4).map((id, i) => [i ? ', ' : '', nodeLink(id)])) : null,
-          el(
-            'div',
-            { class: 'pop-foot' },
-            el('a', { class: 'link', onclick: () => ((pop.hidden = true), showTerm(termId)), 'data-test': 'pop-open' }, 'In the glossary'),
-            link ? [' · ', el('a', { class: 'link', href: link, 'data-test': 'pop-more' }, link.startsWith('docair-doc:') ? 'Read more' : 'Read more ↗')] : null,
-          ),
+          termFrom(t),
+          see.length ? el('div', { class: 'pop-see' }, 'see ', see.slice(0, 4).map((id, i) => [i ? ', ' : '', nodeLink(id)])) : null,
+          el('div', { class: 'pop-foot' }, el('a', { class: 'link', onclick: () => ((pop.hidden = true), showTerm(termId)), 'data-test': 'pop-open' }, 'In the glossary'), more ? [' · ', more] : null),
         ].filter(Boolean),
       );
     } else if (nodeId) {
@@ -4348,7 +4848,13 @@ function renderGlossary(filter = '') {
         'dl',
         { class: 'gl-list', 'data-test': 'glossary' },
         terms.map((t) => [
-          el('dt', {}, el('a', { class: 'link', onclick: () => showTerm(t.id) }, t.term), t.preview ? el('span', { class: 'badge inferred' }, '✦') : null),
+          el(
+            'dt',
+            {},
+            el('a', { class: 'link', onclick: () => showTerm(t.id) }, t.term),
+            t.preview ? el('span', { class: 'badge inferred' }, '✦') : null,
+            t.from === 'code' ? el('span', { class: 'badge', title: 'defined by the code' }, 'ƒ') : t.from === 'doc' ? el('span', { class: 'badge', title: 'defined by a doc heading' }, '§') : null,
+          ),
           el('dd', {}, termSummary(t)),
         ]),
       ),
@@ -4370,6 +4876,11 @@ function showTerm(id) {
       el('h2', { 'data-test': 'term-title' }, el('span', { class: 'glyph' }, '¶'), t.term, t.preview ? el('span', { class: 'badge inferred' }, '✦ proposed by the model') : null),
       t.aliases?.length ? el('div', { class: 'meta' }, `also: ${t.aliases.join(', ')}`) : null,
       termSummary(t, true),
+      termFrom(t),
+      t.section && S.html[`doc:${t.section.file}`] && t.from !== 'doc' ? el('div', { class: 'pop-see' }, 'more in ', el('a', { class: 'link', href: `docair-doc:${t.section.file}#${t.section.anchor}`, 'data-test': 'term-section' }, sectionName(t.section))) : null,
+      t.unchecked
+        ? [el('h3', { class: 'sec' }, 'In the glossary, not checked against the code'), el('div', { class: 'md', 'data-test': 'term-unchecked', html: S.html[`term:${t.id}`]?.unchecked ?? '' })]
+        : null,
       t.see?.length ? [el('h3', { class: 'sec' }, 'See'), el('ul', { class: 'edges' }, t.see.filter((s) => S.byId.has(s)).map((s) => el('li', {}, nodeLink(s), el('span', { class: 'badge' }, S.byId.get(s).kind))))] : null,
       mentions.length ? [el('h3', { class: 'sec' }, `Used by (${mentions.length})`), el('ul', { class: 'edges' }, mentions.slice(0, 20).map((n) => el('li', {}, nodeLink(n.id), el('span', { class: 'badge' }, n.kind))))] : null,
       t.source ? el('div', { class: 'docfile' }, `${t.source.file}:${t.source.line}`) : el('div', { class: 'docfile' }, 'not in the code yet: apply the proposal to keep it'),
@@ -4433,6 +4944,11 @@ function dataItems() {
   return S.graph.nodes.filter((n) => n.kind === 'data' && !(S.children.get(n.id) || []).length);
 }
 
+/** The data a line carries either way: on the way there (`carries`), or back in a call's answer (`carries_back`). */
+function carriedBy(e) {
+  return e.carries_back?.length ? [...new Set([...(e.carries || []), ...e.carries_back])] : e.carries || [];
+}
+
 /** The words that name each datum in payloads: its name, the end of its id, its `@carried-as` words. */
 function dataWords() {
   if (S.dataWords) return S.dataWords;
@@ -4442,7 +4958,8 @@ function dataWords() {
     for (const w of own) if (w && w.trim().length > 1) words.set(w.trim().toLowerCase(), d.id);
   }
   const alts = [...words.keys()].sort((a, b) => b.length - a.length).map(escapeRe);
-  S.dataWords = { words, re: alts.length ? new RegExp(`(?<![\\p{L}\\p{N}_-])(${alts.join('|')})(?:e?s)?(?![\\p{L}\\p{N}_-])`, 'giu') : null };
+  // Not the end of a dotted name: `ask.digest` is a part, not the datum digest.
+  S.dataWords = { words, re: alts.length ? new RegExp(`(?<![\\p{L}\\p{N}_.-])(${alts.join('|')})(?:e?s)?(?![\\p{L}\\p{N}_-])`, 'giu') : null };
   return S.dataWords;
 }
 
@@ -4506,7 +5023,7 @@ function renderData() {
         'ul',
         { class: 'data-list', 'data-test': 'data-list' },
         items.map((d) => {
-          const carriers = S.graph.edges.filter((e) => (e.carries || []).includes(d.id)).length;
+          const carriers = S.graph.edges.filter((e) => carriedBy(e).includes(d.id)).length;
           const makers = S.graph.edges.filter((e) => e.to === d.id && e.kind === 'create');
           return el(
             'li',
@@ -4528,7 +5045,7 @@ function showData(id) {
   const d = S.byId.get(id);
   const box = $('#details');
   const makers = S.graph.edges.filter((e) => e.to === id && e.kind === 'create');
-  const lines = S.graph.edges.filter((e) => (e.carries || []).includes(id));
+  const lines = S.graph.edges.filter((e) => carriedBy(e).includes(id));
   box.replaceChildren(
     ...[
       el('div', { class: 'gl-nav' }, el('a', { class: 'link', onclick: () => renderData() }, '← Data')),
@@ -4536,7 +5053,7 @@ function showData(id) {
       d.summary ? el('p', { class: 'summary' }, d.summary) : null,
       lines.length ? el('button', { class: 'btn', onclick: () => followData(id), 'data-test': 'follow-data' }, S.following === id ? 'Following: on the chart' : 'Follow it on the chart') : null,
       makers.length ? [el('h3', { class: 'sec' }, 'Made by'), el('ul', { class: 'edges' }, makers.map((e) => el('li', {}, nodeLink(e.from), e.text ? el('span', { class: 'badge' }, e.text) : null)))] : null,
-      lines.length ? [el('h3', { class: 'sec' }, `Carried by (${lines.length})`), el('ul', { class: 'edges' }, lines.map((e) => el('li', {}, el('span', { class: 'ek' }, e.kind), nodeLink(e.from), ' → ', nodeLink(e.to), el('span', { class: 'badge' }, edgeText(e)))))] : null,
+      lines.length ? [el('h3', { class: 'sec' }, `Carried by (${lines.length})`), el('ul', { class: 'edges' }, lines.map((e) => el('li', {}, el('span', { class: 'ek' }, (e.carries || []).includes(id) ? e.kind : 'answer'), nodeLink(e.from), ' → ', nodeLink(e.to), el('span', { class: 'badge' }, edgeText(e)))))] : null,
     ]
       .flat(Infinity)
       .filter(Boolean),
@@ -4549,6 +5066,8 @@ function showData(id) {
  *
  * @id      docair-viewer.follow
  * @part-of docair-viewer.page
+ * @calls   docair-viewer.data-tour "works out the datum's way"
+ * @calls   docair-viewer.walk "plays it"
  ***/
 function followData(id) {
   S.following = id || null;
@@ -4568,84 +5087,125 @@ function followData(id) {
 /***
  * The way of one datum as a walkthrough: where it is made, then each line that carries it, in the order it travels from there.
  *
+ * It goes on along a line that names it on the way there (`carries`), and back along a call whose
+ * answer names it (`carries_back`). Where no such line goes on, it travels inside other lines: the
+ * shortest way along the arrows (a request through the network), back along calls (an answer), or
+ * back and then on (an answer its caller hands on), at most 6 lines. Only a part that made it or got
+ * it back as an answer hands it back to its callers. A line that names it but that the walk cannot
+ * reach starts a stretch of its own, and says so.
+ *
  * @id      docair-viewer.data-tour
  * @part-of docair-viewer.page
- * @calls   docair-viewer.walk
  ***/
 function dataTour(id) {
   const d = S.byId.get(id);
   const edges = S.graph.edges;
   const makers = edges.filter((e) => e.to === id && e.kind === 'create' && !isData(e.from));
-  const carries = (i) => (edges[i].carries || []).includes(id);
-  const usable = (i) => !isData(edges[i].from) && !isData(edges[i].to) && edges[i].kind !== 'cover';
+  const there = (i) => (edges[i].carries || []).includes(id);
+  const back = (i) => (edges[i].carries_back || []).includes(id);
   const out = new Map();
+  const into = new Map();
+  const lines = [];
   edges.forEach((e, i) => {
-    if (!usable(i)) return;
+    if (isData(e.from) || isData(e.to) || e.kind === 'cover' || e.kind === 'create') return;
     if (!out.has(e.from)) out.set(e.from, []);
     out.get(e.from).push(i);
+    if (!into.has(e.to)) into.set(e.to, []);
+    into.get(e.to).push(i);
+    if (there(i) || back(i)) lines.push(i);
   });
+  const on = (i) => ({ i, back: false, to: edges[i].to });
+  const answer = (i) => ({ i, back: true, to: edges[i].from });
+  // From a part: on along a line that names it, back along a call whose answer names it.
+  const named = (n) => [...(out.get(n) || []).filter(there).map(on), ...(into.get(n) || []).filter(back).map(answer)];
+  // Inside other lines: on along any line, back along any call.
+  const hidden = (n) => [...(out.get(n) || []).map(on), ...(into.get(n) || []).filter((i) => edges[i].kind === 'call').map(answer)];
   const order = [];
-  const seen = new Set();
-  const reached = new Set(makers.map((e) => e.from));
-  let frontier = [...reached];
-  for (let guard = 0; guard < 200; guard++) {
-    // Along the lines that carry it, breadth first.
+  // The lines taken there and back: a call that names it both ways goes there and later back, never back and then there.
+  const went = new Set();
+  const came = new Set();
+  const seen = { has: (i) => went.has(i) || came.has(i) };
+  const free = (m) => !came.has(m.i) && (m.back || !went.has(m.i));
+  const held = new Set(makers.map((e) => e.from));
+  // How a part got it: 'made', 'back' (an answer) or 'there' (sent to it).
+  const got = new Map(makers.map((e) => [e.from, 'made']));
+  const take = (m, how) => {
+    (m.back ? came : went).add(m.i);
+    order.push({ ...m, ...how });
+    if (held.has(m.to)) return false;
+    held.add(m.to);
+    got.set(m.to, m.back ? 'back' : 'there');
+    return true;
+  };
+  let frontier = [...held];
+  for (let guard = 0; guard <= lines.length; guard++) {
+    // Along the lines that name it, breadth first.
     while (frontier.length) {
       const next = [];
-      for (const f of frontier)
-        for (const i of out.get(f) || []) {
-          if (seen.has(i) || !carries(i)) continue;
-          seen.add(i);
-          order.push({ i, inside: false });
-          if (!reached.has(edges[i].to)) {
-            reached.add(edges[i].to);
-            next.push(edges[i].to);
-          }
-        }
+      for (const f of frontier) for (const m of named(f)) if (free(m) && take(m, { inside: false, apart: false })) next.push(m.to);
       frontier = next;
     }
-    // Lines that do not name it can still carry it inside (a request through the network):
-    // the shortest way along the arrows from where it is to the next line that names it.
+    // Inside other lines, the shortest way to a part that sends it on to one that does not have it yet.
     const prev = new Map();
-    const queue = [...reached].map((n) => [n, 0]);
-    const visited = new Set(reached);
-    let bridge = null;
-    while (queue.length && !bridge) {
-      const [n, depth] = queue.shift();
-      if (depth >= 6) continue;
-      for (const i of out.get(n) || []) {
-        const to = edges[i].to;
-        if (carries(i) && !seen.has(i) && reached.has(n) === false) {
-          bridge = { end: n, via: i };
-          break;
+    let end = null;
+    for (const shape of ['on', 'back', 'back-on']) {
+      prev.clear();
+      const from = [...held].filter((n) => shape === 'on' || got.get(n) !== 'there');
+      const queue = from.map((n) => [n, 0, false]);
+      const visited = new Set(held);
+      while (queue.length && !end) {
+        const [n, depth, turned] = queue.shift();
+        if (depth >= 6) continue;
+        for (const m of hidden(n)) {
+          const fits = shape === 'on' ? !m.back : shape === 'back' ? m.back : m.back ? !turned : depth > 0;
+          if (!fits || seen.has(m.i) || visited.has(m.to)) continue;
+          visited.add(m.to);
+          prev.set(m.to, m);
+          if ((shape !== 'back-on' || !m.back) && named(m.to).some((x) => x.i !== m.i && free(x) && !visited.has(x.to))) {
+            end = m.to;
+            break;
+          }
+          queue.push([m.to, depth + 1, turned || !m.back]);
         }
-        if (visited.has(to)) continue;
-        visited.add(to);
-        prev.set(to, i);
-        if ((out.get(to) || []).some((j) => carries(j) && !seen.has(j))) {
-          bridge = { end: to };
-          break;
-        }
-        queue.push([to, depth + 1]);
       }
+      if (end) break;
     }
-    if (!bridge) break;
-    const hops = [];
-    for (let n = bridge.end; prev.has(n); n = edges[prev.get(n)].from) hops.unshift(prev.get(n));
-    for (const i of hops) {
-      seen.add(i);
-      order.push({ i, inside: true });
-      reached.add(edges[i].to);
+    if (end) {
+      const hops = [];
+      for (let n = end; prev.has(n); n = prev.get(n).back ? edges[prev.get(n).i].to : edges[prev.get(n).i].from) hops.unshift(prev.get(n));
+      for (const m of hops) take(m, { inside: true, apart: false });
+      frontier = [end];
+      continue;
     }
-    frontier = [bridge.end];
+    // A line the walk cannot reach: a stretch of its own, from a line that no other such line leads to.
+    const rest = lines.filter((i) => !seen.has(i));
+    if (!rest.length) break;
+    const move = (i) => (there(i) ? on(i) : answer(i));
+    const ends = new Set(rest.map((i) => move(i).to));
+    const i = rest.find((j) => !ends.has(there(j) ? edges[j].from : edges[j].to)) ?? rest[0];
+    const start = there(i) ? edges[i].from : edges[i].to;
+    if (!held.has(start)) got.set(start, there(i) ? 'there' : 'made');
+    held.add(start);
+    const first = !order.length && !makers.length;
+    take(move(i), { inside: false, apart: !first });
+    frontier = [start, move(i).to];
   }
+  const same = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+  // The walk's own words mark the datum, so it never reads as a part of the same name.
+  const dn = `◇ ${d.name}`;
   const steps = [
-    ...makers.map((e) => ({ title: `${nameOf(e.from)} makes ${d.name}`, text: e.text ? `${e.text[0].toUpperCase()}${e.text.slice(1)}.` : '', nodes: [e.from], path: [] })),
-    ...order.map(({ i, inside }) => {
+    ...makers.map((e) => ({ title: `${nameOf(e.from)} makes ${dn}`, text: e.text ? `${e.text[0].toUpperCase()}${e.text.slice(1)}.` : '', nodes: [e.from], path: [] })),
+    ...order.map(({ i, back: b, inside, apart }) => {
       const e = edges[i];
-      const p = messageParts({ kind: e.kind, e, i });
-      const how = inside ? `carries ${d.name} inside ${edgeText(e)}` : p.carry;
-      return { title: p.who.join(' '), text: [e.text, how].filter(Boolean).join(' · '), nodes: [e.to], path: [i] };
+      const p = messageParts({ kind: b ? 'return' : e.kind, e, i });
+      const how = b
+        ? `brings ${dn} back${!e.reply || same(e.reply, d.name) ? '' : `${inside ? ' inside' : ' as'} ${e.reply}`}`
+        : inside
+          ? `carries ${dn} ${e.payload || (e.kind !== 'call' && e.label) ? `inside ${e.payload || e.label}` : 'along'}`
+          : p.carry;
+      const text = [b ? '' : e.text, how].filter(Boolean).join(' · ');
+      const note = apart ? (makers.length ? `Not reached from where ${dn} is made.` : 'Not reached from the lines before.') : '';
+      return { title: p.who.join(' '), text: [note, text].filter(Boolean).join('\n\n'), nodes: [b ? e.from : e.to], path: [i], back: b, apart };
     }),
   ].map((st, k) => ({ ...st, step: k + 1 }));
   return { key: `data:${id}`, name: id, source: 'data', title: `Follow ${d.name}`, summary: d.summary, steps };
@@ -4658,15 +5218,26 @@ function applyFollow() {
   if (!S.following) return;
   const on = new Set();
   S.graph.edges.forEach((e, i) => {
-    if ((e.carries || []).includes(S.following)) on.add(S.edgeOf.get(i));
+    if (carriedBy(e).includes(S.following)) on.add(S.edgeOf.get(i));
   });
   const nodes = new Set();
+  // While its walk plays, the walk's own parts and lines never fade: the part that makes it, the lines it travels inside.
+  const walk = new Set();
+  if (S.flow?.source === 'data' && S.flow.name === S.following)
+    for (const st of S.flow.steps) {
+      st.nodes.forEach((id) => nodes.add(rep(id)));
+      for (const i of st.path) {
+        if (S.edgeOf.has(i)) walk.add(S.edgeOf.get(i));
+        nodes.add(rep(S.graph.edges[i].from));
+        nodes.add(rep(S.graph.edges[i].to));
+      }
+    }
   cy.edges().forEach((e) => {
     if (on.has(e.id())) {
       e.addClass('carry');
       nodes.add(e.source().id());
       nodes.add(e.target().id());
-    } else {
+    } else if (!walk.has(e.id())) {
       e.addClass('carry-dim');
       cy.getElementById(`${e.id()}::label`).addClass('carry-dim');
     }
@@ -4686,8 +5257,14 @@ function renderFollowBar() {
   bar.title = d?.summary || '';
 }
 
-window.docair = { walkMessages, setLayer, openStep, closeStep, projectTour, followData, showData, renderData, showOnly, revealWithin, stepMessages, messageParts, showTerm, renderGlossary, openDoc, linkTerms, previewTerms, previewWording, edgeText, state: S, select, setFlow, goStep, render, rep, drawnRep, showLayer, layerFor, computeView, layerName, drill, drillUp, addWalkthrough, setHidden, setTests, hiddenNode };
-boot().catch((err) => {
-  console.error('docair: viewer failed to start', err);
-  document.body.dataset.ready = 'error';
-});
+// In the layout worker this script only lays out (SPEC §3.5); on the page it starts the viewer.
+if (typeof document === 'undefined') serveLayouts();
+else {
+  window.docair = { walkMessages, setLayer, openStep, closeStep, projectTour, followData, showData, renderData, showOnly, revealWithin, stepMessages, messageParts, showTerm, renderGlossary, openDoc, linkTerms, previewTerms, previewWording, edgeText, state: S, select, setFlow, goStep, render, rep, drawnRep, showLayer, layerFor, computeView, layerName, drill, drillUp, addWalkthrough, setHidden, setTests, hiddenNode };
+  boot().catch((err) => {
+    console.error('docair: viewer failed to start', err);
+    document.body.dataset.ready = 'error';
+    drawing(null);
+    tellParent({ type: 'docair:ready', failed: true });
+  });
+}

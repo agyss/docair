@@ -42,12 +42,14 @@
   <main id="graph">
     <div id="cy"></div>
     <div id="tip" hidden></div>
-    <div id="legend" hidden></div>
+    <div id="legend"></div>
     <div id="toast" hidden></div>
     <div id="crumbs" hidden></div>
     <div id="hidden-bar" hidden data-test="hidden-bar"></div>
     <div id="reader" hidden data-test="reader"></div>
     <div id="follow-bar" hidden data-test="follow-bar"></div>
+    <div id="drawing" class="show now" role="status" aria-live="polite" data-test="drawing"><span class="spin" aria-hidden="true"></span><span id="drawing-text">Drawing the page…</span></div>
+    <script>/* In a page around this one (the web app), that page says it is drawn until it is ready. */ if (window.parent !== window) document.getElementById('drawing').className = '';</script>
     <div id="hint">scroll out past the picture: close a box, then up a layer · scroll into a box: open it · double-click: open/close</div>
   </main>
   <aside id="details"><p class="empty">Select a node to see its documentation.</p></aside>
@@ -61,11 +63,12 @@
 /* Cytoscape.js 3.34.4, MIT License, (c) The Cytoscape Consortium */
 {{docair:cytoscape}}
 </script>
-<script>
+<script id="docair-elk">
 /* elkjs 0.12.1, Eclipse Public License 2.0, source: https://github.com/kieler/elkjs */
 {{docair:elk}}
 </script>
-<script>
+<!-- The two scripts above and below also run in the layout worker (SPEC §3.5): it reads them by their ids. -->
+<script id="docair-app">
 {{docair:app}}
 </script>
 </body>

@@ -17,6 +17,10 @@
     </label>
   </div>
 
+  @if (reading(); as r) {
+    <app-progress-line [progress]="r" />
+  }
+
   @if (files().length) {
     <p class="picked" data-test="picked">
       <strong>{{ folder() || 'files' }}</strong> · {{ files().length }} files · {{ size() }}
@@ -26,10 +30,13 @@
     </p>
     <button class="button primary" [disabled]="busy()" (click)="generate.emit(files())" data-test="generate">
       @if (busy()) {
-        Generating… {{ progress() }}%
+        Generating…
       } @else {
         Generate docair page
       }
     </button>
+    @if (progress(); as p) {
+      <app-progress-line [progress]="p" />
+    }
   }
 </section>

@@ -1,0 +1,11 @@
+#***
+# Billing: what an order costs.
+#
+# @id      billing
+# @kind    module
+# @part-of fold
+#***
+[package]
+name = "billing"
+version = "0.1.0"
+edition = "2024"

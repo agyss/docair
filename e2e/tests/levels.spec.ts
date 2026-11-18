@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { drawn, openStatic } from './helpers';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { docair, drawn, fixture, openStatic, out } from './helpers';
 
 /** Every drawn line's way and the place of its words; also kept on the page as `__before` for comparisons there. */
 async function drawnLines(page: import('@playwright/test').Page): Promise<Record<string, { route: { x: number; y: number }[]; words: number[] | null }>> {
@@ -207,6 +209,63 @@ test.describe('look at it layer by layer', () => {
   });
 
   /***
+   * At the code layer, parts docair only found in the code wait until their box is zoomed into: a box of code whose parts are all such stands closed, and in a box that also holds documented parts, those without a line are left out and the box says how many. A part with a line stays. The tree still lists them; picking one there opens its box.
+   *
+   * @part-of e2e.levels
+   * @covers  docair-viewer.layer-view "checks parts found only in the code wait until their box is opened"
+   * @covers  docair-viewer.drill "checks zooming into the box shows them"
+   * @covers  docair-viewer.show-details "checks picking such a part in the tree opens its box"
+   ***/
+  test('parts found only in the code wait until their box is opened', async ({ page }) => {
+    execFileSync(docair, ['scan', fixture('fold'), '--out', path.join(out, 'fold')]);
+    await openStatic(page, 'fold');
+    const code = () =>
+      page.evaluate(async () => {
+        await (window as any).docair.showLayer('code');
+        await (window as any).docair.state.lastRender;
+      });
+    const label = (id: string) => page.evaluate((x) => (window as any).docair.state.cy.getElementById(x).data('label'), id);
+    await code();
+    // billing.tax has a line (billing.bill calls it); billing.fee and the module billing.money have none
+    expect((await drawn(page)).sort()).toEqual(['billing', 'billing.bill', 'billing.tax']);
+    expect(await label('billing')).toBe('billing · 2 more');
+    // the tree lists them; picking one opens its box
+    await page.locator('#search').fill('fee');
+    await page.locator('#tree-list li[data-id="billing.fee"] > .row').click();
+    await expect.poll(() => drawn(page)).toEqual(expect.arrayContaining(['billing.fee', 'billing.money']));
+    await page.locator('#search').fill('');
+    // zooming into the boxes shows the rest; the module of parts found only in the code stood closed
+    await code();
+    await page.evaluate(() => (window as any).docair.drill('billing'));
+    await expect.poll(() => drawn(page)).toEqual(expect.arrayContaining(['billing.fee', 'billing.money']));
+    expect(await drawn(page)).not.toContain('billing.money.round');
+    await page.evaluate(() => (window as any).docair.drill('billing.money'));
+    await expect.poll(() => drawn(page)).toEqual(expect.arrayContaining(['billing.money.round', 'billing.money.amount']));
+  });
+
+  /***
+   * While a picture is laid out, the page says what it draws: the layer, its parts and its lines; the
+   * note goes once the picture is there.
+   *
+   * @part-of e2e.levels
+   * @covers  docair-viewer.drawing "checks the page says what it draws while it lays out"
+   ***/
+  test('the page says what it draws while it lays out', async ({ page }) => {
+    await openStatic(page, 'shop');
+    await expect(page.getByTestId('drawing')).not.toHaveClass(/show/);
+    const note = await page.evaluate(async () => {
+      const box = document.querySelector('#drawing')!;
+      const done = (window as any).docair.showLayer('code');
+      const during = { show: box.classList.contains('show'), text: box.textContent };
+      await done;
+      return { ...during, after: box.classList.contains('show') };
+    });
+    expect(note.show).toBe(true);
+    expect(note.text).toMatch(/^Drawing Code · \d+ parts, \d+ lines…$/);
+    expect(note.after).toBe(false);
+  });
+
+  /***
    * A walk plays at the layer that is about it: the boxes there stand for what is inside them, so the picture stays put; Open walks into a step's box, Back returns, and closing the walk gives the reader's layer back.
    *
    * @part-of e2e.levels
@@ -270,6 +329,23 @@ test.describe('look at it layer by layer', () => {
     await page.evaluate(() => (window as any).docair.setLayer('infra'));
     expect(await page.evaluate(() => (window as any).docair.state.flow.layer)).toBe(layer);
     expect(await page.evaluate(() => (window as any).docair.state.cy.nodes('.flow-current').length)).toBeGreaterThan(0);
+  });
+
+  /***
+   * The legend shows from the start: what each shape and line stands for. The header's Legend button hides it and shows it again.
+   *
+   * @part-of e2e.levels
+   * @covers  docair-viewer.boot "checks the legend shows from the start"
+   ***/
+  test('the legend shows from the start', async ({ page }) => {
+    await openStatic(page, 'shop');
+    await expect(page.locator('#legend')).toBeVisible();
+    await expect(page.locator('#legend')).toContainText('function');
+    await expect(page.locator('#btn-legend')).toHaveClass(/\bon\b/);
+    await page.locator('#btn-legend').click();
+    await expect(page.locator('#legend')).toBeHidden();
+    await page.locator('#btn-legend').click();
+    await expect(page.locator('#legend')).toBeVisible();
   });
 
   /***

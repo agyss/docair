@@ -1,0 +1,19 @@
+<div class="progress" [class.compact]="compact()" [attr.data-phase]="progress().phase" data-test="progress">
+  <div
+    class="track"
+    [class.waiting]="percent() === null"
+    role="progressbar"
+    aria-label="Progress of this step"
+    [attr.aria-valuenow]="percent()"
+    aria-valuemin="0"
+    aria-valuemax="100"
+  >
+    <div class="fill" [style.width.%]="percent() ?? 100"></div>
+  </div>
+  <p class="text">
+    @if (step()) {
+      <span class="step">{{ step() }} of 4 </span>
+    }
+    <span role="status">{{ label() }}</span>@if (percent() !== null) {<b> · {{ percent() }}%</b>}<span class="time" aria-hidden="true">{{ time() }}</span>
+  </p>
+</div>

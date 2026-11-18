@@ -1,9 +1,10 @@
-import { Component, DestroyRef, ElementRef, computed, inject, input, output, signal, viewChild } from '@angular/core';
+import { Component, DestroyRef, ElementRef, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DomSanitizer } from '@angular/platform-browser';
 import { firstValueFrom } from 'rxjs';
 import { AiStatus, AskService, FileText, PatchAnswer, Reply, Walkthrough } from './ask.service';
 import { ChatPanel, Selection } from './chat-panel';
 import { ChatEntry, ConversationService } from './conversation.service';
+import { Progress, ProgressLine } from './progress-line';
 import { PickedFile, ScanResult } from './scan.service';
 
 /***
@@ -21,7 +22,7 @@ import { PickedFile, ScanResult } from './scan.service';
  ***/
 @Component({
   selector: 'app-result-view',
-  imports: [ChatPanel],
+  imports: [ChatPanel, ProgressLine],
   templateUrl: './result-view.html',
   styleUrl: './result-view.css',
 })
@@ -30,6 +31,8 @@ export class ResultView {
   /** The files the page was generated from, as picked. */
   readonly files = input<PickedFile[]>([]);
   readonly busy = input(false);
+  /** Where a new generation of the page is, while it runs. */
+  readonly progress = input<Progress | null>(null);
   readonly closed = output<void>();
   /** Generate the page again from these files. */
   readonly regenerate = output<PickedFile[]>();
@@ -48,8 +51,17 @@ export class ResultView {
   protected readonly selection = signal<Selection | null>(null);
   /** What the page hides and whether it shows tests, to keep across regenerated pages. */
   private view: { hidden: string[]; tests: boolean } | null = null;
+  /** The page lays itself out until it says it is ready; till then the frame says so. */
+  protected readonly drawing = signal<Progress | null>(null);
+  private lateTimer = 0;
 
   constructor() {
+    // A new page draws itself from the start.
+    effect(() => {
+      this.result();
+      untracked(() => this.drawing.set({ phase: 'draw', since: Date.now() }));
+    });
+    inject(DestroyRef).onDestroy(() => clearTimeout(this.lateTimer));
     this.asker.status().subscribe({
       next: (status) => this.ai.set(status),
       error: () => this.ai.set({ enabled: false }),
@@ -57,7 +69,11 @@ export class ResultView {
     const onMessage = (e: MessageEvent) => {
       if (!e.source || e.source !== this.frame()?.nativeElement.contentWindow) return;
       const m = e.data;
-      if (m?.type === 'docair:selected') {
+      if (m?.type === 'docair:drawing') {
+        this.drawing.update((d) => d && { ...d, what: String(m.what ?? '') });
+      } else if (m?.type === 'docair:ready') {
+        this.drawing.set(null);
+      } else if (m?.type === 'docair:selected') {
         this.selection.set(m.id ? { id: m.id, name: m.name, kind: m.kind } : null);
       } else if (m?.type === 'docair:view-changed') {
         this.view = { hidden: m.hidden ?? [], tests: m.tests !== false };
@@ -70,6 +86,9 @@ export class ResultView {
   /** A regenerated page starts with the sections the user had hidden. */
   protected frameLoaded(): void {
     if (this.view) this.post({ type: 'docair:view', hide: this.view.hidden, tests: this.view.tests });
+    // A page that never says it is ready (made by an older docair) is shown after a while all the same.
+    clearTimeout(this.lateTimer);
+    this.lateTimer = window.setTimeout(() => this.drawing.set(null), 30_000);
   }
 
   private post(message: object): void {

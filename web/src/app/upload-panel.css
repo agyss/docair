@@ -33,3 +33,6 @@ input[type='file'] {
 .muted {
   color: var(--muted);
 }
+app-progress-line {
+  margin-top: 14px;
+}

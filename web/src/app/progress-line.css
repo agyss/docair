@@ -1,0 +1,67 @@
+:host {
+  display: block;
+}
+.progress {
+  margin: 0 auto;
+  max-width: 520px;
+  text-align: left;
+}
+.track {
+  height: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+/* A step that can only wait: a moving bar, so the page never looks stuck. */
+.track.waiting .fill {
+  width: 30% !important;
+  animation: slide 1.3s ease-in-out infinite;
+}
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+.text {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.text b {
+  color: var(--text);
+  font-weight: 600;
+}
+.step {
+  margin-right: 3px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.compact {
+  margin: 0;
+  min-width: 240px;
+  max-width: 380px;
+}
+.compact .track {
+  height: 4px;
+}
+.compact .text {
+  margin-top: 3px;
+  font-size: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .track.waiting .fill {
+    width: 100% !important;
+    opacity: 0.45;
+    animation: none;
+  }
+}

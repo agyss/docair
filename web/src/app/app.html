@@ -6,7 +6,7 @@
   @part-of docair-web.app
 ***-->
 @if (result(); as r) {
-  <app-result-view [result]="r" [files]="files()" [busy]="busy()" (closed)="reset()" (regenerate)="generate($event)" />
+  <app-result-view [result]="r" [files]="files()" [busy]="busy()" [progress]="progress()" (closed)="reset()" (regenerate)="generate($event)" />
   @if (error()) {
     <p class="error floating" data-test="error">{{ error() }}</p>
   }

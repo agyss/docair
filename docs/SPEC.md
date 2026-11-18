@@ -86,7 +86,11 @@ Each stage has one job. A stage only consumes the output of the stage before it.
 > draws the lines at right angles and puts their words on them. The direction
 > is chosen automatically: top-to-bottom, unless left-to-right fits the screen
 > at a zoom 1.1 times larger. On first open, the viewer shows the Apps layer
-> when it is readable, else another layer that is (§3.4).
+> when it is readable, else another layer that is (§3.4). While a picture is
+> laid out, the page says what it draws once that takes a moment (*Drawing
+> Code · 371 parts, 631 lines…*), with a spinner. The layout runs beside the
+> page, so the page keeps answering, and a picture laid out once comes back at
+> once (§3.5).
 
 ### 1.1 Configuration: `docair.toml`
 
@@ -138,6 +142,25 @@ api_key_env = "DOCAIR_AI_API_KEY"     # the default; the key itself is never in 
 | `docair serve` (later) | 1–7, watch | serves the viewer and rebuilds on file change |
 
 ---
+
+### 1.3 The web app: generating a page
+
+docair-web turns a picked or dropped folder into a page. It leaves out
+dependencies, build output, secrets and files over 2 MB, and says at each
+step where the generation is, so that a long one never looks stuck:
+
+| Step | The user sees |
+|------|---------------|
+| a dropped folder is read | *Reading the folder · 1200 files so far* |
+| 1 of 4: the files go up | a bar, *Uploading 286 files · 3.3 MB of 7.8 MB · 42%* |
+| 2 of 4: docair reads them on the server | a moving bar, *docair reads the 286 files on the server · 6 s*; after 10 s also *big projects take a while* |
+| 3 of 4: the page comes back | a bar, *Receiving the page · 1.0 MB of 5.7 MB · 18%* |
+| 4 of 4: the page draws itself | over the page, *Drawing the page: Network · 23 parts, 11 lines · 1 s*, until the page says it is ready |
+
+The page tells the app what it draws (`docair:drawing`) and when it is ready
+(`docair:ready`). A page that never says so is shown after 30 s all the same.
+Generating the page again, after edits are applied (§10.6), shows the same
+steps in the bar above the page.
 
 ## 2. Doc blocks (stage 2: extract)
 
@@ -351,7 +374,7 @@ joins it to them.
 | Network | How does a request get in, and where does it go? | gateways (published ports, ingress controllers, Ingress), Services, networks, the cluster's nodes; Deployments as closed boxes; the frames around them | Terraform, ConfigMaps and Secrets, the code |
 | Kubernetes | What is installed in the cluster, and how is it configured? | everything in the cluster down to the containers; the programs in them as closed boxes | the machines around the cluster, the code |
 | Apps | Which programs are there, and how do they talk to each other? | each program and library as one box (a library of several crates shows them), stores, topics, clients and services outside, Terraform as one box, test suites | the machines and the cluster, whose boxes are **dissolved** (the programs stand side by side); gateways, Services and the other cluster objects |
-| Code | How does a program work inside? | the Apps layer with every program and library open, down to their modules; a module of functions only stands closed (zoom into it, or a walk that passes it opens it) | as Apps |
+| Code | How does a program work inside? | the Apps layer with every program and library open, down to their modules. Parts docair only found in the code (no doc block about them) wait until their box is zoomed into: a box of code (a program, a module, a type) holding only such parts, with no doc block about anything inside them, stands closed, as a module of functions only does; in a box that also holds documented parts, such parts without a line are left out, and the box says how many (`docair-server · 13 more`). A part with a line stays. Zooming into the box, a walk that passes the part, or picking it in the tree or the search opens the box | as Apps |
 
 What a part is, for the layers: a **program** is a `service` or `job` that is
 not inside another program and not declared in Terraform; a **library** is a
@@ -391,9 +414,19 @@ The tip of a line lists every part it passes and every line it stands for.
 are offered: a graph of plain code gets Overview, Apps, Code; docair's own
 repository gets all six. On first open, the viewer shows the Apps layer when it
 is readable with the whole picture on the screen (its smallest words at zoom
-0.65 or more), else the first other layer that is, else the Overview. Selecting a part that the layer leaves out (in the
-tree, by search, by a link) goes to the first layer that is about it. Tests are
-a switch over every layer (§12.4).
+0.65 or more), else the first other layer that is, else the Overview. Selecting a part that the layer leaves out, or draws only as a closed box
+around it (in the tree, by search, by a link), opens the box the part is in:
+on this layer when it draws a box around the part, else on Apps, else the
+selection goes to the first layer that is about the part. The breadcrumb then
+says where it is (*Apps › ask*), and scrolling out closes the box again. The
+part's details show at once, before the picture is drawn again.
+
+| Picked on docair's own page | before | now |
+|-----------------------------|--------|-----|
+| `docair-ai.ask.digest` at Network | all of Code laid out, 14 s | Apps with `docair-ai.ask` opened, 1 s |
+| `docair-ai.ask.digest` at Apps | the closed box `docair-ai` selected | `docair-ai.ask` opened, 0.5 s |
+
+Tests are a switch over every layer (§12.4).
 
 > **Viewer mock: one request at two layers.**
 >
@@ -433,6 +466,25 @@ closes it.
 then goes up a layer: Code → Apps, any other layer → Overview. `-` does the
 same; `+` goes to the next layer in the header.
 
+**Pick a part.** A part picked outside the canvas (a link in the details, a
+row in the tree, a diagnostic, a chip in a walk's step, a word's popup, the
+page's `#id`) comes close. The camera puts it in the middle, its words at the
+size they are drawn for, and never smaller than readable: zoom × the scale the
+part is drawn at stays at 0.8 or more, as for a walk's step (§10.4). Its box
+stays in view when the box fits at a readable zoom. A part too large to read
+whole is shown whole, and a reader who is closer already keeps their zoom.
+
+| Picked on docair's own page | before | now |
+|-----------------------------|--------|-----|
+| `docair-core.build` at Code, drawn at scale 0.49 | zoom 1, words 5.9 px | zoom 2.04, words 12 px |
+| `docair-server` at Code, a box 1 381 px wide at zoom 1 | zoom 1, runs off the 830 px canvas | zoom 0.51, all of it in view |
+
+The selected part has a halo in the accent colour, which swells twice when
+the camera stops (not with reduced motion); a search hit only gets the accent
+border. The search, a walk's step and a followed datum never dim the selected
+part. A click on the canvas selects the part where it is: the camera does not
+move.
+
 * An edge into or out of a collapsed group stands for all the edges it
   bundles: drawn once per pair and direction, thicker the more edges it stands
   for, and labelled with what they carry (`POST /api/scan · POST /api/ask +4`,
@@ -459,6 +511,16 @@ same; `+` goes to the next layer in the header.
   been to point ahead too. So the Apps layer reads from the browser over the
   server and the CLI to the libraries and the files, and a walk's lines run
   forward, not around the picture.
+* **Beside the page, and once.** The layout runs in a worker beside the
+  page (ELK and docair's router, read from the page's own scripts), so the
+  page keeps answering while a large picture is laid out: on docair's code
+  layer (414 parts, 862 lines, 23 s) no frame waits longer than 20 ms, where
+  the page stood still for up to 6 s before. A newer picture (another layer,
+  a box opened) stops the layout under way. The last six pictures keep their
+  layout: going back to one draws it at once (docair's code layer again:
+  0.44 s instead of a new layout). A part moved by hand is not kept; the
+  picture comes back as it was laid out. Where a browser starts no worker,
+  the page lays out itself and draws the same picture.
 * **Top-down** (after Kasperowski & von Hanxleden). Every box is laid out on
   its own (inside out), then what it holds is scaled to the box's budget of
   800 px, never below 70 % per box: a box with a lot inside does not blow the
@@ -621,17 +683,36 @@ docair keeps the two apart.
   in the browser, where the request is made.
 * **Data nodes** (`@kind data`, usually fenced blocks in a `DATA.md`) say
   what a datum is. The part that makes it says so: `@creates data.question
-  "you type it"`. A line **carries** a datum when its payload or reply names
-  it (its name, the end of its id, or a `@carried-as` word): docair finds
-  that itself (`edge.carries`).
+  "you type it"`. A line **carries** a datum when its words name it (its
+  name, the end of its id, or a `@carried-as` word): docair finds that
+  itself. It carries it **there** when what it sends names it
+  (`edge.carries`), and **back** when a call's answer names it
+  (`edge.carries_back`); a call can do both.
 * In the viewer, data is not a box among the parts. **◇ Data** in the header
   lists every datum with who makes it and how many lines carry it. In step
   cards and edge lists, data names are teal chips, apart from the bold names
   of the parts. **Follow** walks the datum's way as a walkthrough: where it is
-  made, then every line that carries it, in the order it travels; a stretch
-  where it travels inside something else (a request through the network) is
-  bridged by the shortest way along the arrows and says *carries it inside …*.
-  The lines that carry it stay lit.
+  made, then every line that carries it, in the order it travels. The lines
+  that carry it stay lit while it plays, and the walk's own parts and lines
+  never fade. The walk's words mark the datum with ◇ (*ask.digest makes ◇
+  digest*), and its first card says what it covers (*Carried by 23 lines,
+  all in this walk; 4 of them start stretches of their own, not reached from
+  where it is made.*) and lists the lines the layer does not draw.
+  * It goes on along a line that carries it there, and back along a call
+    that carries it back (*summarize answers ask: brings summary back*). A
+    call that carries it both ways is walked there, and later back; never
+    back and then there.
+  * Where no such line goes on, it travels inside other lines, by the
+    shortest way of at most 6 lines: along the arrows (a request through
+    the network, *carries it inside …*), back along calls (an answer,
+    *brings it back inside …*), or back and then on (an answer its caller
+    hands on). Only a part that made the datum, or got it back as an
+    answer, hands it back to its callers.
+  * A line that carries it but that the walk cannot reach from where it is
+    made starts a stretch of its own, from a line no other such line leads
+    to, and says *Not reached from where … is made*. No line is left out.
+  * Each step is the one line the datum travels, there or back: a data walk
+    keeps no call stack, so answers that do not carry it are left out.
 * The AI gets both: where each part runs, and which data each line carries,
   and walks a request by following its data from where it is made.
 
@@ -643,7 +724,6 @@ docair keeps the two apart.
 > │ AskService.ask                            │
 > │ → sends ◇question, ◇graph, history ·      │
 > │   gets ◇Reply back                        │
-> │ ↩ AskService.ask answers with ◇Reply      │
 > └───────────────────────────────────────────┘
 > ```
 
@@ -1384,7 +1464,12 @@ works the same for both:
   layer folds into fewer, the Overview only walks no other layer can show. So
   `open` plays at the Network layer hop by hop, `provision` at the
   Infrastructure layer, `ask` and `upload` at the Apps layer, `view` at the
-  Code layer. Groups the walk never touches stay folded as context;
+  Code layer. A datum's walk (§3.6) plays at the layer that draws most of
+  its lines as lines between two parts, not folded into one box; on a tie,
+  the one with fewer steps that only **Open** shows, then the higher layer.
+  So a datum that moves between the functions of one app plays at the Code
+  layer (◇ digest, from `ask.digest` to `ask.ask` to `chat`). Groups the
+  walk never touches stay folded as context;
 * **Open** on a step that hides parts walks its inner steps inside its box, at
   the same layer, with the box opened down to the parts they pass. On a step
   that passes left-out parts, it walks them at the layer that is about them

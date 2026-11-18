@@ -363,6 +363,10 @@ h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color
 .card-close:hover { color: var(--text); }
 .card-q { color: var(--muted); font-size: 12px; font-style: italic; margin: 2px 0 0; }
 .card-summary { font-size: 12.5px; margin: 8px 0 0; }
+/* What a datum's walk covers (SPEC §3.6). */
+.card-carried { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.card-carried p { margin: 4px 0 2px; }
+.card-carried ul.edges { margin: 0 0 4px; }
 .card-step { color: var(--flow); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin: 10px 0 2px; border-top: 1px solid var(--line); padding-top: 8px; }
 .card h3 { font-size: 14px; margin: 2px 0 6px; }
 .card p { margin: 0 0 8px; line-height: 1.45; }
@@ -553,6 +557,24 @@ code.node-ref:hover, code.node-ref:focus-visible { background: var(--accent-soft
   display: flex; gap: 6px; align-items: center;
 }
 #follow-bar[hidden] { display: none; }
+
+/* Drawing a picture (SPEC §3.5): a note in the middle of the canvas once a layout takes a moment; its
+   spinner keeps turning while the layout holds the page. */
+#drawing {
+  position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%); z-index: 8;
+  display: flex; gap: 8px; align-items: center; padding: 7px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 12.5px;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 12%); pointer-events: none;
+  opacity: 0; transition: opacity 0.15s; will-change: opacity;
+}
+#drawing.show { opacity: 1; transition-delay: 0.25s; }
+#drawing.now { transition: none; }
+#drawing .spin {
+  width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: drawing-spin 0.8s linear infinite; will-change: transform;
+}
+@keyframes drawing-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #drawing .spin { animation: none; } }
 
 /* a walk at one layer (SPEC §10.4) */
 .layer-select { border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--flow); font-size: 11px; padding: 0 2px; text-transform: none; }

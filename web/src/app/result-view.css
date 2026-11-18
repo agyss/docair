@@ -98,12 +98,35 @@ h2 {
   display: flex;
   min-height: 0;
 }
+/* The page, and over it, until it has drawn itself, what it draws. */
+.frame {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
 iframe {
   flex: 1;
   min-width: 0;
   border: 0;
   display: block;
   background: var(--panel);
+}
+.drawing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+}
+.drawing .card {
+  width: min(520px, 90%);
+  padding: 14px 18px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 10%);
 }
 .side {
   width: min(400px, 40vw);
