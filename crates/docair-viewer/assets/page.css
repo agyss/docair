@@ -1,0 +1,43 @@
+/* The documentation page (docs/SLICES.md §4): the picture the CLI drew, with pan and zoom. */
+#pic { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
+#pic > svg { display: block; width: 100%; height: 100%; cursor: grab; user-select: none; }
+#pic > svg.panning { cursor: grabbing; }
+#pic .part, #pic .box { cursor: pointer; }
+#pic .part.sel > .sh { stroke: var(--accent); stroke-width: 3; }
+#pic .line.hl > .ln { stroke-width: 3; }
+a.seg { color: inherit; text-decoration: none; display: inline-block; }
+#crumbs:empty { display: none; }
+#crumbs a { color: var(--accent); text-decoration: none; }
+#crumbs a:hover { text-decoration: underline; }
+#crumbs .here { font-weight: 600; }
+#pic .hidden { display: none; }
+#pic .part.hit > .sh { stroke: var(--accent); stroke-width: 3; }
+#pic .dim { opacity: 0.16; }
+#tree-list .caret { display: inline-block; transition: transform .1s; }
+#tree-list li.closed > .row .caret { transform: rotate(-90deg); }
+/* The eye in the tree: drawn once here, not in every row. */
+#tree-list .eye::before {
+  content: ""; display: inline-block; width: 14px; height: 14px; background: currentColor; vertical-align: -2px;
+  --eye: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zm10 4a4 4 0 1 0 0-8 4 4 0 0 0 0 8z' fill='none' stroke='black' stroke-width='1.8'/%3E%3C/svg%3E");
+  -webkit-mask: var(--eye) center / contain no-repeat; mask: var(--eye) center / contain no-repeat;
+}
+#tree-list .eye.off::before {
+  --eye: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zm10 4a4 4 0 1 0 0-8 4 4 0 0 0 0 8z' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M3 3l18 18' stroke='black' stroke-width='1.8'/%3E%3C/svg%3E");
+}
+/* A walk (docs/SLICES.md §13, choice 4): the step's parts and lines lit, the rest faded, tokens on the lines. */
+#pic .flow-dim { opacity: 0.16; }
+#pic .sel.flow-dim { opacity: 1; }
+#pic .part.flow-done > .sh { stroke: var(--flow); stroke-width: 2.5; }
+#pic .part.flow-current > .sh { stroke: var(--flow); stroke-width: 4; fill: var(--flow-soft); }
+#pic .line.flow-trail, #pic .line.flow-active { --ec: var(--flow); }
+#pic .line.flow-trail > .ln { stroke-width: 2.2; opacity: 0.6; }
+#pic .line.flow-active > .ln { stroke-width: 3.4; stroke-dasharray: 8 5; }
+#pic .token circle { fill: var(--flow); stroke: var(--canvas); stroke-width: 2; }
+#pic .token.reply circle { fill: var(--canvas); stroke: var(--flow); stroke-width: 3; }
+#pic .token text { font-size: 10px; font-weight: 600; fill: var(--text); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+#flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 12px; }
+#flow .tour-chip { font-size: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 1px 9px; color: inherit; text-decoration: none; background: var(--panel-2); }
+#flow .tour-chip:hover { border-color: var(--flow); }
+#flow .tour-chip.on { border-color: var(--flow); background: var(--flow-soft); font-weight: 600; }
+#details .tour { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
+#details a.chip { text-decoration: none; color: inherit; }

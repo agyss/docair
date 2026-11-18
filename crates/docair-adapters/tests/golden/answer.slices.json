@@ -1,0 +1,415 @@
+[
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "data",
+      "id": "data.summary"
+    },
+    "ends": [
+      {
+        "id": "app.summarize",
+        "stable": false,
+        "within": "app"
+      },
+      {
+        "id": "model",
+        "stable": true
+      },
+      {
+        "id": "mail",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "app.summarize",
+      "app.ask",
+      "model",
+      "app.report",
+      "mail"
+    ],
+    "steps": [
+      {
+        "nodes": [
+          "app.summarize"
+        ],
+        "made": true
+      },
+      {
+        "nodes": [
+          "app.ask"
+        ],
+        "lines": [
+          1
+        ],
+        "way": "back",
+        "inside": true
+      },
+      {
+        "nodes": [
+          "model"
+        ],
+        "lines": [
+          2
+        ],
+        "way": "there"
+      },
+      {
+        "nodes": [
+          "mail"
+        ],
+        "lines": [
+          4
+        ],
+        "way": "there",
+        "apart": true
+      }
+    ],
+    "lines": [
+      {
+        "edge": 1,
+        "from": "app.ask",
+        "to": "app.summarize",
+        "kind": "call"
+      },
+      {
+        "edge": 2,
+        "from": "app.ask",
+        "to": "model",
+        "kind": "call",
+        "how": "named"
+      },
+      {
+        "edge": 4,
+        "from": "app.report",
+        "to": "mail",
+        "kind": "call",
+        "how": "named"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.summary"
+    ],
+    "covers": {
+      "lines": 2,
+      "reached": 1,
+      "apart": 1
+    }
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "data",
+      "id": "data.answer"
+    },
+    "ends": [
+      {
+        "id": "model",
+        "stable": true
+      },
+      {
+        "id": "asker",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "model",
+      "app.ask",
+      "asker"
+    ],
+    "steps": [
+      {
+        "nodes": [
+          "model"
+        ],
+        "made": true
+      },
+      {
+        "nodes": [
+          "app.ask"
+        ],
+        "lines": [
+          2
+        ],
+        "way": "back"
+      },
+      {
+        "nodes": [
+          "asker"
+        ],
+        "lines": [
+          0
+        ],
+        "way": "back"
+      }
+    ],
+    "lines": [
+      {
+        "edge": 2,
+        "from": "app.ask",
+        "to": "model",
+        "kind": "call",
+        "how": "named"
+      },
+      {
+        "edge": 0,
+        "from": "asker",
+        "to": "app.ask",
+        "kind": "call",
+        "how": "named"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 2
+      }
+    ],
+    "data": [
+      "data.answer"
+    ],
+    "covers": {
+      "lines": 2,
+      "reached": 2,
+      "apart": 0
+    }
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "asker"
+    },
+    "ends": [
+      {
+        "id": "app.ask",
+        "stable": false,
+        "within": "app"
+      }
+    ],
+    "parts": [
+      "asker",
+      "app.ask"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "asker",
+        "to": "app.ask",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 2
+      }
+    ],
+    "data": [
+      "data.answer"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "app.ask"
+    },
+    "ends": [
+      {
+        "id": "asker",
+        "stable": true
+      },
+      {
+        "id": "app.summarize",
+        "stable": false,
+        "within": "app"
+      },
+      {
+        "id": "model",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "app.ask",
+      "asker",
+      "app.summarize",
+      "model"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "asker",
+        "to": "app.ask",
+        "kind": "call"
+      },
+      {
+        "edge": 1,
+        "from": "app.ask",
+        "to": "app.summarize",
+        "kind": "call"
+      },
+      {
+        "edge": 2,
+        "from": "app.ask",
+        "to": "model",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 1
+      }
+    ],
+    "data": [
+      "data.answer",
+      "data.summary"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "app.summarize"
+    },
+    "ends": [
+      {
+        "id": "app.ask",
+        "stable": false,
+        "within": "app"
+      }
+    ],
+    "parts": [
+      "app.summarize",
+      "app.ask"
+    ],
+    "lines": [
+      {
+        "edge": 1,
+        "from": "app.ask",
+        "to": "app.summarize",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 1
+      }
+    ],
+    "data": [
+      "data.summary"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "app.report"
+    },
+    "ends": [
+      {
+        "id": "mail",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "app.report",
+      "mail"
+    ],
+    "lines": [
+      {
+        "edge": 4,
+        "from": "app.report",
+        "to": "mail",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 2
+      }
+    ],
+    "data": [
+      "data.summary"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "model"
+    },
+    "ends": [
+      {
+        "id": "app.ask",
+        "stable": false,
+        "within": "app"
+      }
+    ],
+    "parts": [
+      "model",
+      "app.ask"
+    ],
+    "lines": [
+      {
+        "edge": 2,
+        "from": "app.ask",
+        "to": "model",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 2
+      }
+    ],
+    "data": [
+      "data.summary",
+      "data.answer"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "mail"
+    },
+    "ends": [
+      {
+        "id": "app.report",
+        "stable": false,
+        "within": "app"
+      }
+    ],
+    "parts": [
+      "mail",
+      "app.report"
+    ],
+    "lines": [
+      {
+        "edge": 4,
+        "from": "app.report",
+        "to": "mail",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "app",
+        "more": 2
+      }
+    ],
+    "data": [
+      "data.summary"
+    ]
+  }
+]

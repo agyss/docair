@@ -438,13 +438,20 @@ name = "docair-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "docair-adapters",
  "docair-ai",
  "docair-core",
+ "docair-layout",
+ "docair-server",
  "docair-viewer",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
 ]
 
 [[package]]
@@ -512,6 +519,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "docair-layout"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "docair-rules"
 version = "0.1.0"
 dependencies = [
@@ -553,7 +567,11 @@ name = "docair-viewer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
+ "docair-adapters",
  "docair-core",
+ "docair-layout",
+ "miniz_oxide",
  "pulldown-cmark",
  "serde_json",
 ]

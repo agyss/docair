@@ -1,45 +1,28 @@
 //! `docair ask`, `docair chat`, `docair apply`, `docair ai` (SPEC §10).
 
-use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
-use docair_ai::{AiConfig, Env, Reply, Turn, ViewChange};
-use docair_core::config::Config;
-use docair_core::edit::{self, PatchResult};
-use docair_core::model::{Change, Graph};
+use anyhow::Result;
+use docair_ai::{AiConfig, Env, Reply, Turn};
+use docair_core::edit::PatchResult;
 use docair_core::{Options, scan};
-use serde::{Deserialize, Serialize};
+use docair_server::project::{Pending, ProjectSession, no_ai, read_pending};
 
-/// What `docair apply` needs from the last reply.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Pending {
-    #[serde(default)]
-    changes: Vec<Change>,
-    #[serde(default)]
-    view: Option<ViewChange>,
+/// What only the CLI does with a session: open it with the AI settings it asks with, and ask in the terminal.
+trait ProjectSessionCli: Sized {
+    fn open(root: &Path, out: Option<PathBuf>, lenient: bool, save: bool) -> Result<Option<Self>>;
+    fn turn(&mut self, question: &str, history: &[Turn], apply: bool) -> Result<Turn>;
 }
 
-/// One project with its settings and current graph.
-struct Session {
-    root: PathBuf,
-    out: PathBuf,
-    lenient: bool,
-    config: Config,
-    ai: AiConfig,
-    graph: Graph,
-    save: bool,
-}
-
-impl Session {
+impl ProjectSessionCli for ProjectSession {
     fn open(
         root: &Path,
         out: Option<PathBuf>,
         lenient: bool,
         save: bool,
-    ) -> Result<Option<Session>> {
+    ) -> Result<Option<ProjectSession>> {
         let Some(ai) = ai_config(root)? else {
             return Ok(None);
         };
@@ -49,63 +32,8 @@ impl Session {
                 ai.key_var
             );
         }
-        let config = docair_core::config::load(root)?;
-        let graph = scan(
-            root,
-            docair_adapters::all(),
-            &Options {
-                lenient,
-                ..Options::default()
-            },
-        )?;
-        Ok(Some(Session {
-            root: root.to_path_buf(),
-            out: out.unwrap_or_else(|| root.join(".docair")),
-            lenient,
-            config,
-            ai,
-            graph,
-            save,
-        }))
+        ProjectSession::load(root, out, lenient, save, ai).map(Some)
     }
-
-    fn rescan(&mut self) -> Result<()> {
-        self.config = docair_core::config::load(&self.root)?;
-        let walkthroughs = std::mem::take(&mut self.graph.walkthroughs);
-        self.graph = scan(
-            &self.root,
-            docair_adapters::all(),
-            &Options {
-                lenient: self.lenient,
-                ..Options::default()
-            },
-        )?;
-        for w in walkthroughs {
-            if !self.graph.walkthroughs.iter().any(|x| x.id == w.id) {
-                self.graph.walkthroughs.push(w);
-            }
-        }
-        Ok(())
-    }
-
-    fn write_outputs(&self) -> Result<PathBuf> {
-        let html = self.out.join("docair.html");
-        docair_core::emit::write_json(&self.graph, &self.out.join("docair.graph.json"))?;
-        docair_viewer::write_html(&self.graph, &html)?;
-        Ok(html)
-    }
-
-    /// Edits of the reply applied to the files on disk, in memory.
-    fn patch(&self, changes: &[Change]) -> PatchResult {
-        let known: HashSet<String> = self.graph.nodes.iter().map(|n| n.id.clone()).collect();
-        let root = self.root.clone();
-        edit::patch(
-            changes,
-            &move |p: &str| std::fs::read_to_string(root.join(p)).ok(),
-            &known,
-        )
-    }
-
     /***
      * One turn: ask, print the reply, record the walkthrough, write the patch; with `apply`, write edits and view.
      *
@@ -127,50 +55,10 @@ impl Session {
         for p in &reply.problems {
             eprintln!("warning: {p} (left out)");
         }
-        if let Some(wt) = &reply.walkthrough {
-            let mut wt = wt.clone();
-            if self.save {
-                let dir = self.config.walkthrough_dir().to_string();
-                let path = docair_core::walkthrough::save(&self.root, &dir, &wt)?;
-                wt.file = Some(format!("{}/{}.json", dir.trim_end_matches('/'), wt.id));
-                println!("recorded  {}", path.display());
-            }
-            self.graph.walkthroughs.retain(|w| w.id != wt.id);
-            self.graph.walkthroughs.push(wt);
-        }
-        // In a conversation, edits and view changes add up until they are applied.
-        let mut pending = if history.is_empty() {
-            Pending::default()
-        } else {
-            read_pending(&self.out).unwrap_or_default()
-        };
-        pending.changes.extend(reply.changes.iter().cloned());
-        if let Some(v) = &reply.view {
-            let merged = pending.view.get_or_insert_with(ViewChange::default);
-            for id in &v.hide {
-                merged.show.retain(|x| x != id);
-                if !merged.hide.contains(id) {
-                    merged.hide.push(id.clone());
-                }
-            }
-            for id in &v.show {
-                merged.hide.retain(|x| x != id);
-                if !merged.show.contains(id) {
-                    merged.show.push(id.clone());
-                }
-            }
-        }
-        std::fs::create_dir_all(&self.out)?;
-        std::fs::write(
-            self.out.join("pending.json"),
-            serde_json::to_string_pretty(&pending)?,
-        )?;
-        if !reply.changes.is_empty() {
-            let result = self.patch(&reply.changes);
+        let (pending, result) = self.take_reply(&reply, history.is_empty())?;
+        if let Some(result) = result {
             print_patch(&result);
-            let patch = self.out.join("docair.patch");
-            std::fs::write(&patch, &result.diff)?;
-            println!("patch     {}", patch.display());
+            println!("patch     {}", self.out.join("docair.patch").display());
         }
         if apply {
             self.apply(&pending)?;
@@ -184,55 +72,6 @@ impl Session {
             question: question.to_string(),
             answer: reply.answer,
         })
-    }
-
-    /// Write edits into the files and the view change into docair.toml, then scan again.
-    fn apply(&mut self, pending: &Pending) -> Result<()> {
-        if !pending.changes.is_empty() {
-            // Resolve again: the files may have changed since the reply.
-            let mut changes = Vec::new();
-            for c in &pending.changes {
-                let mut fresh = c.clone();
-                // Glossary text, a glossary section and whole files keep their mode (docs/MEANINGS.md §6).
-                if !["text", "section", "file"].contains(&fresh.mode.as_str()) {
-                    fresh.mode.clear();
-                }
-                match edit::resolve(&fresh, &self.graph.nodes) {
-                    Ok(c) => changes.push(c),
-                    Err(e) => eprintln!("warning: {e}"),
-                }
-            }
-            let result = self.patch(&changes);
-            for f in &result.files {
-                let path = self.root.join(&f.path);
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)?;
-                }
-                std::fs::write(&path, &f.after)
-                    .with_context(|| format!("writing {}", path.display()))?;
-                println!("edited    {}", f.path);
-            }
-            for p in &result.problems {
-                eprintln!("warning: {p}");
-            }
-        }
-        if let Some(view) = &pending.view {
-            set_view(&self.root, &self.config, view)?;
-            println!("edited    docair.toml [view]");
-        }
-        self.rescan()?;
-        let errors = self
-            .graph
-            .diagnostics
-            .iter()
-            .filter(|d| d.code.starts_with('E'))
-            .count();
-        println!(
-            "rescanned {} nodes, {} edges, {errors} errors",
-            self.graph.nodes.len(),
-            self.graph.edges.len()
-        );
-        Ok(())
     }
 }
 
@@ -251,7 +90,7 @@ pub fn cmd_word(
     all: bool,
     apply: bool,
 ) -> Result<ExitCode> {
-    let Some(mut s) = Session::open(root, out, lenient, false)? else {
+    let Some(mut s) = ProjectSession::open(root, out, lenient, false)? else {
         return Ok(ExitCode::from(2));
     };
     let todo = docair_ai::word::unworded(&s.graph, scope.as_deref(), all).len();
@@ -314,7 +153,7 @@ pub fn cmd_glossary(
     limit: usize,
     apply: bool,
 ) -> Result<ExitCode> {
-    let Some(mut s) = Session::open(root, out, lenient, false)? else {
+    let Some(mut s) = ProjectSession::open(root, out, lenient, false)? else {
         return Ok(ExitCode::from(2));
     };
     eprintln!(
@@ -381,11 +220,12 @@ fn conversation_path(out: &Path) -> PathBuf {
 /***
  * `docair ask`: one question; with `--follow-up` it continues the last conversation, with `--apply` it writes the edits.
  *
- * @flow   ask 1 "you run docair ask with a question"
- * @calls  docair-core.scan "builds the graph of the project"
- * @calls  docair-ai.config.resolve "combines the settings with the environment"
- * @calls  docair-cli.ask.turn "runs one question-answer cycle"
- * @calls  docair-viewer.write_html "renders the viewer page"
+ * @flow    ask 1 "you run docair ask with a question"
+ * @creates data.question "you type it after docair ask"
+ * @calls   docair-core.scan "builds the graph of the project"
+ * @calls   docair-ai.config.resolve "combines the settings with the environment"
+ * @calls   docair-cli.ask.turn "runs one question-answer cycle"
+ * @calls   docair-viewer.write_html "renders the viewer page"
  ***/
 pub fn cmd_ask(
     question: &str,
@@ -396,7 +236,7 @@ pub fn cmd_ask(
     follow_up: bool,
     apply: bool,
 ) -> Result<ExitCode> {
-    let Some(mut s) = Session::open(root, out, lenient, save)? else {
+    let Some(mut s) = ProjectSession::open(root, out, lenient, save)? else {
         return Ok(ExitCode::from(2));
     };
     let path = conversation_path(&s.out);
@@ -417,10 +257,11 @@ pub fn cmd_ask(
 /***
  * `docair chat`: a conversation in the terminal. Each line is a question; `/apply` writes the last reply's edits, `/quit` ends.
  *
- * @calls docair-cli.ask.turn "runs one question-answer cycle"
+ * @creates data.question "you type it, one line each"
+ * @calls   docair-cli.ask.turn "runs one question-answer cycle"
  ***/
 pub fn cmd_chat(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<ExitCode> {
-    let Some(mut s) = Session::open(root, out, lenient, true)? else {
+    let Some(mut s) = ProjectSession::open(root, out, lenient, true)? else {
         return Ok(ExitCode::from(2));
     };
     println!(
@@ -464,13 +305,6 @@ pub fn cmd_chat(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<Exit
     Ok(ExitCode::SUCCESS)
 }
 
-fn read_pending(out: &Path) -> Result<Pending> {
-    let path = out.join("pending.json");
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("no edits to apply ({} is missing)", path.display()))?;
-    Ok(serde_json::from_str(&text)?)
-}
-
 /***
  * `docair apply`: write the edits and view change of the last reply into the files, then scan again.
  *
@@ -489,15 +323,8 @@ pub fn cmd_apply(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<Exi
             ..Options::default()
         },
     )?;
-    let ai = AiConfig::resolve(config.ai.as_ref(), &Env::load(Some(root))).unwrap_or(AiConfig {
-        endpoint: String::new(),
-        model: String::new(),
-        api_key: None,
-        key_var: String::new(),
-        key_source: None,
-        max_tokens: 0,
-    });
-    let mut s = Session {
+    let ai = AiConfig::resolve(config.ai.as_ref(), &Env::load(Some(root))).unwrap_or_else(no_ai);
+    let mut s = ProjectSession {
         root: root.to_path_buf(),
         out,
         lenient,
@@ -505,83 +332,13 @@ pub fn cmd_apply(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<Exi
         ai,
         graph,
         save: false,
+        untrusted: false,
     };
     s.apply(&pending)?;
     std::fs::remove_file(s.out.join("pending.json")).ok();
     let html = s.write_outputs()?;
     println!("page      {}", html.display());
     Ok(ExitCode::SUCCESS)
-}
-
-/// `[view]` in docair.toml: what is hidden goes into `hide`; what is shown again
-/// leaves `hide`, or, when it lies inside a hidden section, goes into `show`.
-fn set_view(root: &Path, config: &Config, change: &ViewChange) -> Result<()> {
-    let view = config.view.clone().unwrap_or_default();
-    let mut hide = view.hide;
-    let mut show = view.show;
-    for id in &change.hide {
-        show.retain(|s| s != id);
-        if !hide.contains(id) {
-            hide.push(id.clone());
-        }
-    }
-    for id in &change.show {
-        if hide.contains(id) {
-            hide.retain(|h| h != id);
-        } else if !show.contains(id) {
-            show.push(id.clone());
-        }
-    }
-    let list = |ids: &[String]| {
-        ids.iter()
-            .map(|h| format!("\"{h}\""))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let mut wanted = vec![format!("hide = [{}]", list(&hide))];
-    if !show.is_empty() {
-        wanted.push(format!("show = [{}]", list(&show)));
-    }
-    let path = root.join("docair.toml");
-    let before = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut lines: Vec<String> = before.lines().map(str::to_string).collect();
-    match lines.iter().position(|l| l.trim() == "[view]") {
-        Some(header) => {
-            let mut end = lines[header + 1..]
-                .iter()
-                .position(|l| l.trim_start().starts_with('['))
-                .map_or(lines.len(), |k| header + 1 + k);
-            // Drop the old hide and show lines of the table, then put the new ones first.
-            let mut k = header + 1;
-            while k < end {
-                let t = lines[k].trim_start();
-                if t.starts_with("hide") || t.starts_with("show") {
-                    lines.remove(k);
-                    end -= 1;
-                } else {
-                    k += 1;
-                }
-            }
-            for (j, l) in wanted.into_iter().enumerate() {
-                lines.insert(header + 1 + j, l);
-            }
-        }
-        None => {
-            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
-                lines.push(String::new());
-            }
-            lines.push("# What the page shows when it opens (SPEC §11).".into());
-            lines.push("[view]".into());
-            lines.extend(wanted);
-        }
-    }
-    let after = lines.join("\n") + "\n";
-    std::fs::write(&path, &after)?;
-    if let Err(e) = docair_core::config::load(root) {
-        std::fs::write(&path, before)?;
-        return Err(e.context("the edited docair.toml does not parse; left unchanged"));
-    }
-    Ok(())
 }
 
 /// The reply as text: answer, walkthrough, view change, edits.
@@ -700,55 +457,4 @@ pub fn cmd_ai(root: &Path, check: bool) -> Result<ExitCode> {
         println!("check       answered {reply:?} in {seconds:.1} s");
     }
     Ok(ExitCode::SUCCESS)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn view_changes_edit_docair_toml_in_place() {
-        let dir = std::env::temp_dir().join(format!("docair-view-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let toml = "system = \"x\"\n\n[view]\ntests = false\n\n[ai]\nmodel = \"m\"\n";
-        std::fs::write(dir.join("docair.toml"), toml).unwrap();
-        let config = docair_core::config::load(&dir).unwrap();
-        let change = ViewChange {
-            hide: vec!["terraform".into(), "web".into()],
-            show: vec![],
-        };
-        set_view(&dir, &config, &change).unwrap();
-        let after = std::fs::read_to_string(dir.join("docair.toml")).unwrap();
-        assert_eq!(
-            after,
-            "system = \"x\"\n\n[view]\nhide = [\"terraform\", \"web\"]\ntests = false\n\n[ai]\nmodel = \"m\"\n"
-        );
-        let config = docair_core::config::load(&dir).unwrap();
-        set_view(
-            &dir,
-            &config,
-            &ViewChange {
-                hide: vec![],
-                show: vec!["web".into(), "terraform.kind".into()],
-            },
-        )
-        .unwrap();
-        let after = std::fs::read_to_string(dir.join("docair.toml")).unwrap();
-        assert!(
-            after.contains(
-                "[view]\nhide = [\"terraform\"]\nshow = [\"terraform.kind\"]\ntests = false"
-            ),
-            "a part inside a hidden section goes into show: {after}"
-        );
-
-        std::fs::write(dir.join("docair.toml"), "system = \"x\"\n").unwrap();
-        let config = docair_core::config::load(&dir).unwrap();
-        set_view(&dir, &config, &change).unwrap();
-        let after = std::fs::read_to_string(dir.join("docair.toml")).unwrap();
-        assert!(
-            after.ends_with("[view]\nhide = [\"terraform\", \"web\"]\n"),
-            "{after}"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
 }

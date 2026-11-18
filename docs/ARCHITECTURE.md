@@ -65,9 +65,10 @@
 | `docair-lang-apis` | OpenAPI and AsyncAPI descriptions: the routes and topics they declare, matched with the code by the core (`declare`); where they disagree, `docair check` warns ([IMPORTS.md](IMPORTS.md)) | PoC |
 | `docair-lang-ts` | TypeScript/JavaScript adapter (tree-sitter): declarations, Playwright tests, HttpClient and fetch requests | PoC |
 | `docair-scip` | reads SCIP code indexes (rust-analyzer) into calls between functions; runs the installed indexer | PoC |
-| `docair-viewer`| one self-contained HTML page: Cytoscape.js + ELK, levels, drill-down, scenarios | PoC |
-| `docair-cli`   | `docair scan`, `docair check` (later: `docair mermaid`, `docair serve`) | PoC |
-| `docair-server`| HTTP backend: `POST /api/scan` turns an uploaded folder into a docair page | PoC |
+| `docair-layout`| lays out nested boxes: own layered placement per box, top-down sizing, the right-angled router; no docair dependency, a library of its own ([SLICES.md](SLICES.md) §5) | PoC |
+| `docair-viewer`| the documentation as one self-contained HTML page: maps layers, sections and slices to `docair-layout`, draws every picture as SVG, writes the panels (details, tree, glossary, walks, the AI panel for `docair serve`) and packs it all with a thin script; no library in the page ([SLICES.md](SLICES.md) §4, §6, §7) | PoC |
+| `docair-cli`   | `docair scan`, `docair check`, `docair slice`, `docair layer`, `docair ask` and the other AI commands, `docair serve` (later: `docair mermaid`) | PoC |
+| `docair-server`| the HTTP server, one router for two programs: the docair-server program (uploads: `POST /api/scan` turns an uploaded folder into a docair page) and `docair serve` (a project: its documentation at `/`, the AI routes on its own graph, `/api/version`, `/api/apply`); `project` holds the steps both share with the CLI (an answer taken in, edits applied, the documentation written again) | PoC |
 
 Around the crates:
 

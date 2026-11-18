@@ -1,0 +1,377 @@
+[
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.create"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart",
+        "stable": false,
+        "within": "shop-ui"
+      },
+      {
+        "id": "topic:order.created",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "orders.create",
+      "topic:order.created",
+      "shop-ui.cart"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "orders.create",
+        "to": "topic:order.created",
+        "kind": "emit"
+      },
+      {
+        "edge": 2,
+        "from": "shop-ui.cart",
+        "to": "orders.create",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "orders-api",
+        "more": 5
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.get"
+    },
+    "ends": [],
+    "parts": [
+      "orders.get"
+    ],
+    "lines": [],
+    "boxes": [
+      {
+        "id": "orders-api",
+        "more": 5
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.update"
+    },
+    "ends": [],
+    "parts": [
+      "orders.update"
+    ],
+    "lines": [],
+    "boxes": [
+      {
+        "id": "orders-api",
+        "more": 5
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.list"
+    },
+    "ends": [],
+    "parts": [
+      "orders.list"
+    ],
+    "lines": [],
+    "boxes": [
+      {
+        "id": "orders-api",
+        "more": 5
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.health"
+    },
+    "ends": [],
+    "parts": [
+      "orders.health"
+    ],
+    "lines": [],
+    "boxes": [
+      {
+        "id": "orders-api",
+        "more": 5
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "api.openapi.cancel-order"
+    },
+    "ends": [],
+    "parts": [
+      "api.openapi.cancel-order"
+    ],
+    "lines": [],
+    "boxes": [
+      {
+        "id": "api.openapi",
+        "more": 0
+      },
+      {
+        "id": "orders-api",
+        "more": 5
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "vendor.payments-openapi.create-charge"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart",
+        "stable": false,
+        "within": "shop-ui"
+      }
+    ],
+    "parts": [
+      "vendor.payments-openapi.create-charge",
+      "shop-ui.cart"
+    ],
+    "lines": [
+      {
+        "edge": 3,
+        "from": "shop-ui.cart",
+        "to": "vendor.payments-openapi.create-charge",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "payments",
+        "more": 0
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      },
+      {
+        "id": "vendor.payments-openapi",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "mailer.confirm"
+    },
+    "ends": [
+      {
+        "id": "topic:order.created",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "mailer.confirm",
+      "topic:order.created"
+    ],
+    "lines": [
+      {
+        "edge": 1,
+        "from": "topic:order.created",
+        "to": "mailer.confirm",
+        "kind": "consume"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "mailer",
+        "more": 1
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "shop-ui.cart"
+    },
+    "ends": [
+      {
+        "id": "orders.create",
+        "stable": true
+      },
+      {
+        "id": "vendor.payments-openapi.create-charge",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "shop-ui.cart",
+      "orders.create",
+      "vendor.payments-openapi.create-charge"
+    ],
+    "lines": [
+      {
+        "edge": 2,
+        "from": "shop-ui.cart",
+        "to": "orders.create",
+        "kind": "call"
+      },
+      {
+        "edge": 3,
+        "from": "shop-ui.cart",
+        "to": "vendor.payments-openapi.create-charge",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "orders-api",
+        "more": 5
+      },
+      {
+        "id": "payments",
+        "more": 0
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      },
+      {
+        "id": "vendor.payments-openapi",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "mailer.asyncapi"
+    },
+    "ends": [
+      {
+        "id": "topic:order.cancelled",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "mailer.asyncapi",
+      "topic:order.cancelled"
+    ],
+    "lines": [
+      {
+        "edge": 4,
+        "from": "topic:order.cancelled",
+        "to": "mailer.asyncapi",
+        "kind": "consume"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "mailer",
+        "more": 1
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "topic:order.created"
+    },
+    "ends": [
+      {
+        "id": "orders.create",
+        "stable": true
+      },
+      {
+        "id": "mailer.confirm",
+        "stable": false,
+        "within": "mailer"
+      }
+    ],
+    "parts": [
+      "topic:order.created",
+      "orders.create",
+      "mailer.confirm"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "orders.create",
+        "to": "topic:order.created",
+        "kind": "emit"
+      },
+      {
+        "edge": 1,
+        "from": "topic:order.created",
+        "to": "mailer.confirm",
+        "kind": "consume"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "mailer",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 5
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "topic:order.cancelled"
+    },
+    "ends": [
+      {
+        "id": "mailer.asyncapi",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "topic:order.cancelled",
+      "mailer.asyncapi"
+    ],
+    "lines": [
+      {
+        "edge": 4,
+        "from": "topic:order.cancelled",
+        "to": "mailer.asyncapi",
+        "kind": "consume"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "mailer",
+        "more": 1
+      }
+    ]
+  }
+]

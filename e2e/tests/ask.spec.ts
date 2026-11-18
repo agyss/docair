@@ -1,9 +1,38 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
-import { fakeAi, fixture, generate, withFakeAi } from './helpers';
+import path from 'node:path';
+import { fakeAi, fixture, generate, go, ready, select, serve, withFakeAi, type ServedCopy } from './helpers';
+
+/** Ask in the page's chat and wait for the model's reply; a reply with a walkthrough writes the documentation again, and the page reloads with it. */
+async function ask(page: Page, question: string) {
+  const before = await page.getByTestId('msg-ai').count();
+  const reloaded = page.waitForEvent('load', { timeout: 20_000 }).catch(() => null);
+  await page.getByTestId('question').fill(question);
+  await page.getByTestId('question').press('Enter');
+  await expect(page.getByTestId('msg-ai')).toHaveCount(before + 1);
+  if (await page.getByTestId('msg-ai').last().getByTestId('play').count()) {
+    await reloaded;
+    await ready(page);
+  }
+  return page.getByTestId('msg-ai').last();
+}
+
+/** Apply what waits: the files are written, and the page reloads with the documentation written again. */
+async function apply(page: Page) {
+  const reloaded = page.waitForEvent('load', { timeout: 20_000 });
+  await page.getByTestId('msg-ai').last().getByTestId('apply').click();
+  await reloaded;
+  await ready(page);
+  await expect(page.getByTestId('msg-ai').last().getByTestId('apply')).toContainText('Applied');
+}
+
+/** The graph `docair serve` wrote for the project. */
+function servedGraph(s: ServedCopy): any {
+  return JSON.parse(fs.readFileSync(path.join(s.folder, '.docair', 'docair.graph.json'), 'utf8'));
+}
 
 /***
- * Clarify with AI: a conversation in the web app whose replies play on the chart, change the view, and edit the code.
+ * Clarify with AI: the chat in the page `docair serve` serves; replies bring walkthroughs to play, view changes and edits, applied to the project's files and the documentation.
  *
  * @id      e2e.ask
  * @kind    test
@@ -11,35 +40,38 @@ import { fakeAi, fixture, generate, withFakeAi } from './helpers';
  ***/
 test.describe('clarify with AI', () => {
   test.skip(!withFakeAi, 'needs the fake model');
-
+  let served: ServedCopy;
   test.beforeEach(async ({ page }) => {
-    await generate(page, fixture('shop'));
+    served = await serve('shop');
+    await page.goto(`${served.url}/`);
+    await ready(page);
+    await page.getByTestId('ask-button').click();
     await expect(page.getByTestId('chat')).toBeVisible();
+    await expect(page.getByTestId('model')).toHaveText('fake-model');
+  });
+  test.afterEach(async () => {
+    await served?.stop();
   });
 
-  async function ask(page: import('@playwright/test').Page, question: string) {
-    const before = await page.getByTestId('msg-ai').count();
-    await page.getByTestId('question').fill(question);
-    await page.getByTestId('question').press('Enter');
-    await expect(page.getByTestId('msg-ai')).toHaveCount(before + 1);
-    return page.getByTestId('msg-ai').last();
-  }
-
   /***
-   * A question gets an answer and a walkthrough, which plays on the chart at once.
+   * A question gets an answer and a walkthrough; the documentation is written again with it, and Play walks it.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.chat-panel "checks that a question gets a reply"
-   * @covers  docair-web.conversation.ask "checks the question is sent"
+   * @covers  docair-viewer.doc-page.chat "checks that a question gets a reply, kept across the reload"
    * @covers  docair-server.ask "checks that the server answers"
+   * @covers  docair-server.project.answered "checks the walkthrough is recorded and the documentation written again"
    * @covers  docair-ai.ask.ask "checks the model's reply against the graph"
-   * @covers  docair-viewer.receive "checks the walkthrough plays on the chart"
+   * @covers  docair-viewer.page_ai.reply_html "checks the reply as the chat shows it"
    ***/
   test('a question becomes a walkthrough that plays on the chart', async ({ page }) => {
     const reply = await ask(page, 'How does checkout work?');
     await expect(reply).toContainText('Checkout goes from the cart');
     await expect(reply.getByTestId('play')).toContainText('3 steps');
-    const card = page.frameLocator('[data-test="page"]').getByTestId('step-card');
+    // The documentation is written again: the walkthrough is a file of the project, and a picture of the page.
+    expect(fs.readdirSync(path.join(served.folder, 'docs', 'walkthroughs')).some((f) => f.endsWith('.json'))).toBe(true);
+    await page.getByTestId('msg-ai').last().getByTestId('play').click();
+    await expect(page).toHaveURL(/#slice\/walkthrough:/);
+    const card = page.getByTestId('step-card');
     await expect(card).toContainText('step 1 of 3');
     await expect(card).toContainText('The shopper clicks Buy');
   });
@@ -48,43 +80,46 @@ test.describe('clarify with AI', () => {
    * A follow-up is sent with the earlier turns, so the model knows what it refers to.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.conversation.ask "checks the follow-up carries the conversation"
+   * @covers  docair-viewer.doc-page.chat "checks the follow-up carries the conversation"
    * @covers  docair-ai.ask.ask "checks earlier turns reach the model"
    ***/
   test('a follow-up carries the conversation', async ({ page }) => {
-    await ask(page, 'How does checkout work?');
+    await ask(page, 'Is checkout tested?');
     const reply = await ask(page, 'and then?');
     await expect(reply).toContainText('Turns so far: 1.');
   });
 
   /***
-   * "I don't care about …" hides that section on the chart; Undo brings it back.
+   * "I don't care about …" is a view change: applied, it goes into docair.toml, and the documentation leaves the section out.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.result-view.ask "checks the hide request applies"
-   * @covers  docair-viewer.sections "checks hiding and undoing a section"
+   * @covers  docair-server.project.apply "checks the view change goes into docair.toml"
+   * @covers  docair-server.project.project-session.apply "checks the documentation is written again"
    ***/
-  test("I don't care about it hides it, and Undo shows it again", async ({ page }) => {
+  test("I don't care about it hides it, once applied", async ({ page }) => {
     const reply = await ask(page, "I don't care about the infrastructure");
-    await expect(reply.getByTestId('view-change')).toContainText('Hid infra');
-    const frame = page.frameLocator('[data-test="page"]');
-    await expect(frame.getByTestId('hidden-chip')).toHaveText('infra ×');
-    await reply.getByTestId('undo').click();
-    await expect(frame.getByTestId('hidden-bar')).toBeHidden();
-    await expect(reply).toContainText('undone');
+    await expect(reply.getByTestId('view-change')).toContainText('infra');
+    await reply.getByTestId('review').click();
+    await expect(reply.getByTestId('diff')).toContainText('+hide = ["infra"]');
+    await apply(page);
+    expect(fs.readFileSync(path.join(served.folder, 'docair.toml'), 'utf8')).toMatch(/hide = \["infra"\]/);
+    await go(page, '#layer/code');
+    await expect(page.locator('#pic svg.docair-pic[data-layer="code"]')).toBeAttached();
+    await expect(page.locator('#pic [data-id="tf.cluster"]')).toHaveCount(0);
   });
 
   /***
-   * A correction becomes an edit of a doc block: the diff can be reviewed and downloaded, and applying it regenerates the page.
+   * A correction becomes an edit of a doc block: the diff can be reviewed and downloaded, and applying it writes the project's file and the documentation again.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.result-view.apply "checks applying the edit regenerates the page"
-   * @covers  docair-web.result-view.patch "checks the edits become a diff"
-   * @covers  docair-server.patch "checks the server applies the edits"
+   * @covers  docair-server.project.apply "checks applying the edit writes the file"
    * @covers  docair-core.edit.patch "checks the files get new texts"
+   * @covers  docair-viewer.page_ai.reply_html "checks the edits, the diff and the patch"
    ***/
   test('a correction becomes an edit, applied to the code and the page', async ({ page }) => {
-    await expect(page.locator('.stats')).toContainText('8 edges');
+    // A read line runs from the store to the part that reads it.
+    const reads = (g: any) => g.edges.some((e: any) => e.kind === 'read' && e.from === 'orders-db' && e.to === 'orders.list');
+    expect(reads(servedGraph(served))).toBe(false);
     const reply = await ask(page, 'Listing orders also reads the orders table; that is missing.');
     await expect(reply.getByTestId('edits')).toContainText('orders.list');
     await reply.getByTestId('review').click();
@@ -93,82 +128,68 @@ test.describe('clarify with AI', () => {
     const [download] = await Promise.all([page.waitForEvent('download'), reply.getByTestId('download-patch').click()]);
     expect(download.suggestedFilename()).toBe('docair.patch');
     expect(fs.readFileSync(await download.path(), 'utf8')).toContain('diff --git a/api/src/lib.rs b/api/src/lib.rs');
-    await reply.getByTestId('apply').click();
-    await expect(page.locator('.stats')).toContainText('9 edges');
-    await expect(reply.getByTestId('apply')).toContainText('Applied');
+    await apply(page);
+    expect(fs.readFileSync(path.join(served.folder, 'api', 'src', 'lib.rs'), 'utf8')).toContain('@reads   orders-db -> Order');
+    expect(reads(servedGraph(served))).toBe(true);
+    await select(page, 'orders.list');
+    await expect(page.locator('#details')).toContainText('orders-db');
     await expect(page.getByTestId('msg-ai')).toHaveCount(1);
   });
 
   /***
-   * Word the lines: the model's words show on the chart at once, marked ✦, and applying them writes them into the doc blocks.
+   * Word the lines: the model's words are listed in the reply; applied, they are written into the doc blocks, and the documentation's lines carry them.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.result-view.word "checks the words show at once"
    * @covers  docair-server.word "checks the model words the lines"
    * @covers  docair-ai.word.word "checks the model fills the lines"
-   * @covers  docair-viewer.wording "checks the proposals show at once"
+   * @covers  docair-viewer.doc-page.chat "checks the words wait to be applied"
    ***/
-  test('Word the lines shows words at once and writes them into the code', async ({ page }) => {
-    const frame = page.frame({ url: /about:srcdoc/ }) ?? page.frames()[1];
-    const words = () =>
-      frame.evaluate(() => {
-        const D = (window as any).docair;
-        return D.state.graph.edges.filter((e: any) => e.kind === 'cover').map((e: any) => D.edgeText(e));
-      });
-    expect(await words()).toEqual(['tests', 'tests', 'tests']);
+  test('Word the lines lists the words and writes them into the code', async ({ page }) => {
+    const covers = (g: any) => g.edges.filter((e: any) => e.kind === 'cover').map((e: any) => e.text ?? '');
+    expect(covers(servedGraph(served))).not.toContain('checks Cart');
     await page.getByTestId('word-lines').click();
     const reply = page.getByTestId('msg-ai').last();
     await expect(reply.getByTestId('wording')).toContainText('Words for 3 lines');
-    await expect.poll(words).toContain('✦ checks Cart');
+    await expect(reply.getByTestId('wording')).toContainText('checks Cart');
     await reply.getByTestId('review').click();
     await expect(reply.getByTestId('diff')).toContainText('@covers  shop-ui.cart "checks Cart"');
-    await reply.getByTestId('apply').click();
-    await expect(reply.getByTestId('apply')).toContainText('Applied');
-    const fresh = () => (page.frame({ url: /about:srcdoc/ }) ?? page.frames()[1]).evaluate(() => {
-      const D = (window as any).docair;
-      return D?.state?.graph?.edges.filter((e: any) => e.kind === 'cover').map((e: any) => D.edgeText(e)) ?? [];
-    }).catch(() => []);
-    await expect.poll(fresh, { timeout: 20000 }).toContain('checks Cart');
+    await apply(page);
+    expect(covers(servedGraph(served))).toContain('checks Cart');
+    // The picture counts test lines ("1 test"); the test's details say what it checks.
+    await select(page, 'cart-spec.buying-stores-the-order');
+    await expect(page.locator('#details')).toContainText('checks Cart');
   });
 
   /***
-   * Explain the terms: the model's entries are underlined on the page at once, marked as proposed; applying them writes the glossary.
+   * Explain the terms: the model's entries are listed in the reply; applied, they are written into the glossary, and the documentation explains them.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.result-view.glossary "checks proposed terms show at once"
    * @covers  docair-server.glossary "checks the server asks for the entries"
    * @covers  docair-ai.glossary.explain "checks only terms of the docs are kept"
-   * @covers  docair-viewer.glossary-preview "checks the preview underlines the terms"
+   * @covers  docair-viewer.doc-page.chat "checks the entries wait to be applied"
    ***/
-  test('Explain the terms underlines them at once and writes the glossary', async ({ page }) => {
-    const frame = () => page.frame({ url: /about:srcdoc/ }) ?? page.frames()[1];
-    await frame().evaluate(() => (window as any).docair.select('orders-db', true));
+  test('Explain the terms lists the entries and writes the glossary', async ({ page }) => {
+    await select(page, 'orders-db');
     await page.getByTestId('explain-terms').click();
     const reply = page.getByTestId('msg-ai').last();
     await expect(reply.getByTestId('glossary-terms')).toContainText('2 terms explained');
     await expect(reply).toContainText('orders table');
     await expect(reply).toContainText('1 parts left out');
-    const f = page.frameLocator('[data-test="page"]');
-    await expect(f.locator('#details .term.preview[data-term="orders-table"]')).toBeVisible();
     await reply.getByTestId('review').click();
     await expect(reply.getByTestId('diff')).toContainText('+## orders table');
-    await reply.getByTestId('apply').click();
-    await expect(reply.getByTestId('apply')).toContainText('Applied');
-    await expect
-      .poll(() => frame().evaluate(() => (window as any).docair?.state?.graph?.glossary?.map((t: any) => t.term) ?? []).catch(() => []), { timeout: 20000 })
-      .toEqual(['order', 'cart', 'orders table', 'cart page']);
+    await apply(page);
+    expect(servedGraph(served).glossary.map((t: any) => t.term)).toEqual(['order', 'cart', 'orders table', 'cart page']);
+    await expect(page.getByTestId('glossary-button')).toContainText('Glossary (4)');
   });
 
   /***
-   * What is selected on the chart goes along with the question.
+   * What is selected goes along with the question.
    *
    * @part-of e2e.ask
-   * @covers  docair-web.chat-panel "checks the selection joins the question"
-   * @covers  docair-viewer.show-details "checks the picked part goes along"
+   * @covers  docair-viewer.doc-page.chat "checks the selection joins the question"
    ***/
   test('the selected part goes along as context', async ({ page }) => {
-    const frame = page.frame({ url: /about:srcdoc/ }) ?? page.frames()[1];
-    await frame.evaluate(() => (window as any).docair.select('orders.create', true));
+    await select(page, 'orders.create');
     await expect(page.getByTestId('context')).toContainText('create_order');
     // A question no other test asks: the fake model serves every test at once.
     await ask(page, 'How does checkout work for the selected part?');
@@ -177,6 +198,55 @@ test.describe('clarify with AI', () => {
       .map((r: any) => r.messages.filter((m: any) => m.role === 'user').at(-1).content as string)
       .filter((q: string) => q.includes('How does checkout work for the selected part?'))
       .at(-1);
-    expect(question).toContain('Selected on the chart: orders.create');
+    expect(question).toContain('orders.create');
+  });
+});
+
+/***
+ * The AI in an uploaded page: the server keeps the upload as a project, and the page in the web app asks it, applies edits to the server's copy and shows them.
+ *
+ * @id      e2e.ask-upload
+ * @kind    test
+ * @part-of e2e
+ ***/
+test.describe('clarify with AI in an uploaded page', () => {
+  test.skip(!withFakeAi, 'needs the fake model');
+
+  /***
+   * A question in the uploaded page gets a walkthrough to play; a correction is applied to the server's copy, the frame reloads with it, and the conversation stays.
+   *
+   * @part-of e2e.ask-upload
+   * @covers  docair-server.scan_upload "checks the upload is kept as a project"
+   * @covers  docair-server.kept_upload "checks the page asks and applies on the kept upload"
+   * @covers  docair-web.result-view "checks the frame shows the upload's page by its address"
+   ***/
+  test('an uploaded page asks the server that keeps it', async ({ page }) => {
+    await generate(page, fixture('shop'));
+    const f = page.frameLocator('[data-test="page"]');
+    const frame = () => page.frames().find((x) => x.url().includes('/api/projects/'))!;
+    expect(frame()).toBeTruthy();
+    await f.getByTestId('ask-button').click();
+    await expect(f.getByTestId('model')).toHaveText('fake-model');
+    const ask = async (question: string) => {
+      const before = await f.getByTestId('msg-ai').count();
+      await f.getByTestId('question').fill(question);
+      await f.getByTestId('question').press('Enter');
+      await expect(f.getByTestId('msg-ai')).toHaveCount(before + 1);
+      return f.getByTestId('msg-ai').last();
+    };
+    const walk = await ask('How does checkout work in the upload?');
+    await expect(walk.getByTestId('play')).toContainText('3 steps');
+    await expect(f.locator('body[data-ready="true"]')).toBeAttached();
+    await f.getByTestId('msg-ai').last().getByTestId('play').click();
+    await expect(f.getByTestId('step-card')).toContainText('step 1 of 3');
+    const fix = await ask('Listing orders also reads the orders table; that is missing.');
+    await expect(fix.getByTestId('edits')).toContainText('orders.list');
+    await fix.getByTestId('apply').click();
+    // The frame reloads from the server with the edit in; the conversation is kept.
+    await expect(f.getByTestId('msg-ai').last().getByTestId('apply')).toContainText('Applied');
+    await expect(f.getByTestId('msg-ai')).toHaveCount(2);
+    await frame().evaluate(() => (location.hash = '#part/orders.list'));
+    await expect(f.locator('#details .meta')).toContainText('orders.list');
+    await expect(f.locator('#details')).toContainText('orders-db');
   });
 });

@@ -28,7 +28,8 @@ printf '# Demo\n' > "$tmp/demo/README.md"
 code=$(curl -s -o "$tmp/scan.json" -w '%{http_code}' "$BASE/api/scan" \
   -F "file=@$tmp/demo/src/main.rs;filename=demo/src/main.rs" \
   -F "file=@$tmp/demo/README.md;filename=demo/README.md")
-if [ "$code" = 200 ] && jq -e '.system == "demo" and .nodes >= 2 and (.html | contains("docair-graph"))' "$tmp/scan.json" >/dev/null; then
+# The page drawn by the CLI holds its pictures packed (docair-packed).
+if [ "$code" = 200 ] && jq -e '.system == "demo" and .nodes >= 2 and (.html | contains("docair-packed"))' "$tmp/scan.json" >/dev/null; then
   pass "POST /api/scan turns an upload into a page ($(jq -r '"\(.nodes) nodes, \(.edges) edges"' "$tmp/scan.json"))"
 else
   fail "POST /api/scan answered $code: $(head -c 200 "$tmp/scan.json")"

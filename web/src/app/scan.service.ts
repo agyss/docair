@@ -28,8 +28,8 @@ export interface ScanResult {
   warnings: number;
   diagnostics: Diagnostic[];
   html: string;
-  /** The graph behind the page (docair.graph.json), sent back with a question. */
-  graph: object;
+  /** Where the server keeps the upload as a project: its page, which asks the AI and applies edits. */
+  page?: string;
 }
 
 /***

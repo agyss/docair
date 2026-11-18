@@ -36,3 +36,7 @@ input[type='file'] {
 app-progress-line {
   margin-top: 14px;
 }
+.error {
+  color: var(--error);
+  margin: 12px 0 0;
+}

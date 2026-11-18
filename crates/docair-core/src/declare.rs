@@ -648,9 +648,11 @@ fn same_http(h: &Http, e: &Http) -> bool {
     if h.same(&e) {
         return true;
     }
-    // `/orders/{id}` served behind a base path `/api` the description puts in front.
+    // `/orders/{id}` served behind a base path `/api` the description puts in front. A handler
+    // at `/` is no route behind a base path: it would match every route of the description.
     let extra = e.segments.len().saturating_sub(h.segments.len());
     extra > 0
+        && !h.segments.is_empty()
         && Route {
             anchored: true,
             segments: e.segments[extra..].to_vec(),
@@ -1122,5 +1124,19 @@ mod tests {
             &node("/api/orders/{id}")
         ));
         assert!(!same_route(&node("/api/orders"), &node("/api/orders/{id}")));
+    }
+
+    #[test]
+    fn a_handler_at_the_root_takes_no_other_route() {
+        let http = |method: &str, path: &str| Http {
+            method: method.into(),
+            path: path.into(),
+        };
+        assert!(same_http(&http("GET", "/"), &http("GET", "/")));
+        assert!(!same_http(&http("GET", "/"), &http("GET", "/api/version")));
+        assert!(same_http(
+            &http("GET", "/orders/{id}"),
+            &http("GET", "/api/orders/{id}")
+        ));
     }
 }

@@ -2,10 +2,10 @@ import { Component, DestroyRef, computed, inject, input, signal } from '@angular
 
 /**
  * What a generation waits for, in order: the dropped folder is read (`read`), the files go up
- * (`upload`), docair reads them on the server (`scan`), the page comes back (`download`) and
- * lays itself out (`draw`).
+ * (`upload`), docair reads them on the server (`scan`), and the page comes back (`download`).
+ * The page was laid out and drawn by docair already; it only shows.
  */
-export type Phase = 'read' | 'upload' | 'scan' | 'download' | 'draw';
+export type Phase = 'read' | 'upload' | 'scan' | 'download';
 
 /** Where one generation is. */
 export interface Progress {
@@ -16,14 +16,12 @@ export interface Progress {
   total?: number;
   /** Files in the upload. */
   files?: number;
-  /** What the page draws, as it says: its layer, parts and lines. */
-  what?: string;
   /** When this phase began (`Date.now()`). */
   since: number;
 }
 
-/** The four steps after Generate; reading a dropped folder comes before them. */
-const STEPS: Phase[] = ['upload', 'scan', 'download', 'draw'];
+/** The three steps after Generate; reading a dropped folder comes before them. */
+const STEPS: Phase[] = ['upload', 'scan', 'download'];
 
 function size(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -31,7 +29,7 @@ function size(bytes: number): string {
 }
 
 /***
- * Tells the user where a generation is: which of its four steps runs now, how far it got, and
+ * Tells the user where a generation is: which of its three steps runs now, how far it got, and
  * for how long. A step that knows its size fills a bar; one that can only wait shows a moving
  * bar and counts the seconds.
  *
@@ -57,7 +55,7 @@ export class ProgressLine {
     inject(DestroyRef).onDestroy(() => clearInterval(timer));
   }
 
-  /** 1–4, or 0 while the folder is read. */
+  /** 1–3, or 0 while the folder is read. */
   protected readonly step = computed(() => STEPS.indexOf(this.progress().phase) + 1);
   protected readonly seconds = computed(() => Math.max(0, Math.floor((this.now() - this.progress().since) / 1000)));
   /** 0–100 when the step knows how far it is; null while it can only wait. */
@@ -78,15 +76,13 @@ export class ProgressLine {
         return `docair reads the ${p.files ? `${p.files} ` : ''}files on the server`;
       case 'download':
         return `Receiving the page · ${size(p.done ?? 0)}${p.total ? ` of ${size(p.total)}` : ''}`;
-      case 'draw':
-        return `Drawing the page${p.what ? `: ${p.what}` : ''}`;
     }
   });
   /** Seconds, for the steps that wait; a hint once a wait is long. */
   protected readonly time = computed(() => {
     const p = this.progress();
     const s = this.seconds();
-    if ((p.phase !== 'scan' && p.phase !== 'draw') || s < 1) return '';
+    if (p.phase !== 'scan' || s < 1) return '';
     return ` · ${s} s${p.phase === 'scan' && s >= 10 ? ' · big projects take a while' : ''}`;
   });
 }

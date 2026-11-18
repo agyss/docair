@@ -1,8 +1,7 @@
 #***
-# Renders the graph into one self-contained HTML file.
-#
-# The page inlines Cytoscape.js (drawing, interaction) and ELK
-# (hierarchical layout), so it works offline and can be mailed or archived.
+# Renders the graph into one self-contained HTML file: every picture laid out
+# (docair-layout) and drawn as SVG by the CLI, the panels around them, and a
+# thin script that shows them, so it works offline and can be mailed or archived.
 #
 # @id      docair-viewer
 # @kind    module
@@ -17,6 +16,13 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 docair-core.workspace = true
+docair-layout = { workspace = true, features = ["serde"] }
+miniz_oxide.workspace = true
 pulldown-cmark = { workspace = true, features = ["html"] }
 serde_json.workspace = true
+
+[dev-dependencies]
+# The e2e fixtures' graphs, for the golden pictures (tests/svg.rs).
+docair-adapters.workspace = true

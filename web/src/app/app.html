@@ -6,7 +6,7 @@
   @part-of docair-web.app
 ***-->
 @if (result(); as r) {
-  <app-result-view [result]="r" [files]="files()" [busy]="busy()" [progress]="progress()" (closed)="reset()" (regenerate)="generate($event)" />
+  <app-result-view [result]="r" (closed)="reset()" />
   @if (error()) {
     <p class="error floating" data-test="error">{{ error() }}</p>
   }
@@ -37,7 +37,7 @@
       <div class="step">
         <span class="num">3</span>
         <h3>Ask, and fix the docs</h3>
-        <p>Ask how something works and follow the walkthrough on the chart. Tell docair what is wrong or missing; review the edit and apply it to the code.</p>
+        <p>Ask how something works and follow the walkthrough, or tell docair what is wrong or missing: review the edit, apply it to the server's copy, and download the patch for your code. In your own project, <code>docair serve</code> applies it to the files, and <code>docair ask</code> and <code>docair chat</code> do the same in the terminal.</p>
       </div>
     </section>
 

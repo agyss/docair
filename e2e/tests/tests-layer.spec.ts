@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { drawn, openStatic } from './helpers';
+import { openStatic, pictured, select } from './helpers';
 
 /***
  * Tests on the page: what is covered, did it pass, and a switch to leave tests out.
@@ -10,46 +10,44 @@ import { drawn, openStatic } from './helpers';
  ***/
 test.describe('tests in the docs', () => {
   /***
-   * Test nodes carry the result of their last run, and the Tests switch hides and shows them.
+   * Test nodes carry the result of their last run, and the Tests switch shows each picture without them, as docair drew it, and back.
    *
    * @part-of e2e.tests
-   * @covers  docair-viewer.tests-layer "checks the switch hides the tests"
+   * @covers  docair-viewer.doc_page.spots "checks each picture is drawn with tests and without"
+   * @covers  docair-viewer.doc-page.show "checks the switch shows the other picture, keeping the view"
    * @covers  docair-core.test_results.attach "checks results land on test nodes"
    ***/
   test('tests show with their results and can be hidden', async ({ page }) => {
-    await openStatic(page, 'shop');
-    await page.evaluate(() => (window as any).docair.showLayer('code'));
+    await openStatic(page, 'shop', '#layer/code');
     const toggle = page.getByTestId('tests-toggle');
     await expect(toggle).toContainText('✓1');
     await expect(toggle).toContainText('✗1');
-    const classes = await page.evaluate(() => {
-      const cy = (window as any).docair.state.cy;
-      return ['cart-spec.buying-stores-the-order', 'cart-spec.the-total-adds-up'].map((id) => cy.getElementById(id).classes().join(' '));
-    });
-    expect(classes[0]).toContain('t-passed');
-    expect(classes[1]).toContain('t-failed');
+    await expect(toggle).toHaveClass(/\bon\b/);
+    await expect(page.locator('#pic g.part[data-id="cart-spec.buying-stores-the-order"]')).toHaveClass(/t-passed/);
+    await expect(page.locator('#pic g.part[data-id="cart-spec.the-total-adds-up"]')).toHaveClass(/t-failed/);
     await toggle.click();
-    await expect(toggle).toContainText('hidden');
-    await expect.poll(() => drawn(page)).not.toContain('shop-tests');
-    expect(await drawn(page)).not.toContain('cart-spec.buying-stores-the-order');
+    await expect(toggle).not.toHaveClass(/\bon\b/);
+    await expect(toggle.locator('.tests-off')).toBeVisible();
+    await expect.poll(() => pictured(page)).not.toContain('shop-tests');
+    expect(await pictured(page)).not.toContain('cart-spec.buying-stores-the-order');
+    expect(await pictured(page)).toContain('orders.create');
     await toggle.click();
-    await expect.poll(() => drawn(page)).toContain('cart-spec.buying-stores-the-order');
+    await expect.poll(() => pictured(page)).toContain('cart-spec.buying-stores-the-order');
   });
 
   /***
    * The details of a part list the tests that cover it, with their results.
    *
    * @part-of e2e.tests
-   * @covers  docair-viewer.show-details "checks the details list covering tests"
-   * @covers  docair-viewer.tests-layer "checks the tests show again"
+   * @covers  docair-viewer.page_panels.look.details "checks the details list covering tests"
    ***/
   test('a part lists the tests that cover it', async ({ page }) => {
     await openStatic(page, 'shop');
-    await page.evaluate(() => (window as any).docair.select('orders.create', true));
+    await select(page, 'orders.create');
     const list = page.getByTestId('tested-by');
     await expect(list).toContainText('buying stores the order');
     await expect(list).toContainText('passed');
-    await page.evaluate(() => (window as any).docair.select('shop-ui', true));
+    await select(page, 'shop-ui');
     await expect(page.getByTestId('tested-by')).toContainText('the total adds up');
     await expect(page.getByTestId('tested-by')).toContainText('failed');
   });

@@ -20,6 +20,9 @@
   @if (reading(); as r) {
     <app-progress-line [progress]="r" />
   }
+  @if (problem()) {
+    <p class="error" data-test="pick-error">{{ problem() }}</p>
+  }
 
   @if (files().length) {
     <p class="picked" data-test="picked">

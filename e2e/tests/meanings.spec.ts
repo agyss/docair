@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { docair, fakeAi, fixture, openStatic, out, withFakeAi } from './helpers';
+import { docair, fakeAi, fixture, openStatic, out, select, withFakeAi } from './helpers';
 
 const env = { ...process.env, DOCAIR_AI_ENDPOINT: `${fakeAi}/v1`, DOCAIR_AI_MODEL: 'fake-model', DOCAIR_AI_API_KEY: 'fake-key' };
 const run = (...args: string[]) => execFileSync(docair, args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -27,12 +27,12 @@ test.describe('what the words mean, the code first', () => {
    *
    * @part-of e2e.meanings
    * @covers  docair-core.meanings.settle "checks a word from the code becomes a term with its part and section"
-   * @covers  docair-viewer.term-from "checks the hover names the part"
-   * @covers  docair-viewer.reader "checks Read more opens the doc heading"
+   * @covers  docair-viewer.doc-page.popups "checks the hover names the part"
+   * @covers  docair-viewer.doc-page.reader "checks Read more opens the doc heading"
    ***/
   test('a word the code defines explains itself and names its part', async ({ page }) => {
     await openStatic(page, 'words');
-    await page.evaluate(() => (window as any).docair.select('books.ledger.record', true));
+    await select(page, 'books.ledger.record');
     const entry = page.locator('#details .term[data-term="entry"]');
     await expect(entry).toHaveText('entry');
     await entry.hover();
@@ -44,7 +44,7 @@ test.describe('what the words mean, the code first', () => {
     await page.getByTestId('reader-close').click();
 
     // "audit" is decided to be an everyday word: never underlined.
-    await page.evaluate(() => (window as any).docair.select('books.audit.compare', true));
+    await select(page, 'books.audit.compare');
     await expect(page.locator('#details .term[data-term="entry"]')).toHaveText('entries');
     await expect(page.locator('#details .term', { hasText: 'audit' })).toHaveCount(0);
   });
@@ -53,12 +53,12 @@ test.describe('what the words mean, the code first', () => {
    * A glossary entry not checked against the code that defines its word shows the code's words first, and the glossary's below, marked; the list marks words from code.
    *
    * @part-of e2e.meanings
-   * @covers  docair-viewer.glossary "checks the list marks words from the code"
+   * @covers  docair-viewer.page_glossary.glossary "checks the list marks words from the code"
    * @covers  docair-core.meanings.load "checks the decisions are read"
    ***/
   test('an unchecked glossary entry gives way to the code', async ({ page }) => {
     await openStatic(page, 'words');
-    await page.evaluate(() => (window as any).docair.select('books.ledger.record', true));
+    await select(page, 'books.ledger.record');
     await page.locator('#details .term[data-term="ledger"]').click();
     await expect(page.getByTestId('term-title')).toContainText('ledger');
     await expect(page.locator('#details')).toContainText('The record of all payments, newest first.');

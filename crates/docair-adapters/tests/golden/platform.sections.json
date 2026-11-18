@@ -1,0 +1,503 @@
+[
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "k8s.cluster.dev"
+    ],
+    "parts": [
+      {
+        "id": "terraform",
+        "closed": true,
+        "holds": 3
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.ns.traefik",
+        "parent": "k8s.cluster.dev",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "k8s.ns.shop",
+        "parent": "k8s.cluster.dev",
+        "closed": true,
+        "holds": 8
+      }
+    ],
+    "lines": [
+      {
+        "from": "k8s.ns.traefik",
+        "to": "k8s.ns.shop",
+        "kind": "data",
+        "members": [
+          0
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.ns.traefik",
+        "kind": "create",
+        "members": [
+          7
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.ns.shop",
+        "kind": "create",
+        "members": [
+          10
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "network",
+    "opened": [
+      "k8s.deploy.api"
+    ],
+    "parts": [
+      {
+        "id": "k8s.deploy.api",
+        "parent": "k8s.release.shop",
+        "open": true
+      },
+      {
+        "id": "k8s.svc.api",
+        "parent": "k8s.release.shop"
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.release.shop",
+        "parent": "k8s.ns.shop",
+        "open": true
+      },
+      {
+        "id": "k8s.ns.shop",
+        "parent": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "api",
+        "parent": "k8s.deploy.api"
+      }
+    ],
+    "lines": [
+      {
+        "from": "k8s.svc.api",
+        "to": "k8s.deploy.api",
+        "kind": "select",
+        "members": [
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "network",
+    "opened": [
+      "k8s.deploy.web"
+    ],
+    "parts": [
+      {
+        "id": "k8s.deploy.web",
+        "parent": "k8s.release.shop",
+        "open": true
+      },
+      {
+        "id": "k8s.svc.web",
+        "parent": "k8s.release.shop"
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.release.shop",
+        "parent": "k8s.ns.shop",
+        "open": true
+      },
+      {
+        "id": "k8s.ns.shop",
+        "parent": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "web",
+        "parent": "k8s.deploy.web"
+      }
+    ],
+    "lines": [
+      {
+        "from": "k8s.svc.web",
+        "to": "k8s.deploy.web",
+        "kind": "select",
+        "members": [
+          4
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "infra",
+    "opened": [
+      "k8s.ns.shop"
+    ],
+    "parts": [
+      {
+        "id": "terraform",
+        "closed": true,
+        "holds": 3
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.release.shop",
+        "parent": "k8s.ns.shop",
+        "closed": true,
+        "holds": 7
+      },
+      {
+        "id": "k8s.ns.shop",
+        "parent": "k8s.cluster.dev",
+        "open": true
+      }
+    ],
+    "lines": [
+      {
+        "from": "terraform",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.release.shop",
+        "kind": "create",
+        "members": [
+          10
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "infra",
+    "opened": [
+      "k8s.ns.traefik"
+    ],
+    "parts": [
+      {
+        "id": "terraform",
+        "closed": true,
+        "holds": 3
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.release.traefik",
+        "parent": "k8s.ns.traefik"
+      },
+      {
+        "id": "k8s.ns.traefik",
+        "parent": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.ns.shop",
+        "parent": "k8s.cluster.dev",
+        "closed": true,
+        "holds": 8
+      }
+    ],
+    "lines": [
+      {
+        "from": "k8s.release.traefik",
+        "to": "k8s.ns.shop",
+        "kind": "data",
+        "members": [
+          0
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.release.traefik",
+        "kind": "create",
+        "members": [
+          7
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.ns.shop",
+        "kind": "create",
+        "members": [
+          10
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "k8s",
+    "opened": [
+      "k8s.release.shop"
+    ],
+    "parts": [
+      {
+        "id": "k8s.deploy.api",
+        "parent": "k8s.release.shop",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "k8s.deploy.web",
+        "parent": "k8s.release.shop",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "k8s.ingress.shop",
+        "parent": "k8s.release.shop"
+      },
+      {
+        "id": "k8s.svc.api",
+        "parent": "k8s.release.shop"
+      },
+      {
+        "id": "k8s.svc.web",
+        "parent": "k8s.release.shop"
+      },
+      {
+        "id": "terraform",
+        "closed": true,
+        "holds": 3
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "k8s.ns.traefik",
+        "parent": "k8s.cluster.dev",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "k8s.release.shop",
+        "parent": "k8s.ns.shop",
+        "open": true
+      },
+      {
+        "id": "k8s.ns.shop",
+        "parent": "k8s.cluster.dev",
+        "open": true
+      },
+      {
+        "id": "shopper"
+      }
+    ],
+    "lines": [
+      {
+        "from": "k8s.ns.traefik",
+        "to": "k8s.ingress.shop",
+        "kind": "data",
+        "members": [
+          0
+        ],
+        "bundled": true
+      },
+      {
+        "from": "k8s.ingress.shop",
+        "to": "k8s.svc.api",
+        "kind": "route",
+        "members": [
+          1
+        ]
+      },
+      {
+        "from": "k8s.ingress.shop",
+        "to": "k8s.svc.web",
+        "kind": "route",
+        "members": [
+          2
+        ]
+      },
+      {
+        "from": "k8s.svc.api",
+        "to": "k8s.deploy.api",
+        "kind": "select",
+        "members": [
+          3
+        ]
+      },
+      {
+        "from": "k8s.svc.web",
+        "to": "k8s.deploy.web",
+        "kind": "select",
+        "members": [
+          4
+        ]
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.ns.traefik",
+        "kind": "create",
+        "members": [
+          7
+        ],
+        "bundled": true
+      },
+      {
+        "from": "terraform",
+        "to": "k8s.release.shop",
+        "kind": "create",
+        "members": [
+          10
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shopper",
+        "to": "k8s.ingress.shop",
+        "kind": "call",
+        "members": [
+          11
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "terraform"
+    ],
+    "parts": [
+      {
+        "id": "terraform",
+        "open": true
+      },
+      {
+        "id": "tf.kind_cluster.dev",
+        "parent": "terraform"
+      },
+      {
+        "id": "k8s.cluster.dev",
+        "closed": true,
+        "holds": 11
+      },
+      {
+        "id": "tf.helm_release.ingress",
+        "parent": "terraform"
+      },
+      {
+        "id": "tf.helm_release.shop",
+        "parent": "terraform"
+      }
+    ],
+    "lines": [
+      {
+        "from": "tf.kind_cluster.dev",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          5
+        ]
+      },
+      {
+        "from": "tf.kind_cluster.dev",
+        "to": "tf.helm_release.ingress",
+        "kind": "data",
+        "members": [
+          6
+        ]
+      },
+      {
+        "from": "tf.helm_release.ingress",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          7
+        ],
+        "bundled": true
+      },
+      {
+        "from": "tf.helm_release.ingress",
+        "to": "tf.helm_release.shop",
+        "kind": "data",
+        "members": [
+          8
+        ]
+      },
+      {
+        "from": "tf.kind_cluster.dev",
+        "to": "tf.helm_release.shop",
+        "kind": "data",
+        "members": [
+          9
+        ]
+      },
+      {
+        "from": "tf.helm_release.shop",
+        "to": "k8s.cluster.dev",
+        "kind": "create",
+        "members": [
+          10
+        ],
+        "bundled": true
+      }
+    ]
+  }
+]

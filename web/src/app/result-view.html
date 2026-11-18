@@ -27,20 +27,7 @@
       </details>
     }
 
-    @if (busy()) {
-      <span class="regen" data-test="regenerating">
-        @if (progress(); as p) {
-          <app-progress-line [progress]="p" [compact]="true" />
-        } @else {
-          Generating the page again…
-        }
-      </span>
-    }
-
     <div class="actions">
-      @if (ai()?.enabled) {
-        <button class="button" [class.on]="chatOpen()" (click)="chatOpen.set(!chatOpen())" data-test="chat-toggle">✦ Ask docair</button>
-      }
       <button class="button primary" (click)="closed.emit()" data-test="new-upload">New upload</button>
       <button class="button" (click)="open()">Open in a new tab</button>
       <button class="button secondary" (click)="download()">Download</button>
@@ -48,33 +35,12 @@
   </header>
 
   <div class="body">
-    <div class="frame">
-      <iframe #frame title="docair page" sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox" [srcdoc]="page()" (load)="frameLoaded()" data-test="page"></iframe>
-      @if (drawing(); as d) {
-        <div class="drawing" data-test="drawing-page">
-          <div class="card"><app-progress-line [progress]="d" /></div>
-        </div>
+    <div class="frame" [attr.data-ready]="ready()" data-test="frame">
+      @if (src(); as at) {
+        <iframe #frame title="docair page" sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox" [src]="at" data-test="page"></iframe>
+      } @else {
+        <iframe #frame title="docair page" sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox" [srcdoc]="page()" data-test="page"></iframe>
       }
     </div>
-    @if (ai()?.enabled && chatOpen()) {
-      <app-chat-panel
-        class="side"
-        [entries]="chat.entries()"
-        [busy]="chat.busy()"
-        [model]="ai()?.model ?? ''"
-        [context]="selection()"
-        (asked)="ask($event)"
-        (closed)="chatOpen.set(false)"
-        (play)="play($event)"
-        (saveWalkthrough)="saveWalkthrough($event)"
-        (undo)="undo($event)"
-        (review)="review($event)"
-        (apply)="apply($event)"
-        (downloadPatch)="downloadPatch($event)"
-        (clearContext)="selection.set(null)"
-        (wordLines)="wordLines()"
-        (explainTerms)="explainTerms()"
-      />
-    }
   </div>
 </section>

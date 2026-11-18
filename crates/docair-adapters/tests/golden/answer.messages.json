@@ -1,0 +1,90 @@
+[
+  [
+    {
+      "kind": "data",
+      "id": "data.summary"
+    },
+    [
+      [],
+      [
+        {
+          "kind": "return",
+          "edge": 1,
+          "who": [
+            "summarize",
+            "answers",
+            "ask"
+          ],
+          "why": "with String",
+          "token": "String",
+          "has": "String from summarize"
+        }
+      ],
+      [
+        {
+          "kind": "call",
+          "edge": 2,
+          "who": [
+            "ask",
+            "calls",
+            "model"
+          ],
+          "why": "asks the model",
+          "carry": "sends question + summary · gets answer back",
+          "token": "question + summary"
+        }
+      ],
+      [
+        {
+          "kind": "call",
+          "edge": 4,
+          "who": [
+            "report",
+            "calls",
+            "mail"
+          ],
+          "why": "mails the report",
+          "carry": "sends summary",
+          "token": "summary"
+        }
+      ]
+    ]
+  ],
+  [
+    {
+      "kind": "data",
+      "id": "data.answer"
+    },
+    [
+      [],
+      [
+        {
+          "kind": "return",
+          "edge": 2,
+          "who": [
+            "model",
+            "answers",
+            "ask"
+          ],
+          "why": "with answer",
+          "token": "answer",
+          "has": "answer from model"
+        }
+      ],
+      [
+        {
+          "kind": "return",
+          "edge": 0,
+          "who": [
+            "ask",
+            "answers",
+            "asker"
+          ],
+          "why": "with answer",
+          "token": "answer",
+          "has": "answer from ask"
+        }
+      ]
+    ]
+  ]
+]

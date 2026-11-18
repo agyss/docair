@@ -22,6 +22,18 @@ function useful(path: string): boolean {
   return !parts.some((part) => SKIPPED.includes(part)) && !secret(parts[parts.length - 1]);
 }
 
+/** What to say when a picked file cannot be read: it changed or went away after it was picked. */
+export const CHANGED = 'A file changed while it was read; pick the folder again.';
+
+/**
+ * The file's bytes as they are now, in memory: a file that changes on disk after this cannot break
+ * the upload (the browser would send it as it is at send time, and the sizes would no longer agree).
+ */
+async function kept(f: PickedFile): Promise<PickedFile> {
+  const bytes = await f.file.arrayBuffer();
+  return { path: f.path, file: new File([bytes], f.file.name, { type: f.file.type, lastModified: f.file.lastModified }) };
+}
+
 /** All files under a dropped file or folder, with their paths; `found` hears of each one. */
 async function filesOf(entry: FileSystemEntry, found: () => void = () => {}): Promise<PickedFile[]> {
   if (entry.isFile) {
@@ -68,6 +80,8 @@ export class UploadPanel {
 
   /** A dropped folder being read: how many files so far. */
   protected readonly reading = signal<Progress | null>(null);
+  /** Why the picked files could not be taken. */
+  protected readonly problem = signal('');
 
   protected readonly files = signal<PickedFile[]>([]);
   protected readonly skipped = signal(0);
@@ -84,10 +98,11 @@ export class UploadPanel {
    * @id      docair-web.upload-panel.pick
    * @part-of docair-web.upload-panel
    ***/
-  protected pick(event: Event): void {
+  protected async pick(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
-    this.take(Array.from(input.files ?? []).map((file) => ({ path: file.webkitRelativePath || file.name, file })));
+    const picked = Array.from(input.files ?? []).map((file) => ({ path: file.webkitRelativePath || file.name, file }));
     input.value = '';
+    await this.take(picked);
   }
 
   /***
@@ -106,7 +121,10 @@ export class UploadPanel {
     let found = 0;
     this.reading.set({ phase: 'read', done: 0, since });
     try {
-      this.take((await Promise.all(entries.map((e) => filesOf(e, () => this.reading.set({ phase: 'read', done: ++found, since }))))).flat());
+      await this.take((await Promise.all(entries.map((e) => filesOf(e, () => this.reading.set({ phase: 'read', done: ++found, since }))))).flat());
+    } catch {
+      this.files.set([]);
+      this.problem.set(CHANGED);
     } finally {
       this.reading.set(null);
     }
@@ -117,9 +135,33 @@ export class UploadPanel {
     this.dragging.set(true);
   }
 
-  private take(picked: PickedFile[]): void {
-    const kept = picked.filter((p) => useful(p.path) && p.file.size <= MAX_FILE_BYTES);
-    this.skipped.set(picked.length - kept.length);
-    this.files.set(kept);
+  /***
+   * Keep the useful files, with their bytes as they are now, so the upload sends what was picked.
+   *
+   * @id      docair-web.upload-panel.take
+   * @part-of docair-web.upload-panel
+   ***/
+  private async take(picked: PickedFile[]): Promise<void> {
+    const wanted = picked.filter((p) => useful(p.path) && p.file.size <= MAX_FILE_BYTES);
+    this.problem.set('');
+    this.files.set([]);
+    const since = Date.now();
+    let read = 0;
+    this.reading.set({ phase: 'read', done: 0, since });
+    try {
+      const files = await Promise.all(
+        wanted.map(async (f) => {
+          const k = await kept(f);
+          this.reading.set({ phase: 'read', done: ++read, since });
+          return k;
+        }),
+      );
+      this.skipped.set(picked.length - files.length);
+      this.files.set(files);
+    } catch {
+      this.problem.set(CHANGED);
+    } finally {
+      this.reading.set(null);
+    }
   }
 }

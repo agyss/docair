@@ -129,7 +129,7 @@ Every code: [SPEC §8](SPEC.md#8-diagnostics-stage-6-check).
 ## layer
 
 Also: layers
-See: docair-viewer.show-layer, docair-viewer.layer-view
+See: docair-core.layer_view.layers, docair-core.layer_view.picture
 
 One concern of the system at a time: the overview, the infrastructure, the
 network, Kubernetes, the apps or the code. A layer draws the parts its question
@@ -176,14 +176,14 @@ Also: patches
 See: docair-core.edit.patch
 
 The edits the AI model proposes for the doc blocks, as a unified diff
-(`.docair/docair.patch`). `git apply` takes it, `docair apply` writes it, the
-web app applies it and generates the page again.
+(`.docair/docair.patch`). `git apply` takes it, `docair apply` writes it, and
+Apply in the page (with `docair serve`) writes it and the documentation again.
 
 [SPEC §10.6](SPEC.md#106-feeding-edits-back-to-the-code)
 
 ## glossary
 
-See: docair-core.glossary.parse, docair-viewer.glossary
+See: docair-core.glossary.parse, docair-viewer.page_glossary.glossary
 
 This list: what the words of the docs mean. Any `GLOSSARY.md` is one;
 `docair glossary` lets the model add the terms that are missing.
@@ -254,11 +254,11 @@ routes. [tree-sitter docs](https://tree-sitter.github.io/tree-sitter/)
 
 ## ELK
 
-See: docair-viewer.top-down
+See: docair-layout
 
-The Eclipse Layout Kernel: it places the parts inside each box of the chart,
-one box at a time, with room for the words of their lines. docair sizes the
-boxes and draws the lines itself.
+The Eclipse Layout Kernel, which placed the parts inside each box of the chart
+in the browser until docs/SLICES.md step 5. docair lays out its pictures
+itself now, in the CLI (docair-layout).
 [elkjs](https://github.com/kieler/elkjs)
 
 ## docair.toml
@@ -277,14 +277,14 @@ The JSON file a scan writes: the whole graph with its nodes, edges and diagnosti
 
 See: docair-viewer.write_html, docair-viewer.render_html, html-file
 
-The self-contained HTML page docair produces: graph, rendered Markdown, viewer code and libraries all inlined, so it works offline and can be mailed or archived.
+The self-contained HTML page docair produces: every picture laid out and drawn as SVG by the CLI, the panels around them and a thin script, all inlined, so it works offline and can be mailed or archived.
 
 ## Cytoscape.js
 
 Also: Cytoscape
-See: docair-viewer, docair-viewer.page
+See: docair-viewer, docair-viewer.svg
 
-A JavaScript library for drawing graphs and interacting with them. The docair page inlines it to draw the chart and handle selecting, zooming and hiding. [Read more](https://js.cytoscape.org/)
+A JavaScript library for drawing graphs and interacting with them, which drew the chart in the browser until docs/SLICES.md step 5. The CLI draws every picture as SVG now. [Read more](https://js.cytoscape.org/)
 
 ## Playwright
 

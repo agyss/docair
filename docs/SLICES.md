@@ -65,8 +65,9 @@ carries a datum says how docair knows:
 | `typed` | the code says it: what one call returns, the next one takes (docair-4wk.19) | yes |
 
 **What it covers.** A slice counts the lines that carry its datum, and how
-many of them it reaches from where the datum is made. `docair check` warns
-when a datum's slice misses some (a new warning code, next to W109).
+many of them it reaches from where the datum is made. `docair check
+--coverage` prints it for every datum. It is no warning: a stretch of its own
+is often right, for a datum that comes in from outside or that two parts make.
 
 **The boxes.** A slice opens only the boxes its parts are in, down to the
 parts. The other parts of an open box are left out and counted on it
@@ -88,7 +89,7 @@ parts. The other parts of an open box are left out and counted on it
 }
 ```
 
-The fields are a sketch; step 1 fixes them.
+Step 1 (docair-702.1) built it; SPEC §3.7 has the fields and an example.
 
 ## 4. The documentation the CLI writes
 
@@ -101,7 +102,7 @@ CLI, and written into the HTML. Nothing is laid out in the browser.
 | a section for each box, at its layer | 158 boxes |
 | a slice for each datum | 9 |
 | a slice for each walk | 7 scenarios, 1 walkthrough |
-| a slice for each part with a line | 858 parts |
+| a slice for each part with a line that holds no parts | 859 parts (a box has its section) |
 
 **Moving around.** Opening a box is a link to the box's section; scrolling
 into a box follows the same link. The breadcrumb, the tree, the search, a
@@ -154,6 +155,43 @@ box's parts, knowing on which side each line leaves; then docair's own router
 Goal, measured in step 3: a slice of up to 50 parts in 100 ms or less; all
 pictures of docair's documentation in under 10 s.
 
+**Measured in step 3** (docair's own graph, 2026-11-18, release build):
+
+| | Result | Goal |
+|-|--------|------|
+| a slice of up to 50 parts | 60 ms at most | 100 ms ✓ |
+| the slowest slice (data.graph, 102 parts, 108 lines) | 149 ms | |
+| all 1 017 slices | 1.5 s | |
+| all 1 023 pictures, laid out | 11.8 s, of which Code 10.2 s | 10 s ✗ |
+| all 1 023 pictures, from the kept layouts | 0.12 s | |
+
+**Placement against dagre** (docair-702.9). 45 pictures of docair: its 24
+data, route, scenario and walkthrough slices, the 16 part slices with the
+most lines, and the five smaller layers. Both placements routed by docair's
+router, crossings and bends counted on the routed lines.
+
+| | Crossings | Bends | Area |
+|-|-----------|-------|------|
+| docair-layout after step 3 | 1 205 | 2 532 | 34 Mpx² |
+| a part with many lines as wide as they need | 583 | 1 953 | 35 Mpx² |
+| … and lines leaving a box as nodes in a layer before or after it | 552 | 1 940 | 35 Mpx² |
+| … and the direction chosen by the price of the routed lines | 398 | 1 645 | 37 Mpx² |
+| … and dagre's median positions and alternating ties | **332** | **1 621** | 36 Mpx² |
+| dagre 0.1.2, same part sizes | 647 | 1 782 | 140 Mpx² |
+| dagre 0.1.2, parts as wide as their lines need | 286 | 1 372 | 141 Mpx² |
+
+Tried and left out: network simplex layers (883 → 888 crossings; the median
+moves of single parts already find nearly the shortest layers in boxes this
+small), keeping the last of equally good orders (more crossings), crossings
+weighted by line weight (no change). With the same part sizes, dagre has
+14 % fewer crossings, but its pictures are four times as large, its nested
+boxes overlap one another, and it leaves out lines that end at a box; per
+picture it does better on 12, worse on 10, the same on 23.
+
+What misses the time goal is the whole Code layer, which a reader rarely
+wants; bundles (BUNDLES.md) or fewer rounds for big pictures would cut it,
+decided when step 5 shows how often it is drawn.
+
 ## 6. Drawing in Rust
 
 Each picture is one SVG:
@@ -185,22 +223,67 @@ Its budget is 1,000 lines, checked by a test.
 
 ## 8. The AI in the HTML: `docair serve`
 
-`docair serve` runs the CLI as a web server. It takes over docair-server's
-routes (`/api/scan`, `/api/ask` and the others) and serves the documentation.
+`docair serve [root] [--bind 127.0.0.1:8765] [--app <dir>]` runs the CLI as a
+web server for one project (docair-702.6.2, built). The server is
+docair-server's router with the project in its settings, so every route has
+one implementation: the docair-server program (uploads, in the cluster) and
+`docair serve` (a project, on a developer's machine) are two ways to start
+it. It writes the project's documentation when it starts, and again:
 
-* The chat, apply and preview panels move from the web app into the HTML.
-  The CLI writes them; the script sends and shows.
-* An answer that brings a walkthrough, or an applied edit, makes the server
-  write the documentation again. Kept layouts make that quick, and the page
-  shows the pictures that changed.
-* Writing again starts with a scan: 6.0 s on docair, 5.5 s of it the Rust
-  code index (rust-analyzer's SCIP). Keeping the index per hash of the files
-  it reads (ADAPTERS.md §11) makes it quick; that is an issue of its own.
-* The HTML finds the server at its own address when the server serves it.
-  Opened as a file, it asks for the server's address. Without a server it
-  works fully, minus the AI, and says so where the AI would be.
-* The web app keeps the upload, the progress and the frame that shows the
-  HTML. The messages between page and app shrink to `ready`.
+* when the project's files change (it looks every second at names, sizes and
+  times, outside `.docair`, `target`, `node_modules` and hidden folders);
+* after an answer that brings a walkthrough (recorded in the walkthroughs
+  folder, as `docair ask` does);
+* after edits are applied.
+
+Writing again starts with a scan: on docair 0.7 s when the code index is kept
+(docair-rc8), 7 s when the code changed and rust-analyzer runs again; kept
+layouts make the pictures quick.
+
+| Route | Request | Answer |
+|-------|---------|--------|
+| `GET /` | | the documentation (`docair.html` in the output folder), never cached |
+| `GET /<path>` | | any other file in the output folder (`docair.graph.json`, …) |
+| `GET /api/version` | | `{ "version": 3 }`, one more each time the documentation is written again |
+| `GET /api/ai` | | `{ "enabled": true, "model": "…" }` (docair-server's) |
+| `POST /api/ask` | `{ "question": "…", "history": [{ "question", "answer" }], "context": "part id" }`, the last two optional | `{ "reply": Reply, "regenerated": bool, "version": n, "patch": "unified diff", "pending": n, "html": "…" }`: `patch` holds the waiting edits and, for a view change, `docair.toml` as it will be written; `html` is the reply as the page's chat shows it |
+| `POST /api/word` | `{ "scope": "id", "limit": n, "all": bool }`, all optional | the same as `/api/ask`; the words wait to be applied |
+| `POST /api/glossary` | `{ "limit": n }`, optional | the same; the entries wait to be applied |
+| `POST /api/apply` | | `{ "edited": ["api/src/lib.rs", "docair.toml"], "regenerated": true, "version": n }`; 409 when nothing waits |
+| `POST /api/scan` | an upload (docair-server's) | docair-server's `ScanResult` |
+| `GET /app/…` | | the web app, with `--app <dir>` |
+
+A request that brings a `graph` (what the web app sends today) is about that
+graph and answers the plain `Reply`, as docair-server always did; the
+description is `crates/docair-server/openapi.yaml`.
+
+`Reply` is docair-ai's: `answer`, and when there are any, `walkthrough`,
+`view`, `changes`, `wording`, `glossary`, `problems`, then `usage`,
+`seconds` and `requests`. The AI routes work on the server's own graph, so
+the page sends only its question. Errors are `{ "error": "…" }`: 503 when AI
+is off, 429 when two questions are already with the model, 400 for a
+question that is empty or longer than 500 characters, 502 when the model
+fails.
+
+**In the HTML** (docair-702.6.3, with step 5):
+
+* the chat, apply and preview panels move from the web app into the HTML,
+  written by the CLI, sent and shown by the script;
+* the page reloads, keeping its `#` address, when its own `/api/ask` or
+  `/api/apply` answers `regenerated: true`, and it polls `/api/version` every
+  5 s while it is visible, for documentation written again from elsewhere;
+* the HTML finds the server at its own address when the server serves it,
+  else in `<meta name="docair-serve" content="…">`; without a server it works
+  fully, minus the AI, and says so where the AI would be.
+
+**The web app** (docair-702.6.4) keeps the upload, the progress, and the
+frame that shows the HTML; the messages between page and app shrink to
+`ready`. The AI works in an uploaded page too: docair-server keeps each
+upload as a project (`KeptUploads`, at most 8, dropped after an hour unused)
+and serves it at `/api/projects/<id>/` with the routes above, open to any
+origin for the sandboxed frame. The frame shows the page by that address, so
+an applied edit reloads it from the server. (First decided otherwise,
+docair-702.10; the user asked for the AI in uploads the same day.)
 
 ## 9. Each feature, and what happens to it
 
@@ -228,12 +311,88 @@ routes (`/api/scan`, `/api/ask` and the others) and serves the documentation.
 
 ## 10. Tests
 
-* **Rust:** golden slices (JSON) and golden SVGs on the fixtures; the numbers
-  of today's layer script (crossings, detours, time) as a Rust test on
-  docair's own documentation.
-* **e2e:** the 59 tests drive the HTML through its DOM and the SVG's
-  `data-id`s, not `window.docair`. Tests of moving a part by hand and of the
-  layout worker go; `ask.spec.ts` runs against the HTML and `docair serve`.
+* **Rust:** golden slices and pictures (JSON) on the fixtures, golden SVGs
+  (step 4); the layout's own tests (docair-layout); the router once checked
+  line for line against viewer.js (docair-702.3.4); the server's routes
+  (docair-server).
+* **e2e:** the tests drive the HTML through its DOM, its `#` addresses
+  (`#layer/<key>`, `#box/<id>`, `#slice/<seed>`, `#part/<id>`) and the SVG's
+  `data-id`, `data-from`, `data-to` and `data-edges`, not `window.docair`.
+  The AI tests run against `docair serve` with the fake AI.
+
+**The 59 tests today, and what happens to each** (docair-702.7.1): 32 stay
+as they are, or see the same thing in the new DOM; 20 change, because the
+behaviour changes; 7 go, because what they test goes.
+
+| File | Test | | In the new output |
+|------|------|-|-------------------|
+| apis | descriptions meet the code | stays | the handler's details show what the description says |
+| apis | disagreements are warnings | stays | the diagnostics list, written by the CLI |
+| ask | a question becomes a walkthrough that plays on the chart | changes | the chat panel in the HTML asks `docair serve`; the page reloads at the new version, and the walkthrough is `#slice/walkthrough:<id>` |
+| ask | a follow-up carries the conversation | changes | the same panel; the fake AI's requests carry the earlier turn |
+| ask | I don't care about … (hide) | changes | the view change waits; `POST /api/apply` writes `[view] hide`, and the part is gone from the documentation |
+| ask | a correction becomes an edit, applied to the code and the page | changes | the panel shows the patch; apply edits the file, and the page shows the new line |
+| ask | Word the lines shows words at once and writes them into the code | changes | the proposed words are listed in the panel, not drawn before they are applied (nothing is laid out in the page); applied, the documentation shows them |
+| ask | Explain the terms underlines them at once and writes the glossary | changes | the same: entries listed, applied, then underlined in the documentation |
+| ask | the selected part goes along as context | stays | the selected part's id is `context` of `/api/ask` |
+| cli | docair ask records a walkthrough and docair apply writes the edits | stays | unchanged: it tests the CLI |
+| cli | docair chat keeps the conversation and /apply writes the edits | stays | unchanged |
+| cli | docair word writes words for the lines into the tags | stays | unchanged |
+| cli | docair glossary writes new entries into the glossary | stays | unchanged |
+| cli | a view change with --apply goes into docair.toml | stays | unchanged |
+| data | the shop front end is drawn in the browser, where it runs | stays | at `#layer/apps`, the front end's `data-id` lies inside the browser's box |
+| data | the order is data: made by the cart, followed along its way | changes | Follow opens `#slice/data.order`; its steps come from the CLI |
+| data | data that a function makes and returns is followed back to its caller, and on | changes | `#slice/data.summary` on e2e/fixtures/answer has the step back |
+| generate | a picked folder becomes a page | stays | the frame shows the HTML the server wrote |
+| generate | each step of a generation shows how far it is | changes | the upload in per cent and the scan in seconds stay; "the page draws itself" goes, as the page draws nothing |
+| generate | secret files are never uploaded | stays | unchanged |
+| generate | New upload goes back to the upload page | stays | unchanged |
+| glossary | hovering a term explains it, Read more opens the doc | stays | the popup shows the entry the CLI wrote |
+| glossary | a term opens its entry; the glossary lists them all | stays | the same |
+| infra | Terraform, Helm and manifests become one picture | stays | `#layer/infra`, `#layer/k8s` and `#layer/network` hold the expected parts |
+| layout | a function picked at Apps comes with its box opened, details first | changes | `#part/<id>` shows the section of its box, with its details |
+| layout | a function the layer has no box for comes at Apps | changes | `#part/<id>` goes to the part's best picture |
+| layout | a layer comes back as it was laid out, without a new layout | goes | the page lays out nothing; kept layouts are the CLI's (layout_store) |
+| layout | the worker lays out inside the web app too | goes | there is no layout worker |
+| levels | each layer shows what its question is about | stays | each `#layer/<key>` holds the parts its question is about |
+| levels | a request through the network is one line between the apps | stays | one line whose `data-edges` are the request's hops, with its via words |
+| levels | a step says what each call does and what comes back | stays | the step card the CLI wrote |
+| levels | an answer comes back after the work it waits for | stays | the order of the walk's messages |
+| levels | every step stays readable in a small window | changes | each step's camera box comes from the CLI; at a small window the step's words are still drawn at 0.8 or more |
+| levels | every line has words | stays | every line in the SVG has its words |
+| levels | zooming into a box opens it | changes | scrolling into a box follows its link to `#box/<id>` |
+| levels | parts found only in the code wait until their box is opened | stays | the box says `· N more`; its section `#box/<id>` shows them |
+| levels | the page says what it draws while it lays out | goes | nothing is laid out in the page |
+| levels | a walk keeps one layer, and a step opens into its box | changes | a walk is one picture; a step links to its box's section |
+| levels | a layer without any part of the walk is off while it plays | goes | a walk is its own picture, not played on a layer |
+| levels | the legend shows from the start | stays | the legend the CLI wrote |
+| levels | the details before anything is selected | stays | the same |
+| levels | lines follow a part that is moved | goes | parts are not moved by hand |
+| levels | every line is drawn at right angles and ends on its part | stays | the SVG's line paths: right angles, ends on a part's border (also a Rust test) |
+| levels | a walk's lines point ahead | changes | a walk's slice is laid out with its lines pointing ahead: the CLI gives the layout that hint (viewer.js `flowHints`, walked lines; not yet in layout_input) |
+| levels | top-down draws its own lines, off the parts and off each other | stays | the SVG's lines cross no part (also measured in Rust) |
+| levels | top-down routes the lines again after a part is moved | goes | parts are not moved by hand |
+| meanings | a word the code defines explains itself and names its part | stays | the popup |
+| meanings | an unchecked glossary entry gives way to the code | stays | the popup |
+| meanings | docair glossary settles the open words once | stays | unchanged: it tests the CLI |
+| pick | a part picked by a link comes close and stands out | changes | `#part/<id>`: the camera box from the CLI, the part marked |
+| pick | a part clicked on the canvas is selected where it is | stays | the script selects it and shows its details; the camera stays |
+| sections | the eye hides a section and its chip shows it again | changes | the script hides it (its place stays empty, nothing is laid out again) |
+| sections | Hide this section in the details | changes | the same |
+| sections | showing a part inside a hidden section hides its siblings instead | changes | the same, in the script |
+| sections | Show only this keeps one part and the groups around it | goes | `#box/<id>` and `#part/<id>` show one part's surroundings; the reader's hiding stays for sections |
+| sections | docair.toml [view] show opens a part inside a hidden section | stays | written by the CLI |
+| sections | docair.toml [view] hide is the default | stays | written by the CLI |
+| tests-layer | tests show with their results and can be hidden | changes | the switch shows the pictures with or without tests (SLICES.md §13, choice 6) |
+| tests-layer | a part lists the tests that cover it | stays | its details |
+
+Done (docair-702.7.2, docair-702.7.3): every spec reads the page's DOM, its
+addresses and `docair.graph.json`; `ask.spec.ts` starts a `docair serve` of
+its own for each test, on a copy of the shop, at a port the system picks.
+Two tests moved instead of going: the order of a walk's answers is tested in
+Rust (`fixtures.rs`), and the right angles and ends of every line on every
+layer of shop and platform are in `page.spec.ts`. The choices made on the way
+are decision issues docair-702.10 to docair-702.16.
 
 ## 11. Open issues and docs this touches
 
@@ -265,14 +424,14 @@ Proposed; nothing is closed or changed before the user agrees.
 
 Steps 1 and 2 can run side by side; each later step needs the one before.
 
-## 13. To decide
+## 13. Decisions
 
-| # | Question | Proposed |
-|---|----------|----------|
-| 1 | one HTML file, or a folder of pages? | one file. The pictures are packed (gzip, base64) and unpacked when shown. Measured in step 5; a folder only if the file passes 15 MB |
-| 2 | a layout library, or our own placement? | decided in step 3 by the numbers (§5) |
-| 3 | which font? | one monospace font under the OFL for the pictures; the panels keep the page's font |
-| 4 | how a walk steps | one picture per walk; a step lights parts and moves the camera, nothing is laid out per step |
-| 5 | which parts get a slice of their own? | every part with a line |
-| 6 | the tests switch | pictures that hold tests are baked twice, with and without them |
-| 7 | how far a part's slice reaches | one hop each way; more through the links in it |
+| # | Question | Decided |
+|---|----------|---------|
+| 1 | one HTML file, or a folder of pages? | one file (2026-11-18). The pictures are packed (gzip, base64) and unpacked when shown; a folder only if the file passes 15 MB |
+| 2 | a layout library, or our own placement? | our own, by the numbers (step 3, docair-702.9; §5) |
+| 3 | which font? | one monospace font under the OFL for the pictures, 0.6 em a character (step 3); the panels keep the page's font |
+| 4 | how a walk steps | one picture per walk (2026-11-18); a step lights parts and moves the camera, nothing is laid out per step |
+| 5 | which parts get a slice of their own? | every part with a line that holds no parts (step 1): a box's lines across its border reach 215 parts (`browser`), so a box has its section instead |
+| 6 | the tests switch | pictures that hold tests are baked twice, with and without them (2026-11-18) |
+| 7 | how far a part's slice reaches | one hop each way (step 1); more through the links in it |

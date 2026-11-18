@@ -9,6 +9,7 @@ use docair_core::model::{Graph, Severity};
 use docair_core::{Options, scan};
 
 mod ask;
+mod serve;
 
 #[derive(Parser)]
 #[command(
@@ -121,6 +122,76 @@ enum Command {
         #[arg(long)]
         lenient: bool,
     },
+    /// Print a slice as JSON: one part of the system, from a seed to its ends; without a seed, list the seeds.
+    Slice {
+        /// A datum's or a part's id, `flow:<name>` or `walkthrough:<id>`.
+        seed: Option<String>,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long)]
+        lenient: bool,
+        /// Print every slice, as one JSON list.
+        #[arg(long, conflicts_with = "seed")]
+        all: bool,
+        /// Also print the slice as a picture, laid out (docair-layout).
+        #[arg(long)]
+        layout: bool,
+        /// Print the slice as a picture instead: an SVG, laid out and drawn by docair.
+        #[arg(long, conflicts_with_all = ["all", "layout"])]
+        svg: bool,
+        /// Print the messages of each step instead, in words (with --all: of every slice with steps).
+        #[arg(long, conflicts_with_all = ["layout", "svg"])]
+        messages: bool,
+    },
+    /// Print what a layer draws as JSON; without a layer, list the layers the project offers.
+    Layer {
+        /// overview, infra, network, k8s, apps or code.
+        layer: Option<String>,
+        /// Open this box too (repeatable).
+        #[arg(long)]
+        open: Vec<String>,
+        /// Show or leave out the tests [default: `[view] tests`].
+        #[arg(long)]
+        tests: Option<bool>,
+        /// Print every layer the project offers, as one JSON list.
+        #[arg(long, conflicts_with = "layer")]
+        all: bool,
+        /// Print the section of this box instead: the box at its layer, one level down, with its context.
+        #[arg(long = "box", conflicts_with_all = ["layer", "all"])]
+        section: Option<String>,
+        /// Also lay the picture out: where each part goes (docair-layout).
+        #[arg(long)]
+        layout: bool,
+        /// Print the picture instead as an SVG, laid out and drawn by docair.
+        #[arg(long, conflicts_with_all = ["all", "layout", "measure"])]
+        svg: bool,
+        /// Lay out every layer and every slice, and print how long each took and how often its lines cross.
+        #[arg(long, conflicts_with_all = ["layer", "all"])]
+        measure: bool,
+        /// With --measure: keep the layouts in this folder, and take the ones kept there before.
+        #[arg(long, requires = "measure")]
+        keep: Option<PathBuf>,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long)]
+        lenient: bool,
+    },
+    /// Serve the project's documentation and the AI on it, and uploads, at a local address; writes the documentation again when files change.
+    Serve {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+        /// Output directory [default: <root>/.docair].
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        lenient: bool,
+        /// Address to listen on.
+        #[arg(long, default_value = "127.0.0.1:8765")]
+        bind: String,
+        /// Serve the built web app from this folder at /app/.
+        #[arg(long)]
+        app: Option<PathBuf>,
+    },
     /// Show the AI settings and where the key comes from.
     Ai {
         #[arg(default_value = ".")]
@@ -142,6 +213,9 @@ enum Command {
  * @calls docair-cli.ask.cmd_word
  * @calls docair-cli.ask.cmd_glossary "labels the silent lines with the model"
  * @calls docair-cli.ask.cmd_ai "shows the model settings"
+ * @calls docair-cli.cmd_slice "prints a slice"
+ * @calls docair-cli.cmd_layer "prints what a layer draws"
+ * @calls docair-cli.serve.cmd_serve "serves the documentation and the AI"
  ***/
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -179,6 +253,45 @@ fn main() -> ExitCode {
             all,
             apply,
         } => ask::cmd_word(&root, out, lenient, scope, limit, all, apply),
+        Command::Slice {
+            seed,
+            root,
+            lenient,
+            all,
+            layout,
+            svg,
+            messages,
+        } => cmd_slice(seed.as_deref(), &root, lenient, all, layout, svg, messages),
+        Command::Layer {
+            layer,
+            open,
+            tests,
+            all,
+            section,
+            layout,
+            svg,
+            measure,
+            keep,
+            root,
+            lenient,
+        } => {
+            let shown = LayerOutput {
+                all,
+                section,
+                layout,
+                svg,
+                measure,
+                keep,
+            };
+            cmd_layer(layer.as_deref(), &open, tests, shown, &root, lenient)
+        }
+        Command::Serve {
+            root,
+            out,
+            lenient,
+            bind,
+            app,
+        } => serve::cmd_serve(&root, out, lenient, &bind, app),
         Command::Ai { root, check } => ask::cmd_ai(&root, check),
     };
     match result {
@@ -255,6 +368,347 @@ fn cmd_check(root: &Path, lenient: bool, coverage: bool) -> Result<ExitCode> {
 }
 
 /***
+ * `docair slice`: print one slice as JSON, or list the seeds a slice can start from.
+ *
+ * @calls docair-core.scan "builds the graph of the project"
+ * @calls docair-core.slice.find "finds the seed the reader names"
+ * @calls docair-core.slice.slice "works out the slice"
+ * @calls docair-core.slice.seeds "lists the seeds"
+ * @calls docair-core.slice.all "works out every slice"
+ * @calls docair-core.layer_view.slice_picture "makes the slice a picture"
+ * @calls docair-layout.place "lays the picture out"
+ * @calls docair-viewer.svg.standalone "draws the picture as an SVG"
+ ***/
+#[allow(clippy::too_many_arguments)]
+fn cmd_slice(
+    seed: Option<&str>,
+    root: &Path,
+    lenient: bool,
+    all: bool,
+    layout: bool,
+    svg: bool,
+    messages: bool,
+) -> Result<ExitCode> {
+    let graph = scan(
+        root,
+        docair_adapters::all(),
+        &Options {
+            lenient,
+            ..Options::default()
+        },
+    )?;
+    if all && messages {
+        let each: Vec<serde_json::Value> = docair_core::slice::all(&graph)
+            .iter()
+            .filter(|s| !s.steps.is_empty())
+            .map(|s| {
+                serde_json::json!({ "seed": s.seed, "messages": docair_core::slice::messages(&graph, s) })
+            })
+            .collect();
+        println!("{}", docair_core::slice::to_json(&each));
+        return Ok(ExitCode::SUCCESS);
+    }
+    if all {
+        println!(
+            "{}",
+            docair_core::slice::to_json(&docair_core::slice::all(&graph))
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    let Some(name) = seed else {
+        for s in docair_core::slice::seeds(&graph) {
+            let kind = serde_json::to_value(s.kind)?;
+            println!("{:<12} {}", kind.as_str().unwrap_or_default(), s.id);
+        }
+        return Ok(ExitCode::SUCCESS);
+    };
+    let Some(seed) = docair_core::slice::find(&graph, name) else {
+        eprintln!(
+            "docair: no datum, part, flow or walkthrough named {name}; `docair slice` lists them"
+        );
+        return Ok(ExitCode::from(1));
+    };
+    let Some(slice) = docair_core::slice::slice(&graph, &seed) else {
+        eprintln!("docair: {name} has no slice");
+        return Ok(ExitCode::from(1));
+    };
+    if svg {
+        let picture = docair_core::layer_view::slice_picture(&graph, &slice);
+        let laid = docair_viewer::layout_input::lay_out(&graph, &picture);
+        print!(
+            "{}",
+            docair_viewer::svg::standalone(&graph, &picture, &laid)
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if messages {
+        println!(
+            "{}",
+            docair_core::slice::to_json(&docair_core::slice::messages(&graph, &slice))
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if layout {
+        let picture = docair_core::layer_view::slice_picture(&graph, &slice);
+        let font = docair_layout::Monospace::default();
+        let input = docair_viewer::layout_input::input(&graph, &picture, &font);
+        let laid = docair_layout::lay_out(&input, &docair_layout::Options::default());
+        let out = serde_json::json!({
+            "slice": slice, "picture": picture, "input": input, "layout": laid.placement, "routes": laid.routes
+        });
+        println!("{}", docair_core::slice::to_json(&out));
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("{}", docair_core::slice::to_json(&slice));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// What `docair layer` prints besides one layer's picture.
+struct LayerOutput {
+    all: bool,
+    /// The section of this box instead of a layer.
+    section: Option<String>,
+    layout: bool,
+    /// The picture as an SVG instead of JSON.
+    svg: bool,
+    measure: bool,
+    keep: Option<PathBuf>,
+}
+
+/***
+ * `docair layer`: print what one layer draws as JSON, every layer with `--all`, or list the layers offered.
+ *
+ * @calls docair-core.scan "builds the graph of the project"
+ * @calls docair-core.layer_view.layers "lists the layers the project offers"
+ * @calls docair-core.layer_view.picture "works out what a layer draws"
+ * @calls docair-layout.lay_out "lays a picture out"
+ * @calls docair-cli.print_measures "times every layout"
+ * @calls docair-viewer.svg.standalone "draws the picture as an SVG"
+ ***/
+fn cmd_layer(
+    layer: Option<&str>,
+    open: &[String],
+    tests: Option<bool>,
+    shown: LayerOutput,
+    root: &Path,
+    lenient: bool,
+) -> Result<ExitCode> {
+    use docair_core::layer_view::{LayerKey, LayerPicture, layers, picture, to_json};
+    let LayerOutput {
+        all,
+        section,
+        layout,
+        svg,
+        measure,
+        keep,
+    } = shown;
+    let laid = |graph: &Graph, p: LayerPicture| -> serde_json::Value {
+        if layout {
+            let font = docair_layout::Monospace::default();
+            let input = docair_viewer::layout_input::input(graph, &p, &font);
+            let laid = docair_layout::lay_out(&input, &docair_layout::Options::default());
+            serde_json::json!({ "picture": p, "input": input, "layout": laid.placement, "routes": laid.routes })
+        } else {
+            serde_json::to_value(p).unwrap_or_default()
+        }
+    };
+    let graph = scan(
+        root,
+        docair_adapters::all(),
+        &Options {
+            lenient,
+            ..Options::default()
+        },
+    )?;
+    if measure {
+        print_measures(&graph, keep.as_deref())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(bx) = section {
+        let Some((_, p)) = docair_core::layer_view::section_picture(&graph, &bx, tests) else {
+            eprintln!("docair: {bx} is no box that a layer draws");
+            return Ok(ExitCode::from(1));
+        };
+        if svg {
+            let laid = docair_viewer::layout_input::lay_out(&graph, &p);
+            print!("{}", docair_viewer::svg::standalone(&graph, &p, &laid));
+            return Ok(ExitCode::SUCCESS);
+        }
+        println!("{}", to_json(&laid(&graph, p)));
+        return Ok(ExitCode::SUCCESS);
+    }
+    if all {
+        let pictures: Vec<_> = layers(&graph)
+            .iter()
+            .filter_map(|l| picture(&graph, l.key, &[], tests))
+            .map(|p| laid(&graph, p))
+            .collect();
+        println!("{}", to_json(&pictures));
+        return Ok(ExitCode::SUCCESS);
+    }
+    let Some(name) = layer else {
+        for l in layers(&graph) {
+            let key = serde_json::to_value(l.key)?;
+            println!(
+                "{:<9} {:<15} {}",
+                key.as_str().unwrap_or_default(),
+                l.name,
+                l.ask
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
+    };
+    let key: LayerKey = match serde_json::from_value(serde_json::Value::String(name.to_string())) {
+        Ok(key) => key,
+        Err(_) => {
+            eprintln!(
+                "docair: no layer {name}; the layers are overview, infra, network, k8s, apps, code"
+            );
+            return Ok(ExitCode::from(1));
+        }
+    };
+    let Some(p) = picture(&graph, key, open, tests) else {
+        eprintln!(
+            "docair: this project has nothing for the {name} layer; `docair layer` lists the layers it offers"
+        );
+        return Ok(ExitCode::from(1));
+    };
+    if svg {
+        let laid = docair_viewer::layout_input::lay_out(&graph, &p);
+        print!("{}", docair_viewer::svg::standalone(&graph, &p, &laid));
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("{}", to_json(&laid(&graph, p)));
+    Ok(ExitCode::SUCCESS)
+}
+
+/***
+ * Lay out every layer and every slice of the graph, and print, for each, its size, how often its lines cross drawn straight, and how long it took.
+ *
+ * @calls docair-layout.lay_out "lays each picture out"
+ * @calls docair-viewer.layout_store.lay_out_kept "takes a kept layout, or keeps a new one"
+ ***/
+fn print_measures(graph: &Graph, keep: Option<&Path>) -> Result<()> {
+    use docair_core::layer_view::{layers, picture, slice_picture};
+    use docair_layout::Monospace;
+    use std::time::Instant;
+    let font = Monospace::default();
+    let mut pictures = Vec::new();
+    for l in layers(graph) {
+        if let Some(p) = picture(graph, l.key, &[], None) {
+            pictures.push((format!("layer {}", l.name), p));
+        }
+    }
+    let boxes: std::collections::BTreeSet<&str> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| n.part_of.as_deref())
+        .collect();
+    for b in boxes {
+        if let Some((_, p)) = docair_core::layer_view::section_picture(graph, b, None) {
+            pictures.push((format!("section {b}"), p));
+        }
+    }
+    for s in docair_core::slice::all(graph) {
+        pictures.push((format!("slice {}", s.seed.id), slice_picture(graph, &s)));
+    }
+    println!(
+        "{:<44} {:>6} {:>6} {:>9} {:>7} {:>5} {:>5} {:>9}",
+        "picture", "parts", "lines", "crossings", "bends", "none", "dir", "ms"
+    );
+    let (mut total, mut worst, mut worst_name) = (0.0f64, 0.0f64, String::new());
+    let mut slices = (0usize, 0.0f64, 0.0f64);
+    let mut sections = (0usize, 0.0f64, 0.0f64);
+    let mut sum_cross = 0usize;
+    let mut kept = 0usize;
+    for (name, p) in &pictures {
+        let input = docair_viewer::layout_input::input(graph, p, &font);
+        let t = Instant::now();
+        let laid = match keep {
+            Some(dir) => {
+                let (laid, was_kept) = docair_viewer::layout_store::lay_out_kept(graph, p, dir)?;
+                kept += usize::from(was_kept);
+                laid
+            }
+            None => docair_layout::lay_out(&input, &docair_layout::Options::default()),
+        };
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let placed = &laid.placement;
+        let crossings = docair_layout::crossings(&laid.routes);
+        let routed = laid
+            .routes
+            .lines
+            .iter()
+            .filter(|r| r.len() >= 2)
+            .count()
+            .max(1);
+        let bends = laid
+            .routes
+            .lines
+            .iter()
+            .map(|r| r.len().saturating_sub(2))
+            .sum::<usize>() as f64
+            / routed as f64;
+        sum_cross += crossings;
+        total += ms;
+        if ms > worst {
+            worst = ms;
+            worst_name = name.clone();
+        }
+        if name.starts_with("section") {
+            sections.0 += 1;
+            sections.1 += ms;
+            sections.2 = sections.2.max(ms);
+        }
+        if name.starts_with("slice") {
+            slices.0 += 1;
+            slices.1 += ms;
+            slices.2 = slices.2.max(ms);
+        }
+        if name.starts_with("layer") || ms >= 20.0 {
+            let dir = format!("{:?}", placed.direction).to_lowercase();
+            println!(
+                "{:<44} {:>6} {:>6} {:>9} {:>7.1} {:>5} {:>5} {:>9.1}",
+                clip_name(name, 44),
+                p.parts.len(),
+                p.lines.len(),
+                crossings,
+                bends,
+                laid.routes.none,
+                dir,
+                ms
+            );
+        }
+    }
+    println!(
+        "{} pictures in {:.0} ms, {sum_cross} crossings in all; {} slices in {:.0} ms, {:.1} ms at most; the slowest: {worst_name} ({worst:.0} ms)",
+        pictures.len(),
+        total,
+        slices.0,
+        slices.1,
+        slices.2
+    );
+    println!(
+        "{} sections in {:.0} ms, {:.1} ms at most",
+        sections.0, sections.1, sections.2
+    );
+    if keep.is_some() {
+        println!("{kept} of {} layouts were kept from before", pictures.len());
+    }
+    Ok(())
+}
+
+fn clip_name(name: &str, max: usize) -> String {
+    if name.chars().count() > max {
+        let mut out: String = name.chars().take(max - 1).collect();
+        out.push('…');
+        out
+    } else {
+        name.to_string()
+    }
+}
+
+/***
  * Print, per kind of line, how many hand-written lines the code confirms and how many lines only the code knows.
  *
  * @calls docair-core.coverage.coverage "counts the lines"
@@ -277,6 +731,33 @@ fn print_coverage(graph: &Graph) {
     }
     let share = (accounted * 100).checked_div(written).unwrap_or(0);
     println!("the code accounts for {accounted} of {written} hand-written lines ({share}%)");
+    print_data_coverage(graph);
+}
+
+/***
+ * Print, for each datum, how many of the lines that carry it its slice reaches from where it is made.
+ *
+ * @calls docair-core.slice.slice "works out the datum's slice"
+ ***/
+fn print_data_coverage(graph: &Graph) {
+    use docair_core::slice::{SeedKind, seeds, slice};
+    let data: Vec<_> = seeds(graph)
+        .into_iter()
+        .filter(|s| s.kind == SeedKind::Data)
+        .collect();
+    if data.is_empty() {
+        return;
+    }
+    println!("data                 carried by  reached  stretches of their own");
+    for seed in data {
+        let Some(c) = slice(graph, &seed).and_then(|s| s.covers) else {
+            continue;
+        };
+        println!(
+            "{:<20} {:>10}  {:>7}  {:>22}",
+            seed.id, c.lines, c.reached, c.apart
+        );
+    }
 }
 
 /***

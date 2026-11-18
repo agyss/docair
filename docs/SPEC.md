@@ -51,7 +51,7 @@ Each stage has one job. A stage only consumes the output of the stage before it.
 | 4 | **build**    | blocks → nodes | Each block becomes one node (§3). Assigns ids, applies `@part-of` defaults, and merges Markdown docs into nodes. |
 | 5 | **resolve**  | nodes + tag refs → edges, scenarios | Turns every data-flow tag into an edge by resolving its `<ref>` (§4.3). Creates implicit topic and sub-part nodes. Orders the `@flow` steps of each scenario and derives the messages between them: calls, returns, reads, writes, events (§7). |
 | 6 | **check**    | graph → diagnostics | Unresolved refs, duplicate ids, unknown tags and kinds, block/code mismatches, broken flows (§8). |
-| 7 | **emit**     | graph → files | Writes `docair.graph.json` (§9), the integration API that the viewer reads, plus optional Mermaid. |
+| 7 | **emit**     | graph → files | Writes `docair.graph.json` (§9), the integration API for other tools, plus optional Mermaid, and the page (§3.5). |
 
 > **Viewer mock: the whole app.** The viewer is a single page that loads
 > `docair.graph.json`. Every later mock is one part of this screen.
@@ -81,16 +81,12 @@ Each stage has one job. A stage only consumes the output of the stage before it.
 > | details     | on first open, the scenario list: "walk me through …" (§7.4); then the selected node, or the current step of a walkthrough | `flows`, one `node` |
 > | walkthrough bar | scenario picker, Back / Next, step dots, the step's title | `flows` |
 >
-> Layout is top-down (§3.5): every box is laid out on its own with ELK's
-> layered algorithm and scaled to fit its size budget; docair's own router
-> draws the lines at right angles and puts their words on them. The direction
-> is chosen automatically: top-to-bottom, unless left-to-right fits the screen
-> at a zoom 1.1 times larger. On first open, the viewer shows the Apps layer
-> when it is readable, else another layer that is (§3.4). While a picture is
-> laid out, the page says what it draws once that takes a moment (*Drawing
-> Code · 371 parts, 631 lines…*), with a spinner. The layout runs beside the
-> page, so the page keeps answering, and a picture laid out once comes back at
-> once (§3.5).
+> Every picture is laid out and drawn by the CLI (§3.5): every box on its own,
+> scaled to fit its size budget, and docair's own router draws the lines at
+> right angles and puts their words on them. The direction is chosen by the
+> CLI: top-to-bottom, unless left-to-right fits the canvas 1.1 times better.
+> On first open, the page shows the Apps layer (§3.4). The page lays out
+> nothing: each picture is ready the moment it is shown.
 
 ### 1.1 Configuration: `docair.toml`
 
@@ -136,7 +132,12 @@ api_key_env = "DOCAIR_AI_API_KEY"     # the default; the key itself is never in 
 
 `run_indexers` builds the code (rust-analyzer runs build scripts and
 procedural macros), so the server ignores it for an upload: an uploaded
-project is scanned without running anything. Every path `docair.toml` names
+project is scanned without running anything. The index it makes is kept in
+the cache folder (`$DOCAIR_CACHE`, else `~/.cache/docair`) under a key of
+what rust-analyzer reads: the `.rs` files and `Cargo.toml` files with their
+text, `Cargo.lock` and rust-analyzer's version. A scan of the same code takes
+the kept index instead of running the indexer: on docair, 0.7 s instead of
+7.2 s. The six newest indexes are kept. Every path `docair.toml` names
 (`scip`, `[tests] results`, `meanings`, `walkthroughs`, and the docs a
 glossary links to) must be a file or folder inside the root: not an absolute
 path, `..` out of it or a link out of it (W110, W111, W113).
@@ -154,7 +155,9 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair chat` | 1–7 + AI | the same as a conversation in the terminal: one question per line, each edit offered for applying (§10.6) |
 | `docair apply [patch]` | none | applies `.docair/docair.patch` (or the given patch) to the files (§10.6) |
 | `docair ai [--check]` | none   | prints the AI settings and where the key comes from; `--check` sends one short request (§10.1) |
-| `docair serve` (later) | 1–7, watch | serves the viewer and rebuilds on file change |
+| `docair slice [seed] [--all]` | 1–6 | prints a slice as JSON: one part of the system, from a seed to its ends (§3.7); without a seed it lists the seeds, `--all` prints every slice. `check --coverage` also says, for each datum, how many of its lines its slice reaches |
+| `docair layer [layer] [--open id] [--tests bool] [--all]` | 1–6 | prints what a layer draws as JSON (§3.4): each part with the box it stands in, open or closed, and each line with the lines of the graph it stands for and the parts it passes; without a layer it lists the layers the project offers |
+| `docair serve [root] [--bind addr] [--app dir]` | 1–7, watch | serves the project's documentation at `/` and writes it again when its files change, after an answer with a walkthrough, and after applied edits; `/api/ask`, `/api/word`, `/api/glossary`, `/api/apply` on the server's own graph, `/api/version` to poll, uploads as docair-server (docs/SLICES.md §8) |
 
 ---
 
@@ -167,15 +170,26 @@ step where the generation is, so that a long one never looks stuck:
 | Step | The user sees |
 |------|---------------|
 | a dropped folder is read | *Reading the folder · 1200 files so far* |
-| 1 of 4: the files go up | a bar, *Uploading 286 files · 3.3 MB of 7.8 MB · 42%* |
-| 2 of 4: docair reads them on the server | a moving bar, *docair reads the 286 files on the server · 6 s*; after 10 s also *big projects take a while* |
-| 3 of 4: the page comes back | a bar, *Receiving the page · 1.0 MB of 5.7 MB · 18%* |
-| 4 of 4: the page draws itself | over the page, *Drawing the page: Network · 23 parts, 11 lines · 1 s*, until the page says it is ready |
+| 1 of 3: the files go up | a bar, *Uploading 286 files · 3.3 MB of 7.8 MB · 42%* |
+| 2 of 3: docair reads them on the server | a moving bar, *docair reads the 286 files on the server · 6 s*; after 10 s also *big projects take a while* |
+| 3 of 3: the page comes back | a bar, *Receiving the page · 1.0 MB of 5.7 MB · 18%* |
 
-The page tells the app what it draws (`docair:drawing`) and when it is ready
-(`docair:ready`). A page that never says so is shown after 30 s all the same.
-Generating the page again, after edits are applied (§10.6), shows the same
-steps in the bar above the page.
+The page comes laid out and drawn by docair, so it shows at once. The app
+frames it under a slim bar (what docair found, the diagnostics, *New upload*,
+*Open in a new tab*, *Download*); the page tells the app only when its first
+picture shows (`docair:ready`), and the frame gets `data-ready`.
+
+docair-server keeps each upload as a project (at most 8; one not asked about
+for an hour is dropped, with its folder) and serves its page at
+`/api/projects/<id>/`, the `page` of the scan's answer. The frame shows the
+page by that address, so its AI asks the server about the upload, and an
+edit applied changes the server's copy: the frame reloads with it, and
+*⤓ Patch* saves the edit for the user's own files. *Open in a new tab* opens
+the same address; *Download* saves the page as it is now. Before the upload,
+the picked files are read into memory (*Reading the folder · 286 files so
+far*), so a file that changes on disk meanwhile cannot break it; a file that
+cannot be read says *A file changed while it was read; pick the folder
+again.*
 
 ## 2. Doc blocks (stage 2: extract)
 
@@ -443,6 +457,15 @@ part's details show at once, before the picture is drawn again.
 
 Tests are a switch over every layer (§12.4).
 
+**Worked out by the CLI.** `docair layer <layer>` prints what a layer draws,
+with `--open` for boxes the reader opened: each part with the drawn box it
+stands in (`parent`), whether it is drawn `open` or `closed` (a closed box says
+how many parts it `holds`, an open box of code how many found-only parts it
+leaves out, `more`), and each line with the lines of the graph it stands for
+(`members`) and the left-out parts they pass (`via`). On docair's own graph
+and on every fixture it draws the same parts and lines as the viewer, which
+still works them out itself until docs/SLICES.md step 5.
+
 > **Viewer mock: one request at two layers.**
 >
 > ```text
@@ -470,6 +493,15 @@ Tests are a switch over every layer (§12.4).
 engine, which contains a network, which contains the cluster, its namespaces,
 their Deployments, the containers, the apps, their modules and functions. A
 layer draws the part of that tree it is about; zooming moves inside it.
+
+> **The browser's layout, until docs/SLICES.md step 5.** From here down to
+> *Laid out by the CLI*, this section records how the viewer laid out and drew
+> the pictures in the browser, with ELK and Cytoscape.js, and what was measured
+> on the way. Those parts are gone: the CLI lays out and draws every picture
+> now, and the page shows them (*Laid out by the CLI*, *Drawn by the CLI*, *The
+> documentation page*, below). The rules for what a picture holds, the
+> top-down sizing and the router carried over; the numbers here are the
+> baseline the Rust layout was checked against.
 
 **Zoom in (scroll).** Scrolling into a closed box opens it where it is; the
 rest of the layer stays as it was. Keep scrolling to open the boxes inside it.
@@ -693,6 +725,144 @@ move.
 * An edge between a group and one of its own members cannot be drawn as an
   arrow; `docair check` reports it (W108) and the viewer leaves it out.
 
+**Laid out by the CLI** (crate `docair-layout`, docs/SLICES.md §5). `docair
+layer <layer> --layout` and `docair slice <seed> --layout` print where each
+part goes, each line's points and where its words stand.
+
+* The words are set in one monospace font: a word's width is its number of
+  characters times 0.6 em (two for a wide East Asian character).
+* Each box is laid out on its own in layers by docair's own placement (no
+  ELK): cycles broken by priority, layers that keep lines short, sweeps and
+  swaps against crossings, positions that keep lines straight. The boxes are
+  sized and placed inside out as above (budget 800 px, floor 0.7).
+* A part with many lines is as wide as they need to meet it side by side: a
+  track and a half for each pair of lines (across the layers when they run
+  right).
+* The four ways tell each box where its lines go in the first placement. A
+  line that leaves the box before its first layer or after its last becomes
+  a node of its own there, with a bend point in each layer between, so the
+  box keeps a way open for it and its crossings count; one that leaves by a
+  side across the layers pulls its part that way.
+* Positions across the layers are the weighted median of a part's
+  neighbours (in line with one of them); ties in the sweeps against
+  crossings go left first, and right first every other two sweeps.
+* The cheapest placement wins: a picture of up to 60 lines is routed in each
+  way and in both directions (the other direction only when it fits the
+  canvas at least 0.8 times as well), side by side; a bigger one is priced
+  by its lines drawn straight.
+* The router is the viewer's own, ported: on the same placement it draws the
+  same lines at the same price (checked on six pictures of docair's own page
+  and on its Code layer, all 1 040 lines).
+* Each layout is kept under a key of what it reads (the parts' boxes and
+  sizes, the lines' ends, hints and words' sizes, the options) and of the
+  layout code itself; ids and names are not in it.
+
+| docair's own graph, 2026-11-18 | Laid out | Taken from the kept layouts |
+|--------------------------------|----------|-----------------------------|
+| all 1 023 pictures (6 layers, 1 017 slices) | 11.8 s, 13 855 crossings | 0.12 s |
+| the 1 017 slices | 1.5 s, 149 ms at most; about 370 crossings in all | |
+| the Code layer (511 parts, 1 092 lines) | 10.2 s, 13 440 crossings, 7.3 bends a line | |
+
+**Drawn by the CLI** (docs/SLICES.md §6). `docair layer <layer> --svg` and
+`docair slice <seed> --svg` print the picture as an SVG, laid out and drawn
+by docair.
+
+* The SVG holds classes, not colours: `assets/pictures.css` gives each class
+  the page's colours (`--k-*`, `--e-*`, `--t-*` in viewer.css), so one picture
+  serves light and dark. A file of its own (`--svg`) carries them inside.
+* Each part is drawn in the shape and colour of its kind, as the viewer
+  draws it: a test in the colour of its result, a closed box with a double
+  outline, an open box with its name in the band at its top.
+* Lines run at right angles, rounded where they turn, with an arrow; the
+  line style tells the kinds of one family apart. A bundle is wider the more
+  lines it stands for; a line to a ref docair could not resolve is red and
+  dashed, one that only may reach its part (`could`) dashed.
+* A call through a trait or an interface says how many parts it may reach:
+  `calls one of 5` (docs/ADAPTERS.md §5.5).
+* A line's words stand where the layout put them. The data it carries are
+  chips in them, found the way docair finds them (§3.6): a datum's name, the
+  last part of its id or a `@carried-as` word, as a whole word in any case.
+* Every part and line carries its id (`data-id`; a line also `data-from`,
+  `data-to` and the graph's lines it stands for, `data-edges`), for the page's
+  script.
+* Golden pictures: every layer of each e2e fixture and every slice of the
+  shop, in `crates/docair-viewer/tests/golden`; `DOCAIR_BLESS=1` rewrites them.
+
+**The documentation page** (docs/SLICES.md §4). `docair scan` (and `docair
+serve`, and the server for an upload) writes every picture a reader can reach
+into `docair.html`:
+
+* each layer; a section for each box (the box at its layer, one level down,
+  with what its lines join to folded into closed boxes); a slice for each
+  seed. A layer or a section that holds tests is drawn twice, with them and
+  without them.
+* Each picture is laid out (layouts kept in `$DOCAIR_CACHE/layouts`, else in
+  the user's cache folder, next to the kept code index), drawn as above and
+  packed (raw deflate, then base64). The browser unpacks a picture when it is
+  shown, with its own `DecompressionStream`; the page needs no library.
+* Every picture has an address: `#layer/<key>`, `#box/<id>`,
+  `#slice/<seed>` (a walk's seed is `flow:<name>` or `walkthrough:<id>`).
+  `#part/<id>` shows a part where it is when the picture on screen draws it,
+  else in its home: its box's section, else a layer that draws it (Apps
+  first), else its own slice. Back goes to the picture before.
+* The script pans (drag) and zooms (wheel; a picture is shown at most 1.25
+  times its size; F fits it). It opens a closed box's section with a click,
+  an open box's with a double-click, and a box's when the reader zooms into
+  it until it fills the canvas; zooming out far past the picture goes to the
+  picture above it in the crumbs. A click selects a part (`.sel`, its lines
+  `.hl`) and shows its details; the camera stays.
+* The panels are the CLI's, as the viewer wrote them: each part's details
+  (Overview, Docs, Tags; what a box talks to, the tests that cover a part,
+  its lines in and out, the flows it is in, every other part a link
+  `#part/<id>`), the tips of parts and lines (a line's: the first 8 lines of
+  the graph it stands for), the tree, the legend, the diagnostics and the
+  tests switch. Details, tips and search words are packed like the pictures.
+* The glossary and the data are the CLI's too (§13, §3.6): in the panels the
+  first mention of each term is marked (`.term`), a code span that names a
+  part links to it (`.node-ref`), and the data a line's words name are chips
+  (`.data-ref`); each has the popup the CLI wrote. The glossary's list and
+  entries, the data's list, each datum's page (its details) and the docs that
+  Read more opens are in the page; Follow goes to the datum's slice
+  `#slice/data.<id>`, and the bar above the picture leads back.
+* A walk is one picture (docs/SLICES.md §13, choice 4): a scenario, a
+  walkthrough and a datum's way are each their slice, laid out with their
+  lines pointing ahead (a line to a part the walk has not been to yet: 20; one
+  back to an earlier part: 0). For each step the CLI writes the parts and lines
+  it lights, the box the camera shows (at 0.8 to 1.3 times the picture's
+  size), the tokens that run along its lines (a hollow one for an answer) and
+  its card: what happens (§7.3), what it has built up, Back, Next and Whole
+  step. The script plays them; the footer lists the walks, and the details
+  start with them.
+* The AI is a panel in the page (docs/SLICES.md §8; ✦ Ask). It talks to
+  `docair serve`: the page's own address when the server serves it, else
+  `<meta name="docair-serve">`; without a server it says so, and everything
+  else works. A question goes to `/api/ask` with the conversation and the
+  selected part as its context; Word the lines and Explain the terms go to
+  `/api/word` and `/api/glossary`. The server writes each reply as HTML
+  (`page_ai::reply_html`): the answer, a walkthrough to play at
+  `#slice/walkthrough:<id>`, words, terms, a view change, edits, and the edits
+  waiting to be applied with their diff, Apply and a patch to save. A reply
+  that wrote the documentation again, and Apply, reload the page where it
+  was; the conversation is kept for the tab. The page also reloads when the
+  documentation is written again from elsewhere (it asks `/api/version` every
+  5 s while it is shown).
+* The reader's hiding is the script's: the eye in the tree or "Hide this
+  section" leaves a part out, with its lines and their words, and its place
+  stays empty; a chip above the picture brings it back. Showing a part inside
+  a hidden section brings the section back with only that part in it. The
+  search filters the tree and marks the parts it finds (`.hit`, the rest
+  `.dim`). What is hidden, and whether tests are shown, is remembered by the
+  browser.
+
+| docair's own documentation, 2026-11-18 | |
+|----------------------------------------|-|
+| addresses | 1 266: 6 layers, 184 sections, 1 076 slices |
+| pictures drawn | 1 317, of which 51 twice (tests) |
+| the page | 6.3 MB with the panels and walks (pictures 3.8 MB; details, tips, search words, glossary, data, docs and walks 1.5 MB; the tree 0.6 MB), nothing loaded from elsewhere; the viewer's page: 4.7 MB |
+| `docair scan .` with the page, layouts and code index kept | 2.4 s (0.67 s with the old page, which laid out in the browser) |
+| … with no layout kept | 24.5 s |
+| the page ready in the browser; a section shown after its link | about 150 ms (the old page: seconds of layout); 45 ms |
+
 ### 3.6 Code and data
 
 The boxes of the chart are **code and the places it runs**: the working
@@ -750,6 +920,81 @@ docair keeps the two apart.
 > │   gets ◇Reply back                        │
 > └───────────────────────────────────────────┘
 > ```
+
+### 3.7 Slices: one part of the system
+
+A reader rarely wants the whole system at once. A **slice** is one part of
+it: it starts from a **seed**, grows by fixed rules, and ends at parts that
+rarely change their names. docair works slices out from the graph alone, the
+same way every time; `docair slice <seed>` prints one as JSON
+(docs/SLICES.md says where this goes next).
+
+| Seed | Named as | The slice holds | Its ends |
+|------|----------|-----------------|----------|
+| a datum | its id (`data.question`) | its way as Follow walks it (§3.6): each step one line, there or back, inside other lines where no line names it, and the stretches its way cannot reach | where it is made, and the parts it reaches that pass it on to nobody |
+| a route | the id of the part that serves it | the part's own lines, and the way requests come in: back along calls, routes and selections, at most 8 hops | where the requests start, and the parts it reaches |
+| a scenario | `flow:<name>` | its steps and their paths (§7) | its first and last step |
+| a walkthrough | `walkthrough:<id>` | its steps and their bound lines (§10.3) | its first and last step |
+| any other part | its id | the lines across its border, one hop each way | the parts at their other end, tests left out |
+
+`docair slice` without a seed lists the seeds: every datum, route, scenario
+and walkthrough, and every part with a line that holds no parts of its own
+(a box is shown whole; `docair slice <box>` still works).
+
+* **Lines that could go elsewhere.** A line whose target only could be the
+  one drawn (`reach: could`) never carries a datum on inside other lines,
+  and never brings a request in. Every line keeps its `reach` in the slice.
+* **How docair knows a line carries the datum** (`how`): `typed` when its
+  words come from the code (the callee's signature, an API description),
+  `named` when an author's words name it.
+* **What a datum's slice covers** (`covers`): the lines that carry it, how
+  many of them its way reaches before the first stretch of its own, and how
+  many such stretches there are. `docair check --coverage` prints it for
+  every datum.
+* **Boxes.** Every box around a part of the slice, with how many of its own
+  parts the slice leaves out (`more`).
+* **Stable ends.** An end is `stable` unless it is a function, a component, a
+  module inside a program or below a library's crates, a config or a test.
+  An end that is not names the nearest part around it that is (`within`):
+  `docair-ai.client.chat` is within `docair-ai`. The slice goes no further
+  than its end; `within` only names it.
+
+On docair's own graph (2026-11-18), the nine data take the same steps as the
+viewer's Follow does. A datum's slice holds 25 parts in the middle (57 for
+the graph, the most); a part's slice 4, 90 % of them 11 or fewer, 49 at most.
+
+```json
+{
+  "schema": "docair.slice/0",
+  "seed": { "kind": "data", "id": "data.summary" },
+  "ends": [{ "id": "app.summarize", "stable": false, "within": "app" }, { "id": "model", "stable": true }, { "id": "mail", "stable": true }],
+  "parts": ["app.summarize", "app.ask", "model", "app.report", "mail"],
+  "steps": [
+    { "nodes": ["app.summarize"], "made": true },
+    { "nodes": ["app.ask"], "lines": [1], "way": "back", "inside": true },
+    { "nodes": ["model"], "lines": [2], "way": "there" },
+    { "nodes": ["mail"], "lines": [4], "way": "there", "apart": true }
+  ],
+  "lines": [{ "edge": 1, "from": "app.ask", "to": "app.summarize", "kind": "call" }, "…"],
+  "boxes": [{ "id": "app", "more": 0 }],
+  "data": ["data.summary"],
+  "covers": { "lines": 2, "reached": 1, "apart": 1 }
+}
+```
+
+(e2e/fixtures/answer: the summary is made, brought back inside the answer
+to `app.ask`, sent on to the model; mailing the report is a stretch of its
+own.)
+
+**A step's messages** (`docair slice <seed> --messages`): each step of a
+slice in words, for its step card. A datum's slice has one message a step,
+the line it travels, there or back. A scenario's or walkthrough's slice keeps
+one call stack across its steps (§7.3), so an answer comes back after the
+work it waits for. Each message has its `kind` (`call`, `return`, `read`,
+…), its `edge`, `who` (`["cart", "calls", "orders.create"]`), `why` (the
+line's words), `carry` (`sends CreateOrder · gets Order back`), the `token`'s
+word, and what the receiving end `has` afterwards. On docair's 17 slices with
+steps they were the same as the old viewer's step cards.
 
 ---
 
@@ -1475,115 +1720,62 @@ every scan, against the current graph:
 So a walkthrough that has gone stale after a refactoring shows up in
 `docair check`, like a broken scenario does.
 
-### 10.4 Viewer: replay
+### 10.4 Walks in the page
 
-The walkthrough bar lists scenarios and walkthroughs together. Playing one
-works the same for both:
+The footer lists the scenarios and walkthroughs, and the details panel starts
+with them (*Walk me through*). A walk is one picture: its slice (§3.7), laid
+out with its lines pointing ahead. A scenario, a walkthrough and a datum's
+way (§3.6) play the same:
 
-* the steps' nodes are marked, and the step's **messages** play one by one
-  (§7.3): before each one moves, its line in the step card lights up
-  (**What happens**: "→ ask calls chat: … · sends question + digest · gets
-  reply JSON back"), and the token carries the words of what travels. A
-  call's answer goes back along the same line as a hollow token ("↩ chat
-  answers ask with reply JSON") once the calls it made in turn have answered,
-  even when those calls come in later steps (§7.3, one stack for the walk).
-  **Now it has** lists what the step built up: the answers received, the data
-  read, written or created. Clicking a line shows that hop on the chart;
-* a walk plays at **one layer, with a focus**: the layer that is about it
-  (§3.4). A step's parts are shown as the boxes they lie in at that layer,
-  consecutive steps in the same boxes become one step, which lists them
-  ("Inside docair-core: the pipeline starts … (4 steps)"), and steps only in
-  parts the layer leaves out (the hops of a request through the network, at
-  the Apps layer) belong to the step before them. The picture stays put and
-  the walk moves from part to part. The layer is the one that draws most of
-  the walk's steps as its own parts, as themselves (at the Apps layer, the
-  code inside a program counts too), minus the steps it can only leave out or
-  show as context; on a tie, the one with fewer steps. It needs three steps
-  (or all, when the walk has fewer). The Code layer only takes walks the Apps
-  layer folds into fewer, the Overview only walks no other layer can show. So
-  `open` plays at the Network layer hop by hop, `provision` at the
-  Infrastructure layer, `ask` and `upload` at the Apps layer, `view` at the
-  Code layer. A datum's walk (§3.6) plays at the layer that draws most of
-  its lines as lines between two parts, not folded into one box; on a tie,
-  the one with fewer steps that only **Open** shows, then the higher layer.
-  So a datum that moves between the functions of one app plays at the Code
-  layer (◇ digest, from `ask.digest` to `ask.ask` to `chat`). Groups the
-  walk never touches stay folded as context;
-* **Open** on a step that hides parts walks its inner steps inside its box, at
-  the same layer, with the box opened down to the parts they pass. On a step
-  that passes left-out parts, it walks them at the layer that is about them
-  (the upload's hops at the Network layer). **◂ Back** returns to the outer
-  walk at the same step. The **layer** select in the card (and the header's
-  layer switch) shows the whole walk at any layer by hand; a layer that draws
-  none of the walk's parts is off while it plays;
-* the step card's **What happens** lists only the messages that cross
-  between the parts drawn at this layer; the others are summed up ("+5
-  messages inside browser: Open to see them", "+6 messages on the way, in parts
-  this layer leaves out"). A message along a line through left-out parts
-  arrives where that line does: "ScanService.scan calls router (via host-port ›
-  traefik › Ingress docair)";
-* then the camera frames the step:
-  * **never smaller than readable.** The camera fits the step's boxes and
-    the lines that lead to them, but never below zoom 0.8. If they do not
-    fit, it starts where the step's first line starts, **follows the token**
-    along the lines, and comes to rest on the step's own boxes (or its first).
-    **Whole step** in the card zooms out to everything the step touches;
-  * **keeping the reader's place.** When the layer changes (by hand, on Open
-    or on Back), the new layout opens on the previous step's parts and the
-    camera glides from there; it never jumps to the whole picture in between;
-* the details panel shows the **step card** on top: what happens, in words,
-  with links to the nodes. Clicking a node shows its details under the card;
-* closing the walkthrough (`walk: none`) restores the layer from before.
+* each step lights its parts and the lines it goes along; the steps before it
+  stay marked, everything else fades;
+* the step's **messages** play one by one (§7.3): before each one moves, its
+  line in the step card lights up (**What happens**: "→ ask calls chat: … ·
+  sends question + digest · gets reply JSON back"), and a token runs along
+  the line's own path with the words of what travels. A call's answer goes
+  back along the same line as a hollow token ("↩ chat answers ask with reply
+  JSON") once the calls it made in turn have answered, even when those come in
+  later steps (one stack for the walk). **Now it has** lists what the step
+  built up: the answers received, the data read, written or created. Clicking
+  a line in the card shows that hop in the picture;
+* the camera goes to the step's box, which the CLI worked out from the layout:
+  the step's parts and lines with some room, never smaller than readable
+  (zoom 0.8) and never closer than 1.3. **Whole step** fits the box without
+  that limit;
+* the details panel shows the **step card** on top: the walk's title,
+  *asked:* for a walkthrough, *step k of n*, the step in words, its parts as
+  links, What happens, **◀ Back** and **Next ▶** (the arrow keys too).
+  Clicking a part shows its details under the card;
+* a datum's walk starts with what carries it: *Carried by 2 lines, all in this
+  walk*, or how many of them start a stretch of their own;
+* closing the walk (×) goes back to the picture before.
 
-> **Viewer mock: replaying a walkthrough.**
->
-> ```text
-> ┌─ docair · docair ──── Layer Overview [Infrastructure] Network … Code ── ⚠ 0 ─┐
-> │ ┌─ tree ───┐ ┌─ graph ─────────────────────────┐ ┌─ details ─────────────┐ │
-> │ │ ▾ docair │ │ ╭ workstation ──────────────╮   │ │ ✦ Provisioning the    │ │
-> │ │  ▸ work… │ │ │ ▣ developer               │   │ │   kind cluster        │ │
-> │ │          │ │ │     │ terraform apply     │   │ │ asked: How does       │ │
-> │ │          │ │ │     ▼                     │   │ │ terraform provision…  │ │
-> │ │          │ │ │ ⚙ tf.kind_cluster ══●══╗  │   │ │───────── step 1 of 6 ─│ │
-> │ │          │ │ │ ╭ kind cluster ─────────╨╮ │   │ │ Terraform creates the │ │
-> │ │          │ │ │ │ ◎ docair namespace     │ │   │ │ kind cluster first    │ │
-> │ │          │ │ │ ╰────────────────────────╯ │   │ │ Every other resource  │ │
-> │ │          │ │ ╰───────────────────────────╯   │ │ needs the kubeconfig… │ │
-> │ └──────────┘ └─────────────────────────────────┘ │ ⚙ tf.kind_cluster     │ │
-> │                                                  │ ⎈ kind  ◀ Back Next ▶ │ │
-> │ walk: [✦ Provisioning the kind cluster ▾] ◀ Play ▶ ●─○─○─○─○─○ 1/6 …       │
-> └────────────────────────────────────────────────────────────────────────────┘
-> ```
+The viewer played a walk on a layer, opened steps into their boxes and let the
+reader pick the layer; a walk is its own picture now, so those are gone.
 
 `✦` marks a walkthrough written by a model, so it is never mistaken for an
 authored scenario.
 
-### 10.5 Asking in the web app
+### 10.5 Asking from the page: `docair serve`
 
-`docair-server` asks on behalf of the browser; the key stays in the cluster.
+The AI is asked through the CLI: `docair ask` in a terminal, or `docair
+serve` from the page (docs/SLICES.md §8, `crates/docair-server/openapi.yaml`).
+The server works on its own graph of the project, so the page sends only its
+question; the key stays with the server.
 
 | Route | Request → Answer |
 |-------|------------------|
-| `GET /api/ai` | → `{ enabled, model }`: whether to show the Ask box. Never the key, never the endpoint |
-| `POST /api/ask` | `{ question, graph, history?, context? }` → the reply (§10.7) with the walkthrough bound to that graph (§10.3) and the edits resolved to files, plus `problems`, `seconds`, `usage`. 400 for an empty question or one over 500 characters, 503 when AI is off, 429 when the server is already asking twice, 502 when the endpoint fails |
-| `POST /api/word` | `{ graph, scope? }` → a reply (§10.7) with `wording` (`[{ from, to, text }]`, shown on the page at once, marked ✦) and the edits that put the words into the tags |
-| `POST /api/patch` | `{ changes, files: [{ path, text }] }` → `{ files: [{ path, text }], diff, problems }`: the edits applied to the files the browser sends (§10.6) |
+| `GET /api/ai` | → `{ enabled, model }`. Never the key, never the endpoint |
+| `POST /api/ask` | `{ question, history?, context? }` → `{ reply, html, regenerated, version, patch, pending }`: the reply (§10.7), written as HTML for the page too; a walkthrough in it is recorded and the documentation written again (`regenerated`); its edits wait (`patch`, `pending`). 400 for an empty question or one over 500 characters, 503 when AI is off, 429 when two questions are already with the model, 502 when the endpoint fails |
+| `POST /api/word` | `{ scope?, limit?, all? }` → the same, with `wording` (§10.8) |
+| `POST /api/glossary` | `{ limit? }` → the same, with the terms explained (§13.4) |
+| `POST /api/apply` | → `{ edited, regenerated, version }`: the waiting edits written into the project's files, the view change into `docair.toml`, the documentation written again; 409 when nothing waits |
 
-`POST /api/scan` answers with the `graph` too, so the browser can send it
-back with a question. The server keeps nothing between requests.
-
-> **Viewer mock: the Ask box in the web app's bar.** The answer plays in the
-> page at once. Every walkthrough of the session stays in the list, to replay
-> or to download as `<id>.json`; put the file into `docs/walkthroughs/` and
-> every later page has it.
->
-> ```text
-> ┌ docair  crates  34 files 67 nodes … ─ [Ask how something works…      ] [Ask] ─ Walkthroughs (2) ▾ ─ New upload ┐
-> │                                                     ┌──────────────────────────────────────┐                    │
-> │   (the docair page, replaying the answer)           │ ✦ What happens to an upload?  ▶  ⤓   │                    │
-> │                                                     │ ✦ How is the viewer built?    ▶  ⤓   │                    │
-> │                                                     └──────────────────────────────────────┘                    │
-> ```
+An uploaded page asks the same routes under `/api/projects/<id>/` (§1.3):
+the server keeps the upload as a project, and answers any origin, since the
+web app's frame is sandboxed. A page with no server to ask (a downloaded
+file opened from disk) works fully, minus the AI, and says so where the AI
+would be.
 
 ### 10.6 Feeding edits back to the code
 
@@ -1614,12 +1806,11 @@ and reported, never written.
   `.docair/docair.patch` (paths relative to the root, so `git apply` takes
   it). `--apply` or `docair apply` writes them into the files; then the next
   scan shows the change.
-* **Web app.** Each proposed edit is listed under the reply with its reason.
-  **Review** shows the diff (the browser sends the affected files to
-  `POST /api/patch`; the server keeps nothing). **Apply & regenerate**
-  changes the browser's copy of the files and generates the page again, so
-  the user sees the effect at once. **Download patch** saves
-  `docair.patch` for the real repository.
+* **The page** (with `docair serve`). Each proposed edit is listed under the
+  reply with its reason. **Review diff** shows the waiting edits as the
+  server wrote them; **Apply & regenerate** writes them into the project's
+  files (`POST /api/apply`), the documentation is written again and the page
+  reloads where it was; **⤓ Patch** saves `docair.patch`.
 
 ### 10.7 The reply
 
@@ -1639,29 +1830,34 @@ don't care about … / show me only …* gets a view change; *this is wrong /
 the conversation (question and answer, at most 8) and, in the web app, the
 selected node as context.
 
-> **Viewer mock: the conversation in the web app.** A panel at the right of
-> the page; the page stays usable while the model writes.
+> **Page mock: the conversation, ✦ Ask in the page.** A panel at the right;
+> the page stays usable while the model writes.
 >
 > ```text
-> ┌─ Ask docair ───────────────────────────── × ┐
+> ┌─ ✦ Ask docair ─────────────── fake-model × ┐
 > │                     How does provisioning   │
 > │                                    work? ◀──┤ you
-> │ ✦ One terraform apply creates the cluster,  │
-> │   loads the images and installs two charts. │
-> │   [▶ Play walkthrough: 10 steps]            │
+> │ One terraform apply creates the cluster,    │
+> │ loads the images and installs two charts.   │
+> │ ✦ Provisioning   [▶ Play · 10 steps]        │
 > │                                             │
 > │                  I don't care about terraform│
-> │ ✦ Hid terraform.               [Undo]       │
-> │                                             │
+> │ Hide terraform: written into docair.toml    │
+> │ when applied.                               │
 > │       The server also reads the AI Secret   │
-> │ ✦ Right, the graph misses that edge.        │
+> │ Right, the graph misses that edge.          │
 > │   ✎ docair-server.config  lib.rs:41         │
 > │     + @reads k8s.secret.docair-ai           │
+> │   2 edits wait to be applied                │
 > │   [Review diff] [Apply & regenerate] [⤓]    │
 > │─────────────────────────────────────────────│
-> │ [Ask a follow-up…                    ] [➤]  │
+> │ [✦ Word the lines] [✦ Explain the terms]    │
+> │ [Ask, or tell docair what to change…  ] [➤] │
 > └─────────────────────────────────────────────┘
 > ```
+
+A walkthrough plays at `#slice/walkthrough:<id>` once the documentation is
+written again; a view change and edits wait until they are applied.
 
 ### 10.8 Words for the lines
 
@@ -1672,27 +1868,19 @@ no authored payload), with their kinds, names and summaries, and writes 2 to
 folder", "reads the upload limits", "checks that a folder becomes a page".
 
 * Calls come first, tests last; 40 lines go into one request; `--scope` (or
-  the selected part in the web app) limits it to lines that touch one part.
+  the selected part in the page) limits it to lines that touch one part.
   `--all` also words lines that show only a type (`Order`): the phrase goes
   on the line, the type stays in the tooltip and the details.
-* The words show on the page at once, marked ✦, before anything is written.
+* The words are listed in the reply; the pictures show them once they are
+  applied, as the page lays out nothing itself.
 * Each line's words become an edit of the tag that made the line: the
   `"…"` goes in right after the ref, on the same line (§10.6), so a review
-  sees one changed line per word. Applying them makes them part of the docs;
-  the ✦ goes away.
+  sees one changed line per word. Applying them makes them part of the docs.
 
 ```diff
 - * @calls   docair-core.walkthrough.bind
 + * @calls   docair-core.walkthrough.bind "checks the reply against the graph"
 ```
-
-> **Viewer mock: words proposed by the model, before they are applied.**
->
-> ```text
->  ƒ ask ──✦ shortens the graph for the model──► ƒ digest
->    │
->    └──✦ checks the reply against the graph──► ƒ bind
-> ```
 
 ---
 
@@ -1704,24 +1892,24 @@ functions. Any node can be **hidden**: it disappears with everything inside
 it, and so do the edges that touch it. Hiding is a view setting, never a
 change to the graph: `docair check` and the JSON are unchanged.
 
-* `docair.toml` `[view] hide = [ids]` sets what the page hides when it opens.
-* In the viewer, each row of the tree has an eye: click to hide or show that
-  section. Hidden sections are listed above the picture as chips; a chip
-  shows its section again, **Show all** shows everything. Several hidden
-  parts of one group are one chip (`infra: 3 hidden`).
+* `docair.toml` `[view] hide = [ids]` leaves those parts out of the pictures
+  the CLI draws; `[view] show = [ids]` brings a part inside a hidden section
+  back, as below.
+* In the page, each row of the tree has an eye: click to hide or show that
+  section. The page hides it where it is: its place in the picture stays
+  empty, with its lines and their words, and nothing is laid out again. Hidden
+  sections are listed above the picture as chips; a chip shows its section
+  again, **Show all** shows everything.
 * **A part inside a hidden section can be shown.** Its eye in the tree (or
   *Show this section* in its details) brings the hidden section back with
   only that part in it: from the hidden section down to the part, each group
   is shown, and its other children are hidden instead. Showing a sub-folder
   is the same as hiding its siblings, and that is what the chips then say.
-  `[view] show = [ids]` does it when the page opens, after `hide`.
-* **Show only this** in a node's details hides every part beside it and
-  beside each group around it, up to the top.
-* The node details have **Hide this section**.
+* The node details have **Hide this section**, or **Show this section** when
+  it is hidden.
 * The choice is remembered per system in the browser.
-* A reply of the model can hide and show sections (§10.7), with **Undo**.
-* A walkthrough that steps into a hidden section shows it for that step
-  and says so.
+* A reply of the model can propose to hide and show sections (§10.7); applied,
+  they go into `[view]` in `docair.toml`.
 
 > **Viewer mock: `infra` hidden, then its `cluster` shown again.** The
 > Terraform resource beside the cluster is hidden instead.

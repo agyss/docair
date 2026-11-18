@@ -5,15 +5,20 @@
 //! pipeline on it and answers with the summary and the generated page.
 //! `POST /api/ask` asks the configured AI model about a graph (SPEC §10.5).
 
+/***
+ * A project the CLI or a server works on: its graph, an answer taken in, edits applied, the documentation written again.
+ ***/
+pub mod project;
+
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use axum::extract::{DefaultBodyLimit, Multipart, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Multipart, Request, State};
+use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use docair_ai::{AiConfig, Env, Reply, Turn};
+use docair_ai::{AiConfig, Env, Turn};
 use docair_core::model::{Change, Diagnostic, Graph, Severity};
 use docair_core::{Options, scan};
 use serde::{Deserialize, Serialize};
@@ -34,6 +39,11 @@ pub struct Config {
     pub static_dir: Option<PathBuf>,
     /// The model for `/api/ask`; `None` turns asking off.
     pub ai: Option<AiConfig>,
+    /// The project `docair serve` serves: its documentation at `/`, and the graph the AI routes use
+    /// when a request brings none.
+    pub project: Option<Arc<project::ServedProject>>,
+    /// Uploads kept as projects, so their pages can ask the AI and apply edits (`/api/projects/<id>/`).
+    pub uploads: Arc<project::KeptUploads>,
     asking: Arc<Semaphore>,
 }
 
@@ -44,6 +54,8 @@ impl Default for Config {
             max_files: 5000,
             static_dir: None,
             ai: None,
+            project: None,
+            uploads: Arc::default(),
             asking: Arc::new(Semaphore::new(ASKING_AT_ONCE)),
         }
     }
@@ -81,14 +93,19 @@ impl Config {
 }
 
 /***
- * The HTTP routes: `GET /healthz` for the kubelet's probes, `POST /api/scan` for uploads, `GET /api/ai` and `POST /api/ask` for questions.
+ * The HTTP routes: `GET /healthz` for the kubelet's probes, `POST /api/scan` for uploads, `GET /api/ai` and `POST /api/ask` for questions; with a project (`docair serve`), its documentation at `/`, `GET /api/version` and `POST /api/apply`.
+ *
+ * A question, `/api/word` or `/api/glossary` without a graph is about the
+ * project the server serves; its answer says whether the documentation was
+ * written again.
  *
  * Requests reach this router through the Service docair-server on port 8080.
  *
  * @id      docair-server.router
- * @calls   docair-server.health (GET /healthz) -> ok
- * @calls   docair-server.scan_upload (POST /api/scan: files) -> ScanResult
- * @calls   docair-server.ai_status (GET /api/ai) -> AiStatus
+ * @calls   docair-server.upload_router "adds the probe, uploads and whether the AI is on"
+ * @calls   docair-server.project.page (GET /) -> html
+ * @calls   docair-server.project.version (GET /api/version) -> ServeVersion
+ * @calls   docair-server.project.apply (POST /api/apply) -> ServeApplied
  * @calls   docair-server.ask (POST /api/ask: question, graph, history) -> Reply
  * @calls   docair-server.patch (POST /api/patch: changes, files) -> PatchAnswer
  * @calls   docair-server.word (POST /api/word: graph, scope) -> Reply
@@ -98,21 +115,169 @@ impl Config {
 pub fn router(config: Config) -> Router {
     let limit = config.max_upload_bytes;
     let static_dir = config.static_dir.clone();
-    let mut app = Router::new()
-        .route("/healthz", get(health))
-        .route("/api/scan", post(scan_upload))
-        .route("/api/ai", get(ai_status))
+    let out = config.project.as_ref().map(|p| p.lock().out.clone());
+    let mut routes = Router::new()
         .route("/api/ask", post(ask))
         .route("/api/patch", post(patch))
         .route("/api/word", post(word))
-        .route("/api/glossary", post(glossary))
-        .layer(DefaultBodyLimit::max(limit))
-        .with_state(config);
+        .route("/api/glossary", post(glossary));
+    if config.project.is_some() {
+        routes = routes
+            .route("/", get(project::page))
+            .route("/api/version", get(project::version))
+            .route("/api/apply", post(project::apply));
+    }
+    let mut app = upload_router(config.clone()).merge(
+        routes
+            .layer(DefaultBodyLimit::max(limit))
+            .with_state(config),
+    );
+    if let Some(out) = out {
+        // A project's other outputs at their paths.
+        return app.fallback_service(ServeDir::new(out));
+    }
     if let Some(dir) = static_dir {
         let index = dir.join("index.html");
         app = app.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
     }
     app
+}
+
+/***
+ * The routes that need no project of their own: the probe, uploads, whether the AI is on, and the uploads kept as projects; `docair serve` adds its project's routes beside them.
+ *
+ * @calls docair-server.health (GET /healthz) -> ok
+ * @calls docair-server.scan_upload (POST /api/scan: files) -> ScanResult
+ * @calls docair-server.ai_status (GET /api/ai) -> AiStatus
+ * @calls docair-server.kept_upload (GET /api/projects/<id>/…) -> the upload's page and outputs
+ * @calls docair-server.kept_upload_post (POST /api/projects/<id>/api/…) -> the AI on the upload
+ ***/
+pub fn upload_router(config: Config) -> Router {
+    let limit = config.max_upload_bytes;
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/api/scan", post(scan_upload))
+        .route("/api/ai", get(ai_status))
+        .route("/api/projects/{id}", kept())
+        .route("/api/projects/{id}/", kept())
+        .route("/api/projects/{id}/{*rest}", kept())
+        .layer(DefaultBodyLimit::max(limit))
+        .with_state(config)
+}
+
+/// A project's own routes, as `docair serve` has them at `/`: its page, the AI on it, applying, and its other outputs.
+fn project_routes(config: Config) -> Router {
+    let limit = config.max_upload_bytes;
+    let out = config.project.as_ref().map(|p| p.lock().out.clone());
+    let routes = Router::new()
+        .route("/", get(project::page))
+        .route("/api/ai", get(ai_status))
+        .route("/api/version", get(project::version))
+        .route("/api/apply", post(project::apply))
+        .route("/api/ask", post(ask))
+        .route("/api/word", post(word))
+        .route("/api/glossary", post(glossary))
+        .layer(DefaultBodyLimit::max(limit))
+        .with_state(config);
+    match out {
+        Some(out) => routes.fallback_service(ServeDir::new(out)),
+        None => routes,
+    }
+}
+
+/***
+ * An upload kept as a project, at `/api/projects/<id>/`: its page, and below it the routes a page `docair serve` serves calls (`api/ai`, `api/version`, `api/ask`, `api/word`, `api/glossary`, `api/apply`), on that upload.
+ *
+ * The web app shows the page in a sandboxed frame, whose origin is opaque, so the answers allow every origin (`Access-Control-Allow-Origin: *`); the server has no accounts or cookies to protect. An upload no longer kept answers 404.
+ *
+ * @id      docair-server.kept_upload
+ * @http    GET /api/projects/{id}/{rest}
+ * @calls   docair-server.project.kept-uploads.get "finds the upload"
+ * @calls   docair-server.project.page (GET /api/projects/<id>/) -> html
+ ***/
+async fn kept_upload(State(config): State<Config>, req: Request) -> Response {
+    kept_upload_any(config, req).await
+}
+
+/***
+ * Ask, word, explain or apply on a kept upload (`POST /api/projects/<id>/api/…`), as `docair serve` does for its project.
+ *
+ * @id      docair-server.kept_upload_post
+ * @http    POST /api/projects/{id}/{rest}
+ * @calls   docair-server.ask (POST /api/projects/<id>/api/ask: question, history, context) -> ServeAnswer
+ * @calls   docair-server.project.apply (POST /api/projects/<id>/api/apply) -> ServeApplied
+ ***/
+async fn kept_upload_post(State(config): State<Config>, req: Request) -> Response {
+    kept_upload_any(config, req).await
+}
+
+/// The routes of a kept upload: GET, POST, and the preflight a JSON POST from the sandboxed frame sends first.
+fn kept() -> axum::routing::MethodRouter<Config> {
+    get(kept_upload)
+        .post(kept_upload_post)
+        .options(kept_upload_preflight)
+}
+
+async fn kept_upload_preflight(State(config): State<Config>, req: Request) -> Response {
+    kept_upload_any(config, req).await
+}
+
+/// Any request to a kept upload, answered for every origin.
+async fn kept_upload_any(config: Config, req: Request) -> Response {
+    let mut res = if req.method() == Method::OPTIONS {
+        let mut r = StatusCode::NO_CONTENT.into_response();
+        let h = r.headers_mut();
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST"),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("content-type"),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("3600"),
+        );
+        r
+    } else {
+        kept_upload_answer(config, req).await
+    };
+    res.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    res
+}
+
+/// The answer of the upload's own routes, the path below `/api/projects/<id>` as the request's path.
+async fn kept_upload_answer(config: Config, mut req: Request) -> Response {
+    use tower::ServiceExt;
+    let path = req.uri().path().to_string();
+    let below = path.strip_prefix("/api/projects/").unwrap_or("");
+    let (id, rest) = below.split_once('/').unwrap_or((below, ""));
+    let Some(project) = config.uploads.get(id) else {
+        return ApiError(
+            StatusCode::NOT_FOUND,
+            "this upload is no longer kept; upload the folder again".into(),
+        )
+        .into_response();
+    };
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let Ok(uri) = format!("/{rest}{query}").parse::<Uri>() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    *req.uri_mut() = uri;
+    let mut own = config.clone();
+    own.project = Some(project);
+    match project_routes(own).oneshot(req).await {
+        Ok(r) => r.into_response(),
+        Err(e) => match e {},
+    }
 }
 
 /***
@@ -140,17 +305,21 @@ pub struct ScanResult {
     pub html: String,
     /// The graph, so the browser can send it back with a question.
     pub graph: Graph,
+    /// Where the server keeps the upload as a project: its page, which asks the AI and applies edits on the server's copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
 }
 
 /***
- * Take one upload: save the files to a scratch folder, scan them, answer with the summary and the page.
+ * Take one upload: save the files to a scratch folder, scan them as a project, keep it, answer with the summary, the page and where the page lives.
  *
- * The scratch folder is deleted when the request ends, so the server keeps no state between requests.
+ * The upload is kept as a project (`KeptUploads`): its page at `/api/projects/<id>/` asks the AI about it, and applied edits change the server's copy. It is dropped with its folder after an hour unused, or when more uploads come.
  *
  * @id      docair-server.scan_upload
  * @http    POST /api/scan
  * @calls   docair-server.save_files (multipart files) -> file count
- * @calls   docair-server.run_scan (folder) -> ScanResult
+ * @calls   docair-server.project.served-project.open_upload (folder) -> the upload as a project
+ * @calls   docair-server.project.kept-uploads.keep "keeps it under an id"
  * @flow    upload 11 "the handler takes the upload"
  ***/
 async fn scan_upload(
@@ -167,9 +336,52 @@ async fn scan_upload(
             "the upload contained no files".into(),
         ));
     }
-    let root = dir.path().to_path_buf();
-    let result = tokio::task::spawn_blocking(move || run_scan(&root, files)).await??;
+    let root = scan_root(dir.path())?;
+    let ai = config.ai.clone();
+    let (project, mut result) = tokio::task::spawn_blocking(move || {
+        let project = project::ServedProject::open_upload(&root, ai)?;
+        let result = {
+            let s = project.lock();
+            let html = std::fs::read_to_string(s.out.join("docair.html"))?;
+            scan_result(s.graph.clone(), html, files)
+        };
+        anyhow::Ok((project, result))
+    })
+    .await??;
+    let id = config.uploads.keep(dir, Arc::new(project));
+    result.page = Some(format!("/api/projects/{id}/"));
     Ok(Json(result))
+}
+
+/// The folder to scan: a single uploaded folder is scanned from inside, so its name becomes the system's name.
+fn scan_root(root: &Path) -> std::io::Result<PathBuf> {
+    let entries: Vec<_> = std::fs::read_dir(root)?.filter_map(Result::ok).collect();
+    Ok(match entries.as_slice() {
+        [only] if only.path().is_dir() => only.path(),
+        _ => root.to_path_buf(),
+    })
+}
+
+/// The summary of a scan, with its page.
+fn scan_result(graph: Graph, html: String, files: usize) -> ScanResult {
+    let errors = graph
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .count();
+    ScanResult {
+        system: graph.system.clone(),
+        files,
+        nodes: graph.nodes.len(),
+        edges: graph.edges.len(),
+        flows: graph.flows.len(),
+        errors,
+        warnings: graph.diagnostics.len() - errors,
+        diagnostics: graph.diagnostics.iter().take(100).cloned().collect(),
+        html,
+        graph,
+        page: None,
+    }
 }
 
 /***
@@ -242,36 +454,16 @@ pub fn safe_path(name: &str) -> Option<PathBuf> {
  * @flow    upload 13 "the docair pipeline runs on the upload"
  ***/
 pub fn run_scan(root: &Path, files: usize) -> anyhow::Result<ScanResult> {
-    let entries: Vec<_> = std::fs::read_dir(root)?.filter_map(Result::ok).collect();
-    let scan_root = match entries.as_slice() {
-        [only] if only.path().is_dir() => only.path(),
-        _ => root.to_path_buf(),
-    };
     let graph = scan(
-        &scan_root,
+        &scan_root(root)?,
         docair_adapters::all(),
         &Options {
             lenient: true,
             untrusted: true,
         },
     )?;
-    let errors = graph
-        .diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .count();
-    Ok(ScanResult {
-        system: graph.system.clone(),
-        files,
-        nodes: graph.nodes.len(),
-        edges: graph.edges.len(),
-        flows: graph.flows.len(),
-        errors,
-        warnings: graph.diagnostics.len() - errors,
-        diagnostics: graph.diagnostics.iter().take(100).cloned().collect(),
-        html: docair_viewer::render_html(&graph),
-        graph,
-    })
+    let html = docair_viewer::render_html(&graph);
+    Ok(scan_result(graph, html, files))
 }
 
 /// Whether the web app may show the Ask box. Never the key or the endpoint.
@@ -298,7 +490,9 @@ async fn ai_status(State(config): State<Config>) -> Json<AiStatus> {
 #[derive(Debug, Deserialize)]
 pub struct AskRequest {
     pub question: String,
-    pub graph: Graph,
+    /// The graph to ask about; none asks about the project the server serves.
+    #[serde(default)]
+    pub graph: Option<Graph>,
     /// Earlier turns of the conversation, oldest first.
     #[serde(default)]
     pub history: Vec<Turn>,
@@ -319,7 +513,7 @@ pub struct AskRequest {
 async fn ask(
     State(config): State<Config>,
     Json(req): Json<AskRequest>,
-) -> Result<Json<Reply>, ApiError> {
+) -> Result<Response, ApiError> {
     let Some(ai) = config.ai.clone() else {
         return Err(ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -345,17 +539,41 @@ async fn ask(
         context,
         ..
     } = req;
+    let Some(graph) = graph else {
+        // The project's own graph; the answer is taken into the project.
+        let project = served(&config)?;
+        let graph = project.lock().graph.clone();
+        let fresh = history.is_empty();
+        let answer = tokio::task::spawn_blocking(move || {
+            let reply = docair_ai::ask(&ai, &graph, &question, &history, context.as_deref())
+                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+            project::answered(&project, reply, fresh)
+        })
+        .await??;
+        return Ok(Json(answer).into_response());
+    };
     let reply = tokio::task::spawn_blocking(move || {
         docair_ai::ask(&ai, &graph, &question, &history, context.as_deref())
     })
     .await?
     .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    Ok(Json(reply))
+    Ok(Json(reply).into_response())
+}
+
+/// The project this server serves, for a request that brings no graph.
+fn served(config: &Config) -> Result<Arc<project::ServedProject>, ApiError> {
+    config.project.clone().ok_or_else(|| {
+        ApiError(
+            StatusCode::BAD_REQUEST,
+            "send the graph: this server serves no project of its own".into(),
+        )
+    })
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WordRequest {
-    pub graph: Graph,
+    #[serde(default)]
+    pub graph: Option<Graph>,
     /// Only lines that touch this node or anything inside it.
     #[serde(default)]
     pub scope: Option<String>,
@@ -376,7 +594,7 @@ pub struct WordRequest {
 async fn word(
     State(config): State<Config>,
     Json(req): Json<WordRequest>,
-) -> Result<Json<Reply>, ApiError> {
+) -> Result<Response, ApiError> {
     let Some(ai) = config.ai.clone() else {
         return Err(ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -393,17 +611,29 @@ async fn word(
     let WordRequest {
         graph, scope, all, ..
     } = req;
+    let Some(graph) = graph else {
+        let project = served(&config)?;
+        let graph = project.lock().graph.clone();
+        let answer = tokio::task::spawn_blocking(move || {
+            let reply = docair_ai::word(&ai, &graph, scope.as_deref(), limit, all)
+                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+            project::answered(&project, reply, true)
+        })
+        .await??;
+        return Ok(Json(answer).into_response());
+    };
     let reply = tokio::task::spawn_blocking(move || {
         docair_ai::word(&ai, &graph, scope.as_deref(), limit, all)
     })
     .await?
     .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    Ok(Json(reply))
+    Ok(Json(reply).into_response())
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GlossaryRequest {
-    pub graph: Graph,
+    #[serde(default)]
+    pub graph: Option<Graph>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -418,7 +648,7 @@ pub struct GlossaryRequest {
 async fn glossary(
     State(config): State<Config>,
     Json(req): Json<GlossaryRequest>,
-) -> Result<Json<Reply>, ApiError> {
+) -> Result<Response, ApiError> {
     let Some(ai) = config.ai.clone() else {
         return Err(ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -432,12 +662,22 @@ async fn glossary(
         ));
     };
     let limit = req.limit.unwrap_or(15).clamp(1, 40);
-    let graph = req.graph;
+    let Some(graph) = req.graph else {
+        let project = served(&config)?;
+        let graph = project.lock().graph.clone();
+        let answer = tokio::task::spawn_blocking(move || {
+            let reply = docair_ai::glossary::explain(&ai, &graph, limit)
+                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+            project::answered(&project, reply, true)
+        })
+        .await??;
+        return Ok(Json(answer).into_response());
+    };
     let reply =
         tokio::task::spawn_blocking(move || docair_ai::glossary::explain(&ai, &graph, limit))
             .await?
             .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    Ok(Json(reply))
+    Ok(Json(reply).into_response())
 }
 
 /// A file the browser holds, by its path relative to the scanned root.
@@ -565,6 +805,84 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
+    /// An upload is kept as a project: its page and its own routes under `/api/projects/<id>/`, open to any origin.
+    #[tokio::test]
+    async fn an_upload_is_kept_and_served_as_a_project() {
+        let app = router(Config::default());
+        let call = |req: Request<Body>| {
+            let app = app.clone();
+            async move {
+                let res = app.oneshot(req).await.unwrap();
+                let status = res.status();
+                let cors = res
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .map(|v| v.to_str().unwrap().to_string());
+                let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+                (status, cors, String::from_utf8_lossy(&bytes).to_string())
+            }
+        };
+        let (content_type, body) = multipart(&[(
+            "shop/README.md",
+            "# Shop\n\n```docair\nThe shop.\n\n@id      app\n@kind    module\n@part-of shop\n```\n",
+        )]);
+        let (status, _, json) = call(
+            Request::post("/api/scan")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let page = json["page"].as_str().unwrap().to_string();
+        let (status, cors, html) = call(Request::get(&page).body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(cors.as_deref(), Some("*"));
+        assert!(html.contains("docair-packed"), "the upload's page");
+        let (status, _, version) = call(
+            Request::get(format!("{page}api/version"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(version, r#"{"version":1}"#);
+        let (status, _, graph) = call(
+            Request::get(format!("{page}docair.graph.json"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(graph.contains("\"app\""), "its other outputs");
+        // The frame's origin is opaque: a JSON POST asks first.
+        let (status, cors, _) = call(
+            Request::options(format!("{page}api/ask"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(cors.as_deref(), Some("*"));
+        // Asking about the upload without a model says so.
+        let (status, _, said) = call(
+            Request::post(format!("{page}api/ask"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"question":"How does it work?"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{said}");
+        let (status, _, _) = call(
+            Request::get("/api/projects/0123456789abcdef0123456789abcdef/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
     #[test]
     fn paths_stay_inside_the_upload() {
         assert_eq!(
@@ -602,7 +920,13 @@ mod tests {
         );
         assert_eq!(json["files"], 2);
         assert!(json["nodes"].as_u64().unwrap() >= 2);
-        assert!(json["html"].as_str().unwrap().contains("docair-graph"));
+        assert!(json["html"].as_str().unwrap().contains("docair-packed"));
+        assert!(
+            json["page"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("/api/projects/")),
+            "{json}"
+        );
     }
 
     #[tokio::test]

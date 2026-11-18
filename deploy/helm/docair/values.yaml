@@ -8,9 +8,11 @@ server:
   maxUploadMb: 25
   maxFiles: 5000
   podAnnotations: {}
+  # The server lays out and draws every picture of an upload (docs/SLICES.md step 5): docair's own
+  # repository peaks at about 420 MB, four pictures at once.
   resources:
     requests: { cpu: 50m, memory: 64Mi }
-    limits: { memory: 512Mi }
+    limits: { memory: 1Gi }
 
 web:
   image:

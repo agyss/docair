@@ -7,6 +7,43 @@ info:
   version: 0.1.0
   description: Turns an uploaded folder into a docair page, and answers questions about it with the configured AI model.
 paths:
+  /:
+    get:
+      operationId: page
+      summary: The documentation of the project `docair serve` serves.
+      responses:
+        '200':
+          description: The documentation, never cached.
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: The server serves no project.
+  /api/version:
+    get:
+      operationId: version
+      summary: How often the documentation has been written; the page polls it to reload.
+      responses:
+        '200':
+          description: The version, one more each time the documentation is written again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeVersion'
+  /api/apply:
+    post:
+      operationId: apply
+      summary: Write the edits that wait into the project's files, scan again and write the documentation again.
+      responses:
+        '200':
+          description: The files written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeApplied'
+        '409':
+          description: No edits wait to be applied.
   /healthz:
     get:
       operationId: health
@@ -18,6 +55,22 @@ paths:
             text/plain:
               schema:
                 type: string
+  /api/projects/{id}/{rest}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}, description: "The kept upload: `page` of the scan's answer is /api/projects/<id>/."}
+      - {name: rest, in: path, required: true, schema: {type: string}, description: "Empty for the page; else api/ai, api/version, api/ask, api/word, api/glossary, api/apply, or another output (docair.graph.json)."}
+    get:
+      operationId: kept_upload
+      summary: The kept upload's page, its version, whether the AI is on, or another output; open to any origin.
+      responses:
+        '200': {description: The page (text/html) or the route's JSON, as docair serve answers it at /.}
+        '404': {description: The upload is no longer kept.}
+    post:
+      operationId: kept_upload_post
+      summary: Ask, word, explain or apply on the kept upload, as docair serve does for its project; open to any origin.
+      responses:
+        '200': {description: A ServeAnswer, or for api/apply a ServeApplied.}
+        '404': {description: The upload is no longer kept.}
   /api/scan:
     post:
       operationId: scan_upload
@@ -55,7 +108,7 @@ paths:
   /api/ask:
     post:
       operationId: ask
-      summary: Ask the model about the graph.
+      summary: Ask the model about the graph, or without a graph about the project the server serves (then the answer is a ServeAnswer).
       requestBody:
         required: true
         content:
@@ -135,6 +188,26 @@ components:
         diagnostics: {type: array, items: {type: object}}
         html: {type: string}
         graph: {type: object}
+        page: {type: string, description: "Where the server keeps the upload as a project: /api/projects/<id>/."}
+    ServeVersion:
+      type: object
+      properties:
+        version: {type: integer}
+    ServeAnswer:
+      type: object
+      properties:
+        reply: {$ref: '#/components/schemas/Reply'}
+        regenerated: {type: boolean}
+        version: {type: integer}
+        patch: {type: string}
+        pending: {type: integer}
+        html: {type: string, description: "The reply as the page's chat shows it: the answer, a walkthrough to play, words, terms, a view change, the edits waiting with their diff."}
+    ServeApplied:
+      type: object
+      properties:
+        edited: {type: array, items: {type: string}}
+        regenerated: {type: boolean}
+        version: {type: integer}
     AiStatus:
       type: object
       properties:
@@ -144,20 +217,20 @@ components:
       type: object
       properties:
         question: {type: string}
-        graph: {type: object}
+        graph: {type: [object, 'null']}
         history: {type: array, items: {type: object}}
         context: {type: [string, 'null']}
     WordRequest:
       type: object
       properties:
-        graph: {type: object}
+        graph: {type: [object, 'null']}
         scope: {type: [string, 'null']}
         limit: {type: [integer, 'null']}
         all: {type: boolean}
     GlossaryRequest:
       type: object
       properties:
-        graph: {type: object}
+        graph: {type: [object, 'null']}
         limit: {type: [integer, 'null']}
     PatchRequest:
       type: object

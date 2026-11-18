@@ -1,9 +1,11 @@
 # e2e: end-to-end tests
 
 Playwright drives what a user does: generate the docs in the web app, look at
-them layer by layer, hide sections, follow a walkthrough, clarify with the
-AI (a fake model, so every run gives the same answers), apply the edits it
-proposes, and the same from the CLI.
+the page docair wrote layer by layer and box by box, hide sections, follow a
+walk, clarify with the AI in the page `docair serve` serves (a fake model, so
+every run gives the same answers), apply the edits it proposes, and the same
+from the CLI. The tests read the page's DOM, its `#` addresses and
+`docair.graph.json`; nothing reaches into the page's script.
 
 ```bash
 npm ci && npx playwright install chromium   # once
@@ -20,12 +22,16 @@ docair.toml). The **Tests** switch in the page hides them.
 
 | File | What it covers |
 |------|----------------|
-| `tests/generate.spec.ts` | upload, scan, the page, secret files left out, New upload |
-| `tests/levels.spec.ts` | layers (each draws its own concern; a request through the network is one line between the apps), zooming into a box, every line has words, walks at the layer that is about them with Open and Back, at a readable size |
-| `tests/sections.spec.ts` | hiding and showing sections; `[view] hide` |
+| `tests/generate.spec.ts` | upload, scan, the page in its frame, secret files left out, New upload |
+| `tests/page.spec.ts` | the page docair wrote: each layer by its address, a request through the network as one line, every line with words, at right angles and off the parts, a box opened into its section and Back |
+| `tests/levels.spec.ts` | walks (messages, answers, a readable camera, lines pointing ahead), zooming into a box, parts found only in the code, the legend, docair's own lines |
+| `tests/layout.spec.ts`, `tests/pick.spec.ts` | a part by its address: where it stays, its home, a link bringing it close, a click selecting it where it is |
+| `tests/sections.spec.ts` | hiding and showing sections in the page; `[view] hide` and `show` applied by docair |
+| `tests/data.spec.ts` | where a part runs; the Data list; following a datum there and back |
 | `tests/tests-layer.spec.ts` | test results on the page, the Tests switch, "Tested by" |
-| `tests/ask.spec.ts` | the conversation: walkthroughs, follow-ups, view changes, edits applied and regenerated, Word the lines, Explain the terms |
-| `tests/glossary.spec.ts` | terms explained on hover, Read more in the page, the entry, the Glossary list |
+| `tests/ask.spec.ts` | the chat in the page `docair serve` serves, one server per test: walkthroughs, follow-ups, view changes and edits applied to the project, Word the lines, Explain the terms |
+| `tests/glossary.spec.ts`, `tests/meanings.spec.ts` | terms explained on hover, Read more in the page, the entry, the Glossary list; words the code defines |
+| `tests/apis.spec.ts`, `tests/infra.spec.ts` | API descriptions met with the code; Terraform, Helm and manifests |
 | `tests/cli.spec.ts` | `docair ask`, `--follow-up`, `docair chat`, `docair apply`, `docair word`, `docair glossary`, `--apply` into docair.toml |
 | `fixtures/shop/` | the project the tests document: Rust, TypeScript, Terraform, a scenario, tests with results |
 

@@ -57,6 +57,10 @@ pub mod ids;
  ***/
 pub mod lang;
 /***
+ * What each layer draws: the parts it is about, their boxes, context, closed boxes, and lines through left-out parts.
+ ***/
+pub mod layer_view;
+/***
  * The glossary: what the words of the docs mean, and the docs it links to.
  ***/
 pub mod glossary;
@@ -89,6 +93,12 @@ pub mod route;
  * Function signatures as wording for the edges that call them.
  ***/
 pub mod signature;
+/***
+ * Slices: one part of the system, from a seed (a datum, a part, a route, a walk) to its ends.
+ *
+ * @doc ../../../docs/SLICES.md
+ ***/
+pub mod slice;
 /***
  * Test results from Playwright reports, put on the test nodes.
  ***/

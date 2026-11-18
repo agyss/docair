@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="{{docair:generator}}">
+<title>{{docair:title}}</title>
+<style>
+{{docair:css}}
+</style>
+</head>
+<body>
+<!--***
+  The documentation as it runs in the browser: every picture laid out and drawn by the CLI, packed into the page, and a thin script that shows them by their address.
+
+  It needs nothing else: no library, no server. It decides, lays out and
+  measures nothing (docs/SLICES.md §7).
+
+  @id      docair-viewer.doc-page
+  @kind    service
+  @part-of browser
+***-->
+<div id="app">
+  <header>
+    <div class="brand">docair <span id="system-name">{{docair:system}}</span></div>
+    <div class="stats" id="stats">{{docair:stats}}</div>
+    <div class="spacer"></div>
+    <nav class="layers" id="layers" aria-label="Layer"><span class="seg-label">Layer</span>{{docair:layers}}</nav>
+    {{docair:tests}}
+    {{docair:buttons}}
+    {{docair:ask}}
+    <button class="btn" id="btn-legend">Legend</button>
+    <button class="btn" id="btn-fit" title="Fit the picture (F)">Fit</button>
+    <button class="{{docair:diag-class}}" id="btn-diag" title="{{docair:diag-title}}">{{docair:diag}}</button>
+  </header>
+  <aside id="tree">
+    <input id="search" type="search" placeholder="Filter nodes…" autocomplete="off">
+    <div id="tree-list">{{docair:tree}}</div>
+  </aside>
+  <main id="graph">
+    <div id="pic" data-test="picture"></div>
+    <nav id="crumbs" aria-label="Where this picture is"></nav>
+    <div id="tip" hidden></div>
+    <div id="legend">{{docair:legend}}</div>
+    <div id="toast" hidden></div>
+    <div id="reader" hidden data-test="reader"></div>
+    <div id="follow-bar" hidden data-test="follow-bar">following <span class="fb-chip"></span> <button class="chip-x" data-test="unfollow" title="Stop following">×</button></div>
+    <div id="hidden-bar" hidden data-test="hidden-bar"><span class="hb-label">hidden:</span><span class="hb-chips"></span><a class="link" data-test="show-all" hidden>Show all</a></div>
+  </main>
+  <aside id="details">{{docair:tours}}<p class="empty">Select a node to see its documentation.</p></aside>
+  <footer id="flow">{{docair:walks}}</footer>
+  <div id="drawer" hidden>{{docair:drawer}}</div>
+  <div id="term-pop" hidden role="tooltip" data-test="term-pop"></div>
+  {{docair:chat}}
+</div>
+<script id="docair-index" type="application/json">{{docair:index}}</script>
+<script id="docair-packed" type="application/json">{{docair:packed}}</script>
+<script id="docair-app">
+{{docair:app}}
+</script>
+</body>
+</html>

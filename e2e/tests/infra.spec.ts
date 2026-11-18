@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openStatic } from './helpers';
+import { graphOf, openStatic, pictured } from './helpers';
 
 /***
  * Infrastructure read from its code: Terraform, a Helm chart and Kubernetes manifests without one doc block.
@@ -15,10 +15,10 @@ test.describe('how things are provisioned and routed', () => {
    * @part-of e2e.infra
    * @covers  docair-lang-infra.index.discover "checks resources and objects become parts"
    * @covers  docair-lang-infra.index.anchors "checks creates, routes and selects"
+   * @covers  docair-core.layer_view.picture "checks the infrastructure, Kubernetes and network layers draw them"
    ***/
   test('Terraform, Helm and manifests become one picture', async ({ page }) => {
-    await openStatic(page, 'platform');
-    const graph = await page.evaluate(() => (window as any).docair.state.graph);
+    const graph = graphOf('platform');
     const partOf = (id: string) => graph.nodes.find((n: any) => n.id === id)?.part_of;
     expect(partOf('k8s.release.shop')).toBe('k8s.ns.shop');
     expect(partOf('k8s.ns.shop')).toBe('k8s.cluster.dev');
@@ -34,7 +34,11 @@ test.describe('how things are provisioned and routed', () => {
         'select k8s.svc.api -> k8s.deploy.api',
       ]),
     );
-    await page.evaluate(() => (window as any).docair.select('k8s.ingress.shop', true));
+    await openStatic(page, 'platform', '#layer/infra');
+    expect(await pictured(page)).toEqual(expect.arrayContaining(['tf.kind_cluster.dev', 'tf.helm_release.shop']));
+    await openStatic(page, 'platform', '#layer/k8s');
+    expect(await pictured(page)).toEqual(expect.arrayContaining(['k8s.release.shop', 'k8s.deploy.api']));
+    await openStatic(page, 'platform', '#part/k8s.ingress.shop');
     await expect(page.locator('#details')).toContainText('HTTP /api, port 80');
     await expect(page.locator('#details')).toContainText('requests (ingress class traefik)');
     await expect(page.locator('#details')).toContainText('discovered');

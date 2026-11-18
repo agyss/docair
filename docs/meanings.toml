@@ -103,6 +103,10 @@ why = "Already explained; the part's line (one diagnostic as the server reports 
 from = "data.digest"
 checked = "c0fbcc7c"
 
+[direction]
+term = false
+why = "everyday word: which way something runs or points; docair-layout's Direction (the way its layers run) means the same"
+
 [discover]
 from = "docair-core.discover"
 why = "Names the first pipeline stage; the module text says what it does."
@@ -186,6 +190,10 @@ from = "data.graph"
 checked = "e9f43579"
 why = "The sentences mean the graph docair builds and writes to docair.graph.json; the part says the same as the glossary entry."
 
+[hints]
+term = false
+why = "everyday word: what an author or the code suggests; model::Hints (what an adapter suggests about a block) and the layout's hints (which way a line should point) are no terms"
+
 [http]
 term = false
 why = "the docs mean the protocol; the `@http` tag is explained with the tags (SPEC §4.1)"
@@ -203,6 +211,10 @@ from = "docair-core.facts.inferred"
 checked = "4c4ef57a"
 why = "Project word: a value the adapter read from the code, as opposed to an authored one."
 
+[input]
+term = false
+why = "everyday word for what a step is given; meanings::Input and docair-layout's Input are each what their own step reads"
+
 [item]
 from = "docair-lang-rust.item"
 checked = "cbf29ce4"
@@ -210,6 +222,10 @@ why = "Project word: anything the Rust adapter picks up in a Rust file, not the 
 
 [layout]
 why = "The sentences mean the graph layout, how boxes are arranged in the picture; the page-layout component only shares the name."
+
+["layout input"]
+term = false
+why = "self-explanatory: what docair-layout is given to lay out a picture; docair-viewer's layout_input module makes it"
 
 [lines]
 term = false
@@ -259,12 +275,20 @@ why = "Already explained: the glossary's API description entry covers OpenAPI."
 from = "docair-lang-apis.model.operation"
 why = "Project word: an OpenAPI operation, a route the described service answers, not any operation."
 
+[options]
+term = false
+why = "everyday word: what a caller can choose; docair-core's Options (how a scan runs) and docair-layout's Options (how a picture is laid out) are each just that"
+
 [origin]
 why = "The sentences mean a URL's origin in the browser (CORS) sense; the model's Origin, where a value came from, only shares the name."
 
 [out]
 term = false
 why = "Everyday word in the sentences: 'leaves out' and 'lay it out' are verbs; the Out component is not what they mean."
+
+[part]
+term = false
+why = "everyday word in docair's docs for a node of the picture; docair-layout's Part is the same thing as the layout sees it"
 
 [patch]
 from = "data.patch"
@@ -278,6 +302,10 @@ why = "Everyday phrase: a file the user picked; the sentences use it plainly."
 [placed]
 term = false
 why = "Everyday participle in the sentences (laid out on the canvas); the Placed part is about where symbols merge, a different sense."
+
+[placement]
+term = false
+why = "everyday word: where things are put; docair-layout's Placement is the result of placing a picture's parts"
 
 [problem]
 term = false
@@ -340,6 +368,10 @@ from = "docair-core.route.route"
 checked = "08bb6297"
 why = "Project word for the paths code serves and descriptions declare; the route parts define it."
 
+[router]
+term = false
+why = "everyday word: what draws the lines; docair-layout's router module is docair's own router, ported from viewer.js"
+
 [rule]
 from = "docair-rules.rule"
 checked = "018c3443"
@@ -355,8 +387,8 @@ term = false
 why = "Plain word: one piece of a path or of an id; the sentences use it in its everyday sense."
 
 [selection]
-from = "docair-web.app.chat-panel.selection"
-why = "Project word: what the user picks on the chart, sent as context and a kind of relation; the Selection part defines it."
+term = false
+why = "Plain word: what the reader picks in the picture; the chat panel that defined it went with the web app's AI."
 
 [serve]
 from = "docair-core.facts.serve"
@@ -374,6 +406,10 @@ why = "Programming term the docs lean on; the Signature part defines it in plain
 ["source file"]
 term = false
 why = "Everyday word: a file of code; the part only adds that stage 1 picked it."
+
+[svg]
+term = false
+why = "the picture format; the sentences mean SVG pictures, and the module svg has no text of its own"
 
 [symbol]
 from = "docair-core.facts.symbol"
@@ -394,6 +430,10 @@ why = "Everyday word: what a relation points at; the part's text says exactly th
 [term]
 term = false
 why = "Everyday word here: a word the glossary explains; the part's text says it plainly."
+
+[text]
+term = false
+why = "everyday word; docair-layout's text module only measures words in one monospace font"
 
 [tree]
 term = false

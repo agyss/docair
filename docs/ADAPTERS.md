@@ -719,7 +719,7 @@ Each step is small, keeps every test green, and ends with something measurable.
 | 6 | Cross-language HTTP matching, the new diagnostics, the network path | web → server lines are inferred end to end in docair itself; renaming a route on one side warns |
 | 7 | Calls: `docair-scip` reads rust-analyzer and scip-typescript indexes; without an index, only calls the syntax makes certain | most of the ~100 hand-written internal calls come from code (`--coverage`); `parser.parse` never links to `glossary::parse` (test) |
 | 8 | Tidy (§6.1): CLI, header button, banner, panel, Tags tab, apply in the web app; run it on docair itself | docair's blocks hold explanations and what code can't show |
-| later | a cache per file hash; project rule dirs; more frameworks; more SCIP languages | |
+| later | project rule dirs; more frameworks; more SCIP languages (the Rust index is kept by a hash of its sources: docair-rc8, SPEC §1.1) | |
 
 ---
 

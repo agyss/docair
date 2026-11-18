@@ -222,8 +222,154 @@ pub fn run_rust_analyzer(root: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// rust-analyzer's version, so an index another version made is not taken for a new one.
+pub fn rust_analyzer_version() -> Option<String> {
+    let out = Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn fnv(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= b as u64;
+        *h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+}
+
+/// The key an index is kept under: the indexer's version, the sources it reads (by path and
+/// text), and the lock file that fixes the dependencies.
+pub fn rust_index_key(version: &str, sources: &[(&str, &str)], lock: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    fnv(&mut h, version.as_bytes());
+    let mut sorted: Vec<&(&str, &str)> = sources.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (rel, text) in sorted {
+        fnv(&mut h, &[0]);
+        fnv(&mut h, rel.as_bytes());
+        fnv(&mut h, &[0]);
+        fnv(&mut h, text.as_bytes());
+    }
+    fnv(&mut h, &[1]);
+    fnv(&mut h, lock.as_bytes());
+    format!("{h:016x}")
+}
+
+/// Where docair keeps what it can make again: `$DOCAIR_CACHE`, else the user's cache folder.
+pub fn cache_dir() -> std::path::PathBuf {
+    if let Some(d) = std::env::var_os("DOCAIR_CACHE") {
+        return d.into();
+    }
+    if let Some(d) = std::env::var_os("XDG_CACHE_HOME") {
+        return std::path::PathBuf::from(d).join("docair");
+    }
+    if let Some(d) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(d).join(".cache").join("docair");
+    }
+    std::env::temp_dir().join("docair-cache")
+}
+
+/// How many indexes are kept: the ones of a few recent states of the code.
+const KEPT: usize = 6;
+
+/***
+ * A SCIP index of a Cargo project: the one kept for the same sources, or a new one by `rust-analyzer scip`, then kept.
+ *
+ * `sources` are the files rust-analyzer reads, by path and text; with the
+ * lock file and the indexer's version they make the key. Only the newest
+ * indexes are kept.
+ *
+ * @calls docair-scip.rust_index_key "works out the key"
+ * @calls docair-scip.run_rust_analyzer "makes a new index"
+ ***/
+pub fn kept_rust_index(
+    root: &Path,
+    sources: &[(&str, &str)],
+    keep: &Path,
+) -> Result<std::path::PathBuf, String> {
+    let version = rust_analyzer_version().ok_or("rust-analyzer --version failed")?;
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap_or_default();
+    let path = keep.join(format!(
+        "rust-{}.scip",
+        rust_index_key(&version, sources, &lock)
+    ));
+    if path.is_file() {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(keep).map_err(|e| format!("{}: {e}", keep.display()))?;
+    let fresh = keep.join(format!("rust-{}.scip.part", std::process::id()));
+    run_rust_analyzer(root, &fresh)?;
+    std::fs::rename(&fresh, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Only the newest are kept.
+    let mut old: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(keep)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rust-") && n.ends_with(".scip"))
+        })
+        .filter_map(|p| Some((p.metadata().ok()?.modified().ok()?, p)))
+        .collect();
+    old.sort_by_key(|o| std::cmp::Reverse(o.0));
+    for (_, p) in old.into_iter().skip(KEPT) {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_index_is_kept_by_what_the_indexer_reads() {
+        use super::rust_index_key;
+        let a = rust_index_key(
+            "ra 1",
+            &[("src/lib.rs", "fn a() {}"), ("Cargo.toml", "[package]")],
+            "lock",
+        );
+        assert_eq!(
+            a,
+            rust_index_key(
+                "ra 1",
+                &[("Cargo.toml", "[package]"), ("src/lib.rs", "fn a() {}")],
+                "lock"
+            ),
+            "the order of the files does not matter"
+        );
+        assert_ne!(
+            a,
+            rust_index_key(
+                "ra 1",
+                &[("src/lib.rs", "fn b() {}"), ("Cargo.toml", "[package]")],
+                "lock"
+            ),
+            "a changed file does"
+        );
+        assert_ne!(
+            a,
+            rust_index_key(
+                "ra 2",
+                &[("src/lib.rs", "fn a() {}"), ("Cargo.toml", "[package]")],
+                "lock"
+            ),
+            "another indexer does"
+        );
+        assert_ne!(
+            a,
+            rust_index_key(
+                "ra 1",
+                &[("src/lib.rs", "fn a() {}"), ("Cargo.toml", "[package]")],
+                "lock 2"
+            ),
+            "other dependencies do"
+        );
+    }
+
     use super::*;
 
     const TRAIT: &str = "rust-analyzer cargo docair-core 0.1.0 adapter/Adapter#file().";

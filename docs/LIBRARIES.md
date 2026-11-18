@@ -26,14 +26,30 @@ by the proof of concept in this repository: `docair scan .` run on docair itself
 | CLI | `clap` 4 (derive) | the standard choice | `argh`, `lexopt` |
 | YAML and JSON with line numbers | `serde-saphyr` =2.0.0: API descriptions ([IMPORTS.md](IMPORTS.md)) are read into a tree whose every node keeps its line (`Spanned`), and JSON parses as YAML 1.2; ast-grep-config uses the same crate for rules. Kubernetes manifests are still read line by line, because Helm templates are not YAML | `serde_yaml` is deprecated and archived (Mar 2024); `saphyr`'s own tree has lines too, but would be a second YAML stack next to ast-grep's; 2.1.1 was younger than two weeks and 2.1.0 is yanked | `serde_yaml`, `serde_yml` (both deprecated), `saphyr` |
 | Pretty diagnostics (later) | `miette` or `ariadne` | source snippets in `docair check` output | — |
+| Layout of the pictures (docair-702.3, 702.9) | our own, crate `docair-layout` (2026-11-18): each box laid out on its own in layers (Sugiyama), sized and placed inside out (top-down); words in one monospace font, measured as characters times one advance; dagre's median positions and alternating ties taken over | lines may end at a box, which the pictures need; each box shrinks what it holds to a size budget (top-down); nested boxes never overlap; no dependency, and a library of its own. On 45 pictures of docair, routed by docair's router: 332 crossings, 1 621 bends, 36 Mpx² (SLICES.md §5); dagre with the same part sizes 286 crossings, 1 372 bends, but 141 Mpx², overlapping nested boxes, and no lines to boxes | `dagre` =0.1.2 (2026-10-30, Apache-2.0: no lines to boxes, boxes overlap, no sizing; without its default `json` feature it does not compile), `rust-sugiyama` 0.4.0 (no nested boxes), elkjs (JavaScript, stays only until docair-702.5) |
+| Packing the pictures (docair-702.5) | `miniz_oxide` 0.9.1 (2026-03-13) + `base64` 0.23.1 (2026-08-04), both the newest, in docair-viewer | each picture is deflated and written as base64 into the one HTML file (SLICES.md §13, choice 1); the browser inflates it with its own `DecompressionStream('deflate-raw')`, so the page needs no library. Pure Rust, already in the build (under ureq and serde-saphyr) | `flate2` 1.1.11 (2026-11-06: younger than two weeks; a wrapper around miniz_oxide), gzip framing (the browser reads raw deflate as well) |
 
-## Viewer (inlined into `docair.html`)
+## The page (`docair.html`)
+
+Since docs/SLICES.md step 5 (2026-11-18) the CLI lays out and draws every
+picture, so the page carries no library at all:
 
 | Concern | Choice | Size | License |
 |---------|--------|------|---------|
+| Layout | our own, crate `docair-layout` (Backend, above) | in the CLI | — |
+| Drawing | our own: SVG written by `docair-viewer` (`svg.rs`), coloured by CSS variables | in the CLI | — |
+| Packing the pictures | `miniz_oxide` + `base64` (Backend, above); the browser inflates with its own `DecompressionStream` | in the CLI | MIT/Apache-2.0 |
+| The page's script | `crates/docair-viewer/assets/page.js`: no framework, no build step, at most 1,000 lines (a test checks it) | ~35 KB | — |
+
+**Before step 5** the page inlined two libraries and laid out in the browser.
+They are gone, with `crates/docair-viewer/vendor/`; the record of why they were
+chosen stays below.
+
+| Concern | Choice then | Size | License |
+|---------|-------------|------|---------|
 | Drawing, interaction, animation | Cytoscape.js 3.34.4 | 436 KB | MIT |
 | Layout inside each box | elkjs 0.12.1 (ELK layered) | 1.6 MB | EPL-2.0 |
-| Glue | `crates/docair-viewer/assets/viewer.js`: no framework, no build step | ~35 KB | — |
+| Glue | `crates/docair-viewer/assets/viewer.js` | ~250 KB | — |
 
 **Cytoscape.js** has compound nodes built in, which gives the `@part-of`
 frames. It also covers styles per kind (barrel, rhomboid, hexagon, …), tap,
@@ -60,10 +76,10 @@ lays out the whole graph in one run; the viewer lays it out box by box.
 | maxGraph, JointJS | diagram editors; far more than a viewer needs |
 | `@dagrejs/dagre`, `cytoscape-dagre` | weaker than ELK on compound graphs; no orthogonal routing |
 
-**Licensing.** elkjs is EPL-2.0 (weak copyleft, file level). Shipping it
-unmodified inside the generated page is fine. The page carries a notice that
-names the license and the source repository, and
-`crates/docair-viewer/vendor/` holds the full license texts.
+**Licensing.** elkjs is EPL-2.0 (weak copyleft, file level); shipping it
+unmodified inside the generated page was fine, with a notice and the license
+texts in `crates/docair-viewer/vendor/`. The page now holds only docair's own
+code.
 
 ## Web app and cluster
 

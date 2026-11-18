@@ -1,35 +1,28 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openStatic } from './helpers';
+import { go, openStatic, select } from './helpers';
 
-/** Where the camera left a part: selected, readable, all of it on the canvas and in its middle, its halo, not dimmed. */
+/** Where the camera left a part: selected, readable, all of it on the canvas and in its middle, and not dimmed. */
 function framing(page: Page, id: string) {
   return page.evaluate((x) => {
-    const d = (window as any).docair;
-    const cy = d.state.cy;
-    const n = cy.getElementById(d.rep(x));
-    const b = n.renderedBoundingBox({ includeLabels: true });
-    const [w, h] = [cy.width(), cy.height()];
+    const g = document.querySelector(`#pic g.part[data-id="${CSS.escape(x)}"], #pic g.box[data-id="${CSS.escape(x)}"]`) as SVGGElement | null;
+    if (!g) return null;
+    const pic = document.querySelector('#pic')!.getBoundingClientRect();
+    const b = (g.querySelector('.sh') as SVGGraphicsElement).getBoundingClientRect();
+    const text = g.querySelector('text') as SVGTextElement;
+    // The words of the part on the screen, in px: readable from 0.8 of the page's 12 px.
+    const px = text.getBoundingClientRect().height / 1.2;
     return {
-      selected: n.selected(),
-      // As a walk's step (SPEC §10.4): zoom × the scale the part is drawn at.
-      readable: cy.zoom() * (n.data('sc') ?? 1) >= 0.8,
-      onCanvas: b.x1 >= 0 && b.y1 >= 0 && b.x2 <= w && b.y2 <= h,
-      inMiddle: Math.abs((b.x1 + b.x2) / 2 - w / 2) < 2 && Math.abs((b.y1 + b.y2) / 2 - h / 2) < 2,
-      halo: Number(n.style('underlay-opacity')),
-      opacity: Number(n.style('opacity')),
+      selected: g.classList.contains('sel'),
+      readable: px >= 0.8 * 12 * 0.9,
+      onCanvas: b.left >= pic.left && b.top >= pic.top && b.right <= pic.right && b.bottom <= pic.bottom,
+      inMiddle: Math.abs((b.left + b.right) / 2 - (pic.left + pic.right) / 2) < 2 && Math.abs((b.top + b.bottom) / 2 - (pic.top + pic.bottom) / 2) < 2,
+      dimmed: g.classList.contains('dim'),
     };
   }, id);
 }
 
-async function showCode(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    await (window as any).docair.showLayer('code');
-    await (window as any).docair.state.lastRender;
-  });
-}
-
 /***
- * Picking a part: from a link it comes close and stands out; on the canvas it is selected where it is.
+ * Picking a part: from a link it comes close and stands out; in the picture it is selected where it is.
  *
  * @id      e2e.pick
  * @kind    test
@@ -37,53 +30,43 @@ async function showCode(page: Page): Promise<void> {
  ***/
 test.describe('pick a part', () => {
   /***
-   * A part picked by a link in the details comes close: in the middle of the canvas, readable, with a halo a search hit does not have, and not dimmed by the search.
+   * A part picked by a link in the details comes close: in the middle of the canvas, readable, marked, and not dimmed by the search.
    *
    * @part-of e2e.pick
-   * @covers  docair-viewer.show-picked "checks a part picked by a link comes close, readable, with a halo"
+   * @covers  docair-viewer.doc-page.select "checks a part picked by a link comes close, readable and marked"
    ***/
   test('a part picked by a link comes close and stands out', async ({ page }) => {
-    await openStatic(page, 'shop');
-    await showCode(page);
-    // The cart's details link to what it calls; the camera is far out, away from the API.
-    await page.evaluate(() => {
-      const d = (window as any).docair;
-      d.select('shop-ui.cart');
-      d.state.cy.viewport({ zoom: 0.2, pan: { x: -400, y: -400 } });
-    });
+    await openStatic(page, 'shop', '#layer/code');
+    await select(page, 'shop-ui.cart');
+    // The camera far out, away from the API.
+    const pic = await page.locator('#pic').boundingBox();
+    await page.mouse.move(pic!.x + 20, pic!.y + 20);
+    for (let k = 0; k < 6; k++) await page.mouse.wheel(0, 60);
     // A search is on: list_orders is a hit, create_order is not.
     await page.locator('#search').fill('list');
     await page.locator('#details a.link[title="orders.create"]').first().click();
-    await expect
-      .poll(() => framing(page, 'orders.create'))
-      .toMatchObject({ selected: true, readable: true, onCanvas: true, inMiddle: true, opacity: 1 });
-    // Once it has swelled twice, the halo stays; the search's hit has none.
-    await expect.poll(async () => (await framing(page, 'orders.create')).halo).toBeGreaterThan(0.2);
-    expect((await framing(page, 'orders.list')).halo).toBe(0);
+    await expect(page).toHaveURL(/#part\/orders\.create$/);
+    await expect.poll(() => framing(page, 'orders.create')).toMatchObject({ selected: true, readable: true, onCanvas: true, inMiddle: true, dimmed: false });
+    await expect(page.locator('#details h2')).toContainText('create_order');
   });
 
   /***
-   * A part clicked on the canvas is selected where it is: the camera does not move.
+   * A part clicked in the picture is selected where it is: the camera does not move, and its details show.
    *
    * @part-of e2e.pick
-   * @covers  docair-viewer.show-details "checks a click on the canvas selects without moving the camera"
+   * @covers  docair-viewer.doc-page.move "checks a click in the picture selects without moving the camera"
+   * @covers  docair-viewer.page_panels.look.details "checks the details of the part clicked"
    ***/
   test('a part clicked on the canvas is selected where it is', async ({ page }) => {
-    await openStatic(page, 'shop');
-    await showCode(page);
-    const before = await page.evaluate(() => {
-      const cy = (window as any).docair.state.cy;
-      const r = cy.container().getBoundingClientRect();
-      const p = cy.getElementById('orders.list').renderedPosition();
-      return { x: r.left + p.x, y: r.top + p.y, zoom: cy.zoom(), pan: cy.pan() };
-    });
-    await page.mouse.click(before.x, before.y);
-    await expect.poll(() => page.evaluate(() => (window as any).docair.state.selected)).toBe('orders.list');
+    await openStatic(page, 'shop', '#layer/code');
+    const before = await page.locator('#pic svg.docair-pic').getAttribute('viewBox');
+    await page.locator('#pic g.part[data-id="orders.list"]').click();
+    await expect(page.locator('#pic g.part.sel[data-id="orders.list"]')).toBeAttached();
+    await expect(page.locator('#details h2')).toContainText('list_orders');
     // Long enough for a camera move to show.
-    await page.waitForTimeout(600);
-    const after = await page.evaluate(() => ({ zoom: (window as any).docair.state.cy.zoom(), pan: (window as any).docair.state.cy.pan() }));
-    expect(after.zoom).toBeCloseTo(before.zoom, 5);
-    expect(after.pan.x).toBeCloseTo(before.pan.x, 1);
-    expect(after.pan.y).toBeCloseTo(before.pan.y, 1);
+    await page.waitForTimeout(400);
+    expect(await page.locator('#pic svg.docair-pic').getAttribute('viewBox')).toBe(before);
+    await go(page, '#layer/apps');
+    await expect(page.locator('#pic svg.docair-pic[data-layer="apps"]')).toBeAttached();
   });
 });

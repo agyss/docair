@@ -1,0 +1,241 @@
+[
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "api.openapi"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "open": true
+      },
+      {
+        "id": "api.openapi",
+        "parent": "orders-api",
+        "open": true
+      },
+      {
+        "id": "api.openapi.cancel-order",
+        "parent": "api.openapi"
+      }
+    ],
+    "lines": []
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "mailer"
+    ],
+    "parts": [
+      {
+        "id": "mailer",
+        "open": true
+      },
+      {
+        "id": "mailer.confirm",
+        "parent": "mailer"
+      },
+      {
+        "id": "mailer.asyncapi",
+        "parent": "mailer"
+      },
+      {
+        "id": "topic:order.created"
+      },
+      {
+        "id": "topic:order.cancelled"
+      }
+    ],
+    "lines": [
+      {
+        "from": "topic:order.created",
+        "to": "mailer.confirm",
+        "kind": "consume",
+        "members": [
+          1
+        ]
+      },
+      {
+        "from": "topic:order.cancelled",
+        "to": "mailer.asyncapi",
+        "kind": "consume",
+        "members": [
+          4
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "orders-api"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "open": true
+      },
+      {
+        "id": "orders.create",
+        "parent": "orders-api"
+      },
+      {
+        "id": "orders.get",
+        "parent": "orders-api"
+      },
+      {
+        "id": "orders.update",
+        "parent": "orders-api"
+      },
+      {
+        "id": "orders.list",
+        "parent": "orders-api"
+      },
+      {
+        "id": "orders.health",
+        "parent": "orders-api"
+      },
+      {
+        "id": "api.openapi",
+        "parent": "orders-api",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "topic:order.created"
+      },
+      {
+        "id": "shop-ui",
+        "closed": true,
+        "holds": 1
+      }
+    ],
+    "lines": [
+      {
+        "from": "orders.create",
+        "to": "topic:order.created",
+        "kind": "emit",
+        "members": [
+          0
+        ]
+      },
+      {
+        "from": "shop-ui",
+        "to": "orders.create",
+        "kind": "call",
+        "members": [
+          2
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "payments"
+    ],
+    "parts": [
+      {
+        "id": "vendor.payments-openapi",
+        "parent": "payments",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "payments",
+        "open": true
+      }
+    ],
+    "lines": []
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "shop-ui"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "closed": true,
+        "holds": 7
+      },
+      {
+        "id": "shop-ui.cart",
+        "parent": "shop-ui"
+      },
+      {
+        "id": "payments",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "shop-ui",
+        "open": true
+      }
+    ],
+    "lines": [
+      {
+        "from": "shop-ui.cart",
+        "to": "orders-api",
+        "kind": "call",
+        "members": [
+          2
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-ui.cart",
+        "to": "payments",
+        "kind": "call",
+        "members": [
+          3
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "apps",
+    "opened": [
+      "vendor.payments-openapi"
+    ],
+    "parts": [
+      {
+        "id": "vendor.payments-openapi",
+        "parent": "payments",
+        "open": true
+      },
+      {
+        "id": "vendor.payments-openapi.create-charge",
+        "parent": "vendor.payments-openapi"
+      },
+      {
+        "id": "payments",
+        "open": true
+      },
+      {
+        "id": "shop-ui",
+        "closed": true,
+        "holds": 1
+      }
+    ],
+    "lines": [
+      {
+        "from": "shop-ui",
+        "to": "vendor.payments-openapi.create-charge",
+        "kind": "call",
+        "members": [
+          3
+        ],
+        "bundled": true
+      }
+    ]
+  }
+]

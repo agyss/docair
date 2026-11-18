@@ -129,18 +129,15 @@ fn index_of(project: &Project, diags: &mut Vec<Diagnostic>) -> Option<Index> {
         && root.join("Cargo.toml").exists()
         && docair_scip::has_rust_analyzer()
     {
-        let out = std::env::temp_dir().join(format!(
-            "docair-{}-{}.scip",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
-        match docair_scip::run_rust_analyzer(root, &out) {
-            Ok(()) => {
-                index = Index::read(&out).ok();
-                let _ = std::fs::remove_file(&out);
-            }
+        // The index of the same sources is kept: rust-analyzer runs only when the code changed.
+        let sources: Vec<(&str, &str)> = project
+            .files
+            .iter()
+            .filter(|f| f.rel.ends_with(".rs") || f.rel.ends_with("Cargo.toml"))
+            .map(|f| (f.rel.as_str(), f.text.as_str()))
+            .collect();
+        match docair_scip::kept_rust_index(root, &sources, &docair_scip::cache_dir()) {
+            Ok(path) => index = Index::read(&path).ok(),
             Err(e) => diags.push(
                 Diagnostic::new("W119", format!("no code index for the calls: {e}"))
                     .at("Cargo.toml", 1),

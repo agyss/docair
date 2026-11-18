@@ -1,26 +1,55 @@
 //! docair-viewer: the graph as one self-contained HTML page (SPEC §1, §9).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use docair_core::model::Graph;
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html};
-use serde_json::json;
-
-const TEMPLATE: &str = include_str!("../assets/viewer.html");
-const CSS: &str = include_str!("../assets/viewer.css");
-const APP: &str = include_str!("../assets/viewer.js");
-const CYTOSCAPE: &str = include_str!("../vendor/cytoscape.min.js");
-const ELK: &str = include_str!("../vendor/elk.bundled.js");
 
 /***
- * Write `docair.html`: the viewer page with the graph inlined.
+ * A layer's picture or a slice's as layout input: the words of its parts and lines, their sizes, the hints.
+ ***/
+pub mod layout_input;
+/***
+ * Layouts kept on disk under their key, so a picture that did not change is not laid out again.
+ ***/
+pub mod layout_store;
+/***
+ * Each picture drawn as one SVG: parts in the shape and colour of their kind, lines with their arrows and words, colours from the page's CSS variables.
+ ***/
+pub mod svg;
+/***
+ * The documentation as one page: every picture a reader can reach, laid out, drawn and packed by the CLI, and a thin script that shows them by their address.
+ ***/
+pub mod doc_page;
+/***
+ * The panels around the pictures, written by the CLI: details, tips, the tree, the search words, the legend and the diagnostics.
+ ***/
+mod page_panels;
+/***
+ * The glossary and the data in the page, written by the CLI: marked words, popups, the glossary's list and entries, the data's pages, the docs Read more opens.
+ ***/
+mod page_glossary;
+/***
+ * Walks in the page, written by the CLI: each scenario, walkthrough and datum's way is one picture, its steps lit, framed and told.
+ ***/
+mod page_walks;
+/***
+ * The AI in the page: the panel to ask in, which the CLI writes, and each reply as HTML, written by docair serve.
+ ***/
+pub mod page_ai;
+
+/// The page's stylesheet: its colours, light and dark, and its panels.
+const CSS: &str = include_str!("../assets/viewer.css");
+
+/***
+ * Write `docair.html`: the documentation, every picture laid out and drawn by the CLI.
  *
  * @flow   scan 12 "write the outputs"
  * @in     graph: Graph from docair-core.check.check
  * @calls  docair-viewer.render_html "builds the self-contained page"
- * @writes html-file "writes the viewer page"
+ * @writes html-file "writes the documentation page"
  ***/
 pub fn write_html(graph: &Graph, path: &Path) -> Result<()> {
     if let Some(dir) = path.parent() {
@@ -30,67 +59,16 @@ pub fn write_html(graph: &Graph, path: &Path) -> Result<()> {
 }
 
 /***
- * Render the graph as one HTML page that inlines the viewer code, the libraries and the data.
+ * Render the graph as one HTML page: every picture a reader can reach, laid out, drawn and packed by the CLI, with the panels and a thin script (docs/SLICES.md §4).
  *
- * Markdown is rendered here, so the page needs no Markdown library. JSON
- * is embedded with `<` escaped, so no text from the docs can close a script tag.
+ * Markdown is rendered here, so the page needs no Markdown library; text from the docs is
+ * escaped, so none of it can close a script tag.
  *
- * @calls docair-viewer.markdown_html "turns Markdown into safe HTML"
+ * @calls docair-viewer.doc_page.render_page "lays out, draws and packs every picture"
  * @creates data.page "renders the self-contained page"
  ***/
 pub fn render_html(graph: &Graph) -> String {
-    let mut rendered = BTreeMap::new();
-    for n in &graph.nodes {
-        let docs: Vec<_> = n
-            .docs
-            .iter()
-            .map(|d| json!({ "file": d.file, "anchor": d.anchor, "html": markdown_html(&d.markdown) }))
-            .collect();
-        if n.description.is_empty() && docs.is_empty() {
-            continue;
-        }
-        rendered.insert(
-            n.id.clone(),
-            json!({ "description": markdown_html(&n.description), "docs": docs }),
-        );
-    }
-    // The glossary and the docs it links to (SPEC §13): links between them stay inside the page.
-    let library: HashSet<String> = graph.library.iter().map(|d| d.file.clone()).collect();
-    for t in &graph.glossary {
-        let dir = parent_dir(&t.source.file);
-        rendered.insert(
-            format!("term:{}", t.id),
-            json!({
-                "summary": markdown_html_in(&t.summary, &dir, &library),
-                "body": markdown_html_in(&t.markdown, &dir, &library),
-                // The glossary's text while it is not checked against the code (docs/MEANINGS.md §2).
-                "unchecked": t.unchecked.as_deref().map(|m| markdown_html_in(m, &dir, &library)),
-            }),
-        );
-    }
-    for d in &graph.library {
-        rendered.insert(
-            format!("doc:{}", d.file),
-            json!({ "body": markdown_html_in(&d.markdown, &parent_dir(&d.file), &library) }),
-        );
-    }
-    let graph_json = script_json(&serde_json::to_string(graph).expect("graph serializes"));
-    let html_json = script_json(&serde_json::to_string(&rendered).expect("map serializes"));
-    let title = escape_text(&format!("docair · {}", graph.system));
-
-    fill(
-        TEMPLATE,
-        &[
-            ("generator", &escape_text(&graph.generator)),
-            ("title", &title),
-            ("css", CSS),
-            ("graph", &graph_json),
-            ("html", &html_json),
-            ("cytoscape", &script_js(CYTOSCAPE)),
-            ("elk", &script_js(ELK)),
-            ("app", &script_js(APP)),
-        ],
-    )
+    doc_page::render_page(graph)
 }
 
 /***
@@ -122,11 +100,6 @@ pub fn markdown_html(md: &str) -> String {
     let mut out = String::new();
     html::push_html(&mut out, events);
     out
-}
-
-fn parent_dir(file: &str) -> String {
-    file.rsplit_once('/')
-        .map_or(String::new(), |(d, _)| d.to_string())
 }
 
 /// A heading's anchor as GitHub makes it: `8. Diagnostics (stage 6)` → `8-diagnostics-stage-6`.

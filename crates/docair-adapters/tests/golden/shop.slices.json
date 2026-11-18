@@ -1,0 +1,558 @@
+[
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "data",
+      "id": "data.order"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart",
+        "stable": false,
+        "within": "shop-ui"
+      },
+      {
+        "id": "orders-db",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "shop-ui.cart",
+      "orders.create",
+      "orders-db"
+    ],
+    "steps": [
+      {
+        "nodes": [
+          "shop-ui.cart"
+        ],
+        "made": true
+      },
+      {
+        "nodes": [
+          "orders.create"
+        ],
+        "lines": [
+          2
+        ],
+        "way": "there"
+      },
+      {
+        "nodes": [
+          "orders-db"
+        ],
+        "lines": [
+          0
+        ],
+        "way": "there"
+      },
+      {
+        "nodes": [
+          "shop-ui.cart"
+        ],
+        "lines": [
+          2
+        ],
+        "way": "back"
+      }
+    ],
+    "lines": [
+      {
+        "edge": 2,
+        "from": "shop-ui.cart",
+        "to": "orders.create",
+        "kind": "call",
+        "how": "named"
+      },
+      {
+        "edge": 0,
+        "from": "orders.create",
+        "to": "orders-db",
+        "kind": "write",
+        "how": "named"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "cluster",
+        "more": 0
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.order"
+    ],
+    "covers": {
+      "lines": 2,
+      "reached": 2,
+      "apart": 0
+    }
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.create"
+    },
+    "ends": [
+      {
+        "id": "shopper",
+        "stable": true
+      },
+      {
+        "id": "orders-db",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "orders.create",
+      "orders-db",
+      "shop-ui.cart",
+      "cart-spec.buying-stores-the-order",
+      "shopper"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "orders.create",
+        "to": "orders-db",
+        "kind": "write"
+      },
+      {
+        "edge": 2,
+        "from": "shop-ui.cart",
+        "to": "orders.create",
+        "kind": "call"
+      },
+      {
+        "edge": 5,
+        "from": "cart-spec.buying-stores-the-order",
+        "to": "orders.create",
+        "kind": "cover"
+      },
+      {
+        "edge": 7,
+        "from": "shopper",
+        "to": "shop-ui.cart",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "cluster",
+        "more": 0
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      },
+      {
+        "id": "shop-tests",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.order"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "route",
+      "id": "orders.list"
+    },
+    "ends": [],
+    "parts": [
+      "orders.list"
+    ],
+    "lines": [],
+    "boxes": [
+      {
+        "id": "cluster",
+        "more": 1
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "flow",
+      "id": "checkout"
+    },
+    "ends": [
+      {
+        "id": "shopper",
+        "stable": true
+      },
+      {
+        "id": "orders.create",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "shopper",
+      "shop-ui.cart",
+      "orders.create"
+    ],
+    "steps": [
+      {
+        "nodes": [
+          "shopper"
+        ],
+        "label": "the shopper clicks Buy"
+      },
+      {
+        "nodes": [
+          "shop-ui.cart"
+        ],
+        "lines": [
+          7
+        ],
+        "label": "the cart posts the order"
+      },
+      {
+        "nodes": [
+          "orders.create"
+        ],
+        "lines": [
+          2
+        ],
+        "label": "the API stores the order"
+      }
+    ],
+    "lines": [
+      {
+        "edge": 7,
+        "from": "shopper",
+        "to": "shop-ui.cart",
+        "kind": "call"
+      },
+      {
+        "edge": 2,
+        "from": "shop-ui.cart",
+        "to": "orders.create",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "cluster",
+        "more": 1
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.order"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "tf.cluster"
+    },
+    "ends": [
+      {
+        "id": "cluster",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "tf.cluster",
+      "cluster"
+    ],
+    "lines": [
+      {
+        "edge": 1,
+        "from": "tf.cluster",
+        "to": "cluster",
+        "kind": "create"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "infra",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "shop-ui.cart.total"
+    },
+    "ends": [],
+    "parts": [
+      "shop-ui.cart.total",
+      "cart-spec.the-total-adds-up"
+    ],
+    "lines": [
+      {
+        "edge": 6,
+        "from": "cart-spec.the-total-adds-up",
+        "to": "shop-ui.cart.total",
+        "kind": "cover"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "shop-tests",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      },
+      {
+        "id": "shop-ui.cart",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "cart-spec.buying-stores-the-order"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart",
+        "stable": false,
+        "within": "shop-ui"
+      },
+      {
+        "id": "orders.create",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "cart-spec.buying-stores-the-order",
+      "shop-ui.cart",
+      "orders.create"
+    ],
+    "lines": [
+      {
+        "edge": 4,
+        "from": "cart-spec.buying-stores-the-order",
+        "to": "shop-ui.cart",
+        "kind": "cover"
+      },
+      {
+        "edge": 5,
+        "from": "cart-spec.buying-stores-the-order",
+        "to": "orders.create",
+        "kind": "cover"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "cluster",
+        "more": 1
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      },
+      {
+        "id": "shop-tests",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.order"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "cart-spec.the-total-adds-up"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart.total",
+        "stable": false,
+        "within": "shop-ui"
+      }
+    ],
+    "parts": [
+      "cart-spec.the-total-adds-up",
+      "shop-ui.cart.total"
+    ],
+    "lines": [
+      {
+        "edge": 6,
+        "from": "cart-spec.the-total-adds-up",
+        "to": "shop-ui.cart.total",
+        "kind": "cover"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "shop-tests",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      },
+      {
+        "id": "shop-ui.cart",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "shopper"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart",
+        "stable": false,
+        "within": "shop-ui"
+      }
+    ],
+    "parts": [
+      "shopper",
+      "shop-ui.cart"
+    ],
+    "lines": [
+      {
+        "edge": 7,
+        "from": "shopper",
+        "to": "shop-ui.cart",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.order"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "orders-db"
+    },
+    "ends": [
+      {
+        "id": "orders.create",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "orders-db",
+      "orders.create"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "orders.create",
+        "to": "orders-db",
+        "kind": "write"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "cluster",
+        "more": 0
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      }
+    ],
+    "data": [
+      "data.order"
+    ]
+  }
+]

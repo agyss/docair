@@ -17,4 +17,6 @@ export default function globalSetup(): void {
   fs.cpSync(fixture('shop'), shown, { recursive: true });
   fs.appendFileSync(path.join(shown, 'docair.toml'), '\n[view]\nhide = ["infra"]\nshow = ["cluster"]\n');
   execFileSync(docair, ['scan', shown, '--out', path.join(out, 'shop-show')]);
+  execFileSync(docair, ['scan', fixture('fold'), '--out', path.join(out, 'fold')]);
+  execFileSync(docair, ['scan', fixture('answer'), '--out', path.join(out, 'answer')]);
 }
