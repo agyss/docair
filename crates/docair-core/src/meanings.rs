@@ -40,6 +40,10 @@ pub struct Decision {
     /// One short reason, for the reviewer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// The model proposed the glossary entry: once the entry is gone from the glossary, the
+    /// reviewer dropped it, and the word is not proposed again (docair-6sg).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub proposed: bool,
 }
 
 impl Default for Decision {
@@ -49,6 +53,7 @@ impl Default for Decision {
             from: None,
             checked: None,
             why: None,
+            proposed: false,
         }
     }
 }
@@ -97,6 +102,10 @@ pub struct Meanings {
     pub open: Vec<OpenWord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unchecked: Vec<Unchecked>,
+    /// Words several texts use that name no part, have no glossary entry and no decision
+    /// (`NodePort`, `CIDR`): found by docair, explained by the model if a reader needs them (docair-6sg).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unnamed: Vec<String>,
 }
 
 impl Meanings {
@@ -512,16 +521,41 @@ pub fn settle(input: Input, diags: &mut Vec<Diagnostic>) -> (Vec<Term>, Meanings
     for d in &defined {
         headings.entry(stem(&d.word)).or_insert(d);
     }
-    let decided: HashMap<String, (&String, &Decision)> = decisions
-        .words
-        .iter()
-        .map(|(k, d)| (stem(k), (k, d)))
-        .collect();
+    // `@defines word` on a block settles the word in the code: that part defines it. The
+    // decisions file wins where both speak (docair-6sg).
+    let mut words = decisions.words.clone();
+    for n in nodes {
+        for t in n
+            .tags_named("defines")
+            .filter(|t| t.origin == crate::model::Origin::Authored)
+        {
+            for w in t
+                .value
+                .split(',')
+                .map(|w| w.trim().trim_matches('"').to_lowercase())
+                .filter(|w| !w.is_empty())
+            {
+                words.entry(w).or_insert_with(|| Decision {
+                    from: Some(n.id.clone()),
+                    why: Some("@defines in its block".into()),
+                    ..Decision::default()
+                });
+            }
+        }
+    }
+    let decided: HashMap<String, (&String, &Decision)> =
+        words.iter().map(|(k, d)| (stem(k), (k, d))).collect();
     let all_texts = texts(nodes, edges, walkthroughs, &terms);
 
     let mut meanings = Meanings {
         file: decisions.file.clone(),
         decisions: decisions.words.clone(),
+        unnamed: unnamed_words(
+            &cased_texts(nodes, edges, walkthroughs, &terms),
+            &glossary,
+            &named,
+            &decided,
+        ),
         ..Meanings::default()
     };
     // A decision may name any part, also one whose name is not its word (a function).
@@ -631,6 +665,7 @@ pub fn settle(input: Input, diags: &mut Vec<Diagnostic>) -> (Vec<Term>, Meanings
         let source = n.source.clone().unwrap_or(SourceRef {
             file: String::new(),
             line: 0,
+            end: None,
         });
         let code_summary = without_lead(&n.summary, word);
         let code_markdown = if n.description.trim().is_empty() {
@@ -737,6 +772,80 @@ pub fn settle(input: Input, diags: &mut Vec<Diagnostic>) -> (Vec<Term>, Meanings
     (settled, meanings)
 }
 
+/// The same texts as `texts`, with their case, code spans left out: for words written like names.
+fn cased_texts(
+    nodes: &[Node],
+    edges: &[Edge],
+    walkthroughs: &[Walkthrough],
+    terms: &[Term],
+) -> Vec<String> {
+    let prose = |t: &str| -> String { t.split('`').step_by(2).collect::<Vec<_>>().join(" ") };
+    let mut out: Vec<String> = Vec::new();
+    for n in nodes {
+        out.push(prose(&format!("{}\n{}", n.summary, n.description)));
+    }
+    out.extend(edges.iter().filter_map(|e| e.text.as_deref()).map(prose));
+    for w in walkthroughs {
+        out.push(prose(&w.summary));
+        out.extend(
+            w.steps
+                .iter()
+                .map(|s| prose(&format!("{} {}", s.title, s.text))),
+        );
+    }
+    out.extend(terms.iter().map(|t| prose(&t.markdown)));
+    out
+}
+
+/// Words that look like names of things (`NodePort`, `CIDR`, `ClusterIP`) and several texts use,
+/// that no part is named after and nothing explains or settles: at most 20, the most used first.
+fn unnamed_words(
+    texts: &[String],
+    glossary: &HashMap<String, usize>,
+    named: &BTreeMap<String, (String, Vec<&Node>)>,
+    decided: &HashMap<String, (&String, &Decision)>,
+) -> Vec<String> {
+    let looks_named = |w: &str| {
+        let letters: Vec<char> = w.chars().collect();
+        let upper = letters.iter().filter(|c| c.is_ascii_uppercase()).count();
+        let acronym = (3..=6).contains(&letters.len()) && upper == letters.len();
+        let camel = letters.len() >= 5
+            && letters[0].is_ascii_uppercase()
+            && letters[1..].iter().any(|c| c.is_ascii_lowercase())
+            && letters[1..].iter().any(|c| c.is_ascii_uppercase());
+        letters.iter().all(|c| c.is_ascii_alphabetic()) && (acronym || camel)
+    };
+    let mut uses: BTreeMap<String, usize> = BTreeMap::new();
+    for text in texts {
+        let mut here: Vec<&str> = text
+            // `_` stays inside a word: `DOCAIR_MAX_FILES` is a variable, not three words.
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|w| {
+                looks_named(w) && !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].contains(w)
+            })
+            .collect();
+        here.sort_unstable();
+        here.dedup();
+        for w in here {
+            *uses.entry(w.to_string()).or_default() += 1;
+        }
+    }
+    let mut out: Vec<(usize, String)> = uses
+        .into_iter()
+        .filter(|(w, n)| {
+            // `ScanResult` is the part named `scan result`.
+            let words = name_words(w).map_or_else(|| stem(w), |x| stem(&x));
+            let known = |st: &str| {
+                glossary.contains_key(st) || named.contains_key(st) || decided.contains_key(st)
+            };
+            *n >= MIN_USES && !known(&stem(w)) && !known(&words)
+        })
+        .map(|(w, n)| (n, w))
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    out.into_iter().take(20).map(|(_, w)| w).collect()
+}
+
 /// A summary without the word it defines in front: `Facts: what adapters learn` → `What adapters learn`.
 fn without_lead(summary: &str, word: &str) -> String {
     let s = summary.trim();
@@ -793,6 +902,7 @@ fn from_heading(word: &str, h: &Defined) -> Term {
         source: SourceRef {
             file: h.section.file.clone(),
             line: h.line,
+            end: None,
         },
         from: "doc".into(),
         node: None,
@@ -817,6 +927,7 @@ mod tests {
             source: Some(SourceRef {
                 file: format!("src/{name}.rs"),
                 line: 1,
+                end: None,
             }),
             symbol: None,
             http: None,
@@ -842,6 +953,7 @@ mod tests {
             source: SourceRef {
                 file: "docs/GLOSSARY.md".into(),
                 line: 3,
+                end: None,
             },
             from: String::new(),
             node: None,
@@ -948,6 +1060,72 @@ mod tests {
         assert_eq!(t[0].node.as_deref(), Some("core.facts"));
         assert_eq!(t[0].aliases, vec!["fact"]);
         assert_eq!(t[0].source.file, "src/facts.rs");
+    }
+
+    /// `@defines` settles a word in the code; the decisions file wins where both speak (docair-6sg).
+    #[test]
+    fn a_defines_tag_settles_a_word_in_the_code() {
+        let mut ledger = node(
+            "books.ledger",
+            "module",
+            "ledger",
+            "The record of all payments.",
+        );
+        ledger.tags.push(crate::model::Tag {
+            name: "defines".into(),
+            value: "ledger".into(),
+            line: 2,
+            origin: Origin::Authored,
+            reason: None,
+            reach: None,
+        });
+        let nodes = [
+            ledger,
+            node(
+                "books.audit",
+                "function",
+                "audit",
+                "Compares the ledger with the bank.",
+            ),
+        ];
+        let terms = vec![term("ledger", "The book of every payment ever made.")];
+        let (_, m, diags) = run(&nodes, terms, &[], "");
+        assert!(m.open.is_empty(), "{:?}", m.open);
+        assert!(!diags.iter().any(|d| d.code == "W120"), "{diags:?}");
+        assert_eq!(
+            m.unchecked.len(),
+            1,
+            "settled from the code, so the entry is checked against it"
+        );
+        assert_eq!(m.unchecked[0].node, "books.ledger");
+    }
+
+    /// Words like names of things that no part, entry or decision explains are found for the explain run (docair-6sg).
+    #[test]
+    fn words_that_name_no_part_are_found() {
+        let nodes = [
+            node(
+                "net.svc",
+                "endpoint",
+                "svc",
+                "A NodePort Service on the CIDR of the cluster.",
+            ),
+            node(
+                "net.ing",
+                "endpoint",
+                "ing",
+                "Reaches the NodePort from outside; the CIDR is fixed.",
+            ),
+            node("net.pod", "workload", "pod", "Gets an IP from the CIDR."),
+        ];
+        let (_, m, _) = run(&nodes, vec![], &[], "");
+        assert_eq!(
+            m.unnamed,
+            ["CIDR", "NodePort"],
+            "most used first; IP is too short"
+        );
+        let (_, m, _) = run(&nodes, vec![term("CIDR", "A block of addresses.")], &[], "");
+        assert_eq!(m.unnamed, ["NodePort"], "an entry explains it");
     }
 
     #[test]

@@ -58,6 +58,8 @@ pub struct Symbol {
     pub file: String,
     /// The symbol's own line, after attributes and decorators.
     pub line: usize,
+    /// The last line of the symbol's code, when the adapter knows it (docair-zrr.2).
+    pub end: Option<usize>,
     /// The first code line a block may stand on and still document this symbol; usually `line`.
     pub attach_from: usize,
     pub draw: Draw,

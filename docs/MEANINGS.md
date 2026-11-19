@@ -258,13 +258,24 @@ such.
 
 ## 10. Not yet
 
-* **`//!` docs.** The Rust adapter reads `///` docs of an item, not the inner
-  `//!` docs of a module file. `facts.rs` says "Facts: what adapters learn
-  from the code", which would define *facts* by itself.
-* **A tag for authors**, such as `@defines facts`, to settle a word in the
-  code instead of the decisions file.
-* **Words that name no part**, found without the model (*NodePort*,
-  *CIDR*): today only the model finds them.
-* **A rejected entry comes back**: when the reviewer drops an entry the
-  model proposed for a word that names no part, the next run may propose it
-  again.
+(Built since: a `mod x;` without a block or `///` docs takes the module
+file's `//!` docs as its own, docair-c6y. A block above the `mod` still wins,
+so `facts.rs`'s `//!` line defines nothing by itself while `lib.rs` documents
+the module.)
+
+Built since (docair-6sg):
+
+* **`@defines word, word`** on a block settles the words in the code: that
+  part defines them, as a decision `from = <its id>` would. The decisions
+  file wins where both speak.
+* **Words that name no part** are found by docair: words written like names
+  of things (`NodePort`, `ClusterIP`, `CIDR`: CamelCase, or 3 to 6 capitals)
+  that at least two texts use, outside code spans, that no part is named
+  after (`ScanResult` is the part `scan result`), and that no glossary entry
+  or decision explains; at most 20, the most used first. They go into the
+  graph's `meanings.unnamed` and to the explain run, which writes entries for
+  those a reader needs. No warning: many are plain technical words.
+* **A dropped entry stays dropped**: every entry the model writes is marked
+  in the decisions file (`proposed = true`). When the reviewer removes the
+  entry from the glossary, the mark stays, and the next run does not propose
+  the word again.

@@ -44,6 +44,8 @@ pub struct ProjectSession {
     pub save: bool,
     /// An upload: no indexer runs on it, since an indexer builds the code and build scripts run.
     pub untrusted: bool,
+    /// `docair serve --changes <A>`: the page also shows what the working tree changes since commit A.
+    pub changes: Option<String>,
 }
 
 /// AI settings that ask nothing, for a session that only scans and applies.
@@ -94,6 +96,7 @@ impl ProjectSession {
             graph,
             save,
             untrusted,
+            changes: None,
         })
     }
 
@@ -116,9 +119,28 @@ impl ProjectSession {
         Ok(())
     }
 
+    /***
+     * Write the graph and the page; with `changes`, the page with its changes section, and `changes.json`. When commit A cannot be read, the page has no changes section and the reason is printed.
+     *
+     * @calls docair-server.commits.compare_work "compares the working tree with commit A"
+     * @calls docair-server.commits.changes_page "writes the page with its changes section"
+     ***/
     pub fn write_outputs(&self) -> Result<PathBuf> {
         let html = self.out.join("docair.html");
         docair_core::emit::write_json(&self.graph, &self.out.join("docair.graph.json"))?;
+        if let Some(a) = &self.changes {
+            match crate::commits::compare_work(&self.root, a, &self.graph, self.lenient) {
+                Ok(pair) => {
+                    std::fs::write(&html, crate::commits::changes_page(&pair))?;
+                    std::fs::write(
+                        self.out.join("changes.json"),
+                        serde_json::to_string_pretty(&pair.changes)? + "\n",
+                    )?;
+                    return Ok(html);
+                }
+                Err(e) => eprintln!("docair serve: the page has no changes section: {e:#}"),
+            }
+        }
         docair_viewer::write_html(&self.graph, &html)?;
         Ok(html)
     }
@@ -359,8 +381,20 @@ impl ServedProject {
         lenient: bool,
         ai: Option<AiConfig>,
     ) -> Result<ServedProject> {
+        Self::open_comparing(root, out, lenient, ai, None)
+    }
+
+    /// As `open`; with `changes`, the page shows what the working tree changes since that commit, written again with each change.
+    pub fn open_comparing(
+        root: &Path,
+        out: Option<PathBuf>,
+        lenient: bool,
+        ai: Option<AiConfig>,
+        changes: Option<String>,
+    ) -> Result<ServedProject> {
         let ai_on = ai.is_some();
-        let session = ProjectSession::load(root, out, lenient, true, ai.unwrap_or_else(no_ai))?;
+        let mut session = ProjectSession::load(root, out, lenient, true, ai.unwrap_or_else(no_ai))?;
+        session.changes = changes;
         session.write_outputs()?;
         let seen = files_seen(root, &session.out);
         Ok(ServedProject {
@@ -386,8 +420,20 @@ impl ServedProject {
         })
     }
 
+    /// The project's folder and its output folder.
+    pub fn folders(&self) -> (PathBuf, PathBuf) {
+        let s = self.lock();
+        (s.root.clone(), s.out.clone())
+    }
+
     pub fn lock(&self) -> std::sync::MutexGuard<'_, ProjectSession> {
         self.session.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The documentation written again as it is, e.g. with findings just stored; the new version.
+    pub fn rewrite(&self) -> Result<u64> {
+        let s = self.lock();
+        self.written(&s)
     }
 
     /// The documentation written again; the new version.
@@ -419,6 +465,23 @@ impl ServedProject {
 
 /// A fingerprint of the project's files: every name, size and time of change, outside the outputs,
 /// version control, build output and dependencies.
+/// Whether a change at `path` can change the documentation: inside the project, outside the output
+/// folder and outside what a scan skips (hidden folders, `target`, `node_modules`, `dist`).
+pub fn watched(root: &Path, out: &Path, path: &Path) -> bool {
+    if path.starts_with(out) {
+        return false;
+    }
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    let dirs: Vec<_> = rel.components().collect();
+    // The last component is the file itself; a hidden file (.env) may matter, a hidden folder never.
+    !dirs[..dirs.len().saturating_sub(1)].iter().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        name.starts_with('.') || ["target", "node_modules", "dist"].contains(&name.as_ref())
+    })
+}
+
 fn files_seen(root: &Path, out: &Path) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut mix = |bytes: &[u8]| {
@@ -526,21 +589,20 @@ pub(crate) fn answered(
     fresh: bool,
 ) -> Result<ServeAnswer, ApiError> {
     let mut session = s.lock();
-    let (pending, result) = session.take_reply(&reply, fresh)?;
+    // A view change from the chat only hides in the page, as the reader's hiding (docair-702.12):
+    // it never waits to be written into docair.toml. The reply still carries it, for the page.
+    let kept = Reply {
+        view: None,
+        ..reply.clone()
+    };
+    let (pending, result) = session.take_reply(&kept, fresh)?;
     let regenerated = reply.walkthrough.is_some();
     let version = if regenerated {
         s.written(&session)?
     } else {
         s.version.load(Ordering::SeqCst)
     };
-    let mut patch = result.map(|r| r.diff).unwrap_or_default();
-    // A view change waits too: its docair.toml, as it will be written, can be reviewed with the edits.
-    if let Some(v) = &pending.view {
-        let (before, after) = view_text(&session.root, &session.config, v);
-        if before != after {
-            patch.push_str(&edit::unified("docair.toml", Some(&before), &after));
-        }
-    }
+    let patch = result.map(|r| r.diff).unwrap_or_default();
     let pending = pending.changes.len() + usize::from(pending.view.is_some());
     // A Reply always turns into JSON; Null would only leave the chat with no answer to show.
     let html = docair_viewer::page_ai::reply_html(
@@ -603,6 +665,199 @@ pub(crate) async fn apply(
     Ok(Json(done))
 }
 
+/// The tags the code repeats in the served project, and the patch that removes them (`GET /api/tidy`).
+#[derive(Debug, Serialize)]
+pub struct ServeTidy {
+    pub tags: Vec<docair_core::tidy::RepeatedTag>,
+    /// The edits that remove them all, as a unified diff.
+    pub patch: String,
+}
+
+/// Which repeated tags to remove (`POST /api/tidy`): by `node` and `tag`; none means all.
+#[derive(Debug, Default, Deserialize)]
+pub struct TidyChoice {
+    #[serde(default)]
+    pub tags: Option<Vec<TidyPick>>,
+}
+
+/// One repeated tag picked for removal.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct TidyPick {
+    pub node: String,
+    pub tag: String,
+}
+
+/// The repeated tags of the session's graph, resolved into edits, and their patch.
+fn tidy_edits(
+    session: &ProjectSession,
+    picked: Option<&[TidyPick]>,
+) -> (
+    Vec<docair_core::tidy::RepeatedTag>,
+    Vec<Change>,
+    PatchResult,
+) {
+    let mut found = docair_core::tidy::repeated(&session.graph);
+    if let Some(p) = picked {
+        found.retain(|r| p.iter().any(|t| t.node == r.node && t.tag == r.tag));
+    }
+    let changes: Vec<Change> = docair_core::tidy::changes(&found)
+        .iter()
+        .filter_map(|c| edit::resolve(c, &session.graph.nodes).ok())
+        .collect();
+    let result = session.patch(&changes);
+    (found, changes, result)
+}
+
+/***
+ * `GET /api/tidy`: the tags the code repeats in the served project, each with the code that says the same, and the patch that removes them.
+ *
+ * @calls docair-core.tidy.repeated "finds the tags the code repeats"
+ ***/
+pub(crate) async fn tidy_list(
+    State(config): State<crate::Config>,
+) -> Result<Json<ServeTidy>, ApiError> {
+    let shared = config.project.clone().ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "this server serves no project".into(),
+        )
+    })?;
+    let answer = tokio::task::spawn_blocking(move || {
+        let session = shared.lock();
+        let (tags, _, result) = tidy_edits(&session, None);
+        ServeTidy {
+            tags,
+            patch: result.diff,
+        }
+    })
+    .await?;
+    Ok(Json(answer))
+}
+
+/***
+ * `POST /api/tidy`: remove the repeated tags picked (all when none are named), scan again and write the documentation again.
+ *
+ * @calls docair-core.tidy.changes "turns the picked tags into edits"
+ * @calls docair-server.project.project-session.apply "writes the edits and scans again"
+ ***/
+pub(crate) async fn tidy_apply(
+    State(config): State<crate::Config>,
+    body: Option<Json<TidyChoice>>,
+) -> Result<Json<ServeApplied>, ApiError> {
+    let shared = config.project.clone().ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "this server serves no project".into(),
+        )
+    })?;
+    let choice = body.map(|Json(c)| c).unwrap_or_default();
+    let done = tokio::task::spawn_blocking(move || -> Result<ServeApplied, ApiError> {
+        let mut session = shared.lock();
+        let (found, changes, _) = tidy_edits(&session, choice.tags.as_deref());
+        if found.is_empty() {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "no tag repeats the code".into(),
+            ));
+        }
+        let edited = session.apply(&Pending {
+            changes,
+            view: None,
+        })?;
+        let version = shared.written(&session)?;
+        Ok(ServeApplied {
+            edited,
+            regenerated: true,
+            version,
+        })
+    })
+    .await??;
+    Ok(Json(done))
+}
+
+/// `POST /api/explain`: which commits to compare; without `b`, the working tree.
+#[derive(Debug, Deserialize)]
+pub struct ExplainRequest {
+    pub a: String,
+    #[serde(default)]
+    pub b: Option<String>,
+}
+
+/***
+ * `POST /api/explain`: explain what the served project changes since commit `a` (or between `a` and `b`): the flows with no stored findings go to the model, the findings are stored as `docair explain` stores them and answered; a page served with `--changes` is written again with them. A project without git history (an upload) has no commits to compare: 409.
+ *
+ * @calls docair-server.commits.compare "compares the commits"
+ * @calls docair-ai.explain.explain "explains the changed flows"
+ ***/
+pub(crate) async fn explain(
+    State(config): State<crate::Config>,
+    Json(req): Json<ExplainRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let shared = config.project.clone().ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "this server serves no project".into(),
+        )
+    })?;
+    let (root, lenient, comparing) = {
+        let s = shared.lock();
+        (s.root.clone(), s.lenient, s.changes.is_some())
+    };
+    if crate::commits::git(&root, &["rev-parse", "--show-toplevel"]).is_err() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no commits to compare: this project has no git history (an upload)".into(),
+        ));
+    }
+    let Some(ai) = config.ai.clone() else {
+        return Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AI is off: the server has no DOCAIR_AI_ENDPOINT and DOCAIR_AI_MODEL".into(),
+        ));
+    };
+    let answer = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, ApiError> {
+        // The working tree as B is the graph the server already has.
+        let pair = match req.b.as_deref() {
+            None => {
+                let work = shared.lock().graph.clone();
+                crate::commits::compare_work(&root, &req.a, &work, lenient)
+            }
+            Some(b) => crate::commits::compare(&root, &req.a, Some(b), lenient),
+        }
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+        let settings = docair_core::config::load(&pair.root)
+            .map(|c| c.explain.unwrap_or_default())
+            .unwrap_or_default();
+        let store = pair
+            .root
+            .join(settings.store.as_deref().unwrap_or("docs/changes"));
+        let file = store.join(format!("{}.json", pair.key));
+        let kept: Option<docair_ai::explain::ChangeFindings> = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+        let max = settings
+            .max_requests
+            .unwrap_or(docair_ai::explain::MAX_REQUESTS);
+        let found =
+            docair_ai::explain::explain(&ai, &pair.a, &pair.b, &pair.changes, kept.as_ref(), max)
+                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+        std::fs::create_dir_all(&store)?;
+        std::fs::write(
+            &file,
+            serde_json::to_string_pretty(&found).unwrap_or_default() + "\n",
+        )?;
+        // A page with a changes section shows the findings: it is written again, and reloads.
+        if comparing {
+            shared
+                .rewrite()
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
+        }
+        Ok(serde_json::to_value(&found).unwrap_or_default())
+    })
+    .await??;
+    Ok(Json(answer))
+}
+
 // ── Uploads kept as projects ──
 
 /// At most this many uploads are kept; the one used longest ago goes first.
@@ -641,7 +896,20 @@ impl KeptUploads {
         folder: tempfile::TempDir,
         project: std::sync::Arc<ServedProject>,
     ) -> String {
-        let id = upload_id();
+        self.keep_as(folder, project, None)
+    }
+
+    /// As `keep`, the id starting with `pod` and a `-` when there is more than one server pod (docs/SLICES.md §8).
+    pub fn keep_as(
+        &self,
+        folder: tempfile::TempDir,
+        project: std::sync::Arc<ServedProject>,
+        pod: Option<&str>,
+    ) -> String {
+        let id = match pod {
+            Some(p) => format!("{p}-{}", upload_id()),
+            None => upload_id(),
+        };
         let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
         sweep(&mut kept);
         while kept.len() >= KEPT_UPLOADS {
@@ -778,6 +1046,19 @@ mod tests {
         (project, crate::router(config))
     }
 
+    /// A change counts when it is in the project, outside the outputs and outside what a scan skips.
+    #[test]
+    fn changes_in_outputs_and_skipped_folders_do_not_count() {
+        let (root, out) = (Path::new("/p"), Path::new("/p/.docair"));
+        assert!(watched(root, out, Path::new("/p/src/lib.rs")));
+        assert!(watched(root, out, Path::new("/p/.env")));
+        assert!(!watched(root, out, Path::new("/p/.docair/docair.html")));
+        assert!(!watched(root, out, Path::new("/p/target/debug/x")));
+        assert!(!watched(root, out, Path::new("/p/.git/index")));
+        assert!(!watched(root, out, Path::new("/p/web/node_modules/a/b.js")));
+        assert!(!watched(root, out, Path::new("/elsewhere/a.rs")));
+    }
+
     /// An answer comes with the HTML the page's chat shows, written by docair-viewer.
     #[test]
     fn an_answer_comes_with_the_chats_html() {
@@ -811,9 +1092,9 @@ mod tests {
         assert_eq!(json["html"].as_str(), Some(a.html.as_str()));
     }
 
-    /// A view change waits like an edit: its docair.toml can be reviewed, and it can be applied.
+    /// A view change from the chat only hides in the page: nothing waits, docair.toml stays as it is.
     #[test]
-    fn a_view_change_comes_as_a_patch_of_docair_toml() {
+    fn a_view_change_from_the_chat_only_hides_in_the_page() {
         let dir = tiny();
         let (project, _) = served(dir.path());
         let reply = Reply {
@@ -835,13 +1116,108 @@ mod tests {
             requests: 1,
         };
         let a = answered(&project, reply, true).unwrap();
-        assert_eq!(a.pending, 1);
-        assert!(a.patch.contains("+++ b/docair.toml"), "{}", a.patch);
-        assert!(a.patch.contains("+hide = [\"app\"]"), "{}", a.patch);
-        assert!(a.html.contains(r#"data-test="apply""#), "{}", a.html);
-        // Nothing is written before it is applied.
+        assert_eq!(a.pending, 0);
+        assert!(a.patch.is_empty(), "{}", a.patch);
+        let json = serde_json::to_value(&a).unwrap();
+        assert_eq!(
+            json["reply"]["view"]["hide"][0], "app",
+            "the page gets the view change"
+        );
+        assert!(read_pending(&project.lock().out).map_or(true, |p| p.view.is_none()));
         let toml = std::fs::read_to_string(dir.path().join("docair.toml")).unwrap();
         assert!(!toml.contains("[view]"), "{toml}");
+    }
+
+    /// The tags the code repeats are listed, removed on request, and the documentation written again.
+    #[tokio::test]
+    async fn tidy_lists_and_removes_the_tags_the_code_repeats() {
+        use axum::body::Body;
+        use axum::http::Request;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("docair.toml"), "system = \"tidyp\"\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let block = |id: &str, calls: &str| {
+            format!(
+                "/***\n * {id}.\n *\n * @id      app.{id}\n * @kind    function\n * @part-of tidyp\n{calls} ***/\n"
+            )
+        };
+        let lib = format!(
+            "{}pub fn run() {{\n    load();\n}}\n\n{}pub fn load() {{}}\n",
+            block("run", " * @calls   app.load\n"),
+            block("load", "")
+        );
+        std::fs::write(dir.path().join("src").join("lib.rs"), &lib).unwrap();
+        let (project, router) = served(dir.path());
+        let get = || Request::get("/api/tidy").body(Body::empty()).unwrap();
+        let (status, json) = call(router.clone(), get()).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(listed["tags"][0]["tag"], "@calls app.load", "{json}");
+        assert!(
+            listed["patch"]
+                .as_str()
+                .unwrap()
+                .contains("- * @calls   app.load"),
+            "{json}"
+        );
+        let post = || {
+            Request::post("/api/tidy")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap()
+        };
+        let (status, json) = call(router.clone(), post()).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert!(json.contains("src/lib.rs"), "{json}");
+        let after = std::fs::read_to_string(dir.path().join("src").join("lib.rs")).unwrap();
+        assert!(!after.contains("@calls"), "{after}");
+        assert!(
+            project.version.load(Ordering::SeqCst) >= 2,
+            "the documentation was written again"
+        );
+        let (_, json) = call(router.clone(), get()).await;
+        assert!(json.contains(r#""tags":[]"#), "{json}");
+        let (status, _) = call(router, post()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    /// `--changes` on a folder without git history: the page is written without a changes section, and says why.
+    #[test]
+    fn a_page_without_commits_has_no_changes_section() {
+        let dir = tiny();
+        let project =
+            ServedProject::open_comparing(dir.path(), None, true, None, Some("HEAD~1".into()))
+                .unwrap();
+        let html = std::fs::read_to_string(dir.path().join(".docair").join("docair.html")).unwrap();
+        assert!(html.contains("docair-packed"), "the page is written");
+        assert!(
+            !html.contains(r#"id="btn-changes""#),
+            "with no changes section"
+        );
+        assert_eq!(
+            project.rewrite().unwrap(),
+            2,
+            "written again, a new version"
+        );
+    }
+
+    /// A project without git history (an upload, or a folder) has no commits to compare.
+    #[tokio::test]
+    async fn explaining_needs_commits_to_compare() {
+        use axum::body::Body;
+        use axum::http::Request;
+        let dir = tiny();
+        let (_, router) = served(dir.path());
+        let (status, body) = call(
+            router,
+            Request::post("/api/explain")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"a":"HEAD~1"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(body.contains("no commits to compare"), "{body}");
     }
 
     #[tokio::test]

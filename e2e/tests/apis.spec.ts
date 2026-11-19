@@ -23,7 +23,7 @@ test.describe('API descriptions', () => {
    * @covers  docair-core.declare.settle "checks operations merge into their handlers"
    * @covers  docair-core.declare.word_and_prune "checks callers carry the description's words"
    * @covers  docair-viewer.svg.draw "checks a description is drawn as a page with a folded corner"
-   * @covers  docair-viewer.page_panels.look.details "checks the handler's details show the description's words"
+   * @covers  docair-viewer.page_panels.panel-graph.details "checks the handler's details show the description's words"
    ***/
   test('descriptions meet the code', async ({ page }) => {
     const graph = graphOf('apis');
@@ -36,7 +36,7 @@ test.describe('API descriptions', () => {
     expect(node('vendor.payments-openapi.list-charges')).toBeUndefined();
     const line = graph.edges.find((e: any) => e.from === 'shop-ui.cart' && e.to === 'orders.create');
     expect(line.label).toBe('(CreateOrder) → Order');
-    expect(line.from_api).toBe('api/openapi.yaml');
+    expect(line.evidence).toMatchObject({ source: 'api', file: 'api/openapi.yaml' });
     // A description is drawn as a page with a folded corner.
     await openStatic(page, 'apis', '#box/orders-api');
     await expect(page.locator('#pic g.part.k-api[data-id="api.openapi"] .sh')).toHaveJSProperty('tagName', 'polygon');

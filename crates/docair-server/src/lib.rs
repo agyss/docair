@@ -10,6 +10,16 @@
  ***/
 pub mod project;
 
+/***
+ * Two commits of a project compared: their graphs from git worktrees, kept in the cache, and the flows the change touches.
+ ***/
+pub mod commits;
+
+/***
+ * More than one server pod: an upload's id names the pod that keeps it, and the other pods forward its requests there.
+ ***/
+pub mod peers;
+
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -44,6 +54,8 @@ pub struct Config {
     pub project: Option<Arc<project::ServedProject>>,
     /// Uploads kept as projects, so their pages can ask the AI and apply edits (`/api/projects/<id>/`).
     pub uploads: Arc<project::KeptUploads>,
+    /// More than one server pod: this pod's address and the name of all of them (docs/SLICES.md §8).
+    pub peers: Option<peers::Peers>,
     asking: Arc<Semaphore>,
 }
 
@@ -56,6 +68,7 @@ impl Default for Config {
             ai: None,
             project: None,
             uploads: Arc::default(),
+            peers: None,
             asking: Arc::new(Semaphore::new(ASKING_AT_ONCE)),
         }
     }
@@ -72,6 +85,7 @@ impl Config {
      * @reads   k8s.cm.docair-server -> DOCAIR_MAX_UPLOAD_MB, DOCAIR_MAX_FILES, DOCAIR_AI_ENDPOINT, DOCAIR_AI_MODEL
      * @reads   k8s.secret.docair-ai -> DOCAIR_AI_API_KEY
      * @calls   docair-ai.config.resolve "merges the AI settings"
+     * @calls   docair-server.peers.peers.from_env "reads this pod's address and the other pods' name"
      * @flow    provision 12 "the server reads its settings from the ConfigMap"
      ***/
     pub fn from_env() -> Config {
@@ -87,6 +101,7 @@ impl Config {
             max_files: num("DOCAIR_MAX_FILES").unwrap_or(default.max_files),
             static_dir: std::env::var("DOCAIR_STATIC_DIR").ok().map(PathBuf::from),
             ai: AiConfig::resolve(None, &Env::load(None)),
+            peers: peers::Peers::from_env(),
             ..default
         }
     }
@@ -106,6 +121,9 @@ impl Config {
  * @calls   docair-server.project.page (GET /) -> html
  * @calls   docair-server.project.version (GET /api/version) -> ServeVersion
  * @calls   docair-server.project.apply (POST /api/apply) -> ServeApplied
+ * @calls   docair-server.project.tidy_list (GET /api/tidy) -> ServeTidy
+ * @calls   docair-server.project.tidy_apply (POST /api/tidy: tags) -> ServeApplied
+ * @calls   docair-server.project.explain (POST /api/explain: a, b) -> ChangeFindings
  * @calls   docair-server.ask (POST /api/ask: question, graph, history) -> Reply
  * @calls   docair-server.patch (POST /api/patch: changes, files) -> PatchAnswer
  * @calls   docair-server.word (POST /api/word: graph, scope) -> Reply
@@ -125,7 +143,12 @@ pub fn router(config: Config) -> Router {
         routes = routes
             .route("/", get(project::page))
             .route("/api/version", get(project::version))
-            .route("/api/apply", post(project::apply));
+            .route("/api/apply", post(project::apply))
+            .route(
+                "/api/tidy",
+                get(project::tidy_list).post(project::tidy_apply),
+            )
+            .route("/api/explain", post(project::explain));
     }
     let mut app = upload_router(config.clone()).merge(
         routes
@@ -174,6 +197,11 @@ fn project_routes(config: Config) -> Router {
         .route("/api/ai", get(ai_status))
         .route("/api/version", get(project::version))
         .route("/api/apply", post(project::apply))
+        .route(
+            "/api/tidy",
+            get(project::tidy_list).post(project::tidy_apply),
+        )
+        .route("/api/explain", post(project::explain))
         .route("/api/ask", post(ask))
         .route("/api/word", post(word))
         .route("/api/glossary", post(glossary))
@@ -188,11 +216,12 @@ fn project_routes(config: Config) -> Router {
 /***
  * An upload kept as a project, at `/api/projects/<id>/`: its page, and below it the routes a page `docair serve` serves calls (`api/ai`, `api/version`, `api/ask`, `api/word`, `api/glossary`, `api/apply`), on that upload.
  *
- * The web app shows the page in a sandboxed frame, whose origin is opaque, so the answers allow every origin (`Access-Control-Allow-Origin: *`); the server has no accounts or cookies to protect. An upload no longer kept answers 404.
+ * The web app shows the page in a sandboxed frame, whose origin is opaque, so the answers allow every origin (`Access-Control-Allow-Origin: *`); the server has no accounts or cookies to protect. An upload no longer kept answers 404: a short page that says so when the frame or a tab opens it, JSON for the page's own calls.
  *
  * @id      docair-server.kept_upload
  * @http    GET /api/projects/{id}/{rest}
  * @calls   docair-server.project.kept-uploads.get "finds the upload"
+ * @calls   docair-server.peers.forward "sends a request for an upload another pod keeps to that pod"
  * @calls   docair-server.project.page (GET /api/projects/<id>/) -> html
  ***/
 async fn kept_upload(State(config): State<Config>, req: Request) -> Response {
@@ -250,6 +279,25 @@ async fn kept_upload_any(config: Config, req: Request) -> Response {
     res
 }
 
+/// What a reader sees who opens an upload the server no longer keeps (docair-702.33).
+const UPLOAD_GONE: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload no longer kept</title>
+<style>
+:root { color-scheme: light dark; --fg: #1d2330; --muted: #5b6475; --bg: #fbfbfd; }
+@media (prefers-color-scheme: dark) { :root { --fg: #e6e9f0; --muted: #a3abbb; --bg: #161a22; } }
+body { margin: 0; padding: 48px 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 34rem; margin: 0 auto; }
+h1 { font-size: 1.3rem; margin: 0 0 0.6rem; }
+p { margin: 0 0 0.8rem; } .muted { color: var(--muted); font-size: 0.92rem; }
+</style></head>
+<body><main data-upload-gone>
+<h1>This upload is no longer kept</h1>
+<p>Upload the folder again to see its page and ask the AI about it.</p>
+<p class="muted">The server keeps an upload for an hour after its last use, at most 8 at a time, and none across a restart. A page you downloaded still works, without the AI.</p>
+</main></body></html>
+"#;
+
 /// The answer of the upload's own routes, the path below `/api/projects/<id>` as the request's path.
 async fn kept_upload_answer(config: Config, mut req: Request) -> Response {
     use tower::ServiceExt;
@@ -257,6 +305,29 @@ async fn kept_upload_answer(config: Config, mut req: Request) -> Response {
     let below = path.strip_prefix("/api/projects/").unwrap_or("");
     let (id, rest) = below.split_once('/').unwrap_or((below, ""));
     let Some(project) = config.uploads.get(id) else {
+        // A page opened in the frame or a new tab gets a page that says so; the page's own calls get JSON.
+        let wants_page = req.method() == Method::GET
+            && req
+                .headers()
+                .get(header::ACCEPT)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|a| a.contains("text/html"));
+        // Kept by another server pod: the request goes there (docs/SLICES.md §8).
+        if let Some(p) = &config.peers
+            && !req.headers().contains_key(peers::FORWARDED)
+            && let Some(to) = peers::pod_of(id)
+            && let Some(res) = peers::forward(p, &to, req, config.max_upload_bytes).await
+        {
+            return res;
+        }
+        if wants_page {
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                UPLOAD_GONE,
+            )
+                .into_response();
+        }
         return ApiError(
             StatusCode::NOT_FOUND,
             "this upload is no longer kept; upload the folder again".into(),
@@ -348,7 +419,10 @@ async fn scan_upload(
         anyhow::Ok((project, result))
     })
     .await??;
-    let id = config.uploads.keep(dir, Arc::new(project));
+    let pod = config.peers.as_ref().map(peers::Peers::prefix);
+    let id = config
+        .uploads
+        .keep_as(dir, Arc::new(project), pod.as_deref());
     result.page = Some(format!("/api/projects/{id}/"));
     Ok(Json(result))
 }
@@ -496,9 +570,41 @@ pub struct AskRequest {
     /// Earlier turns of the conversation, oldest first.
     #[serde(default)]
     pub history: Vec<Turn>,
-    /// What is selected on the chart, e.g. `docair-web.app (component)`.
+    /// What the question points at: one part's id (what is selected), or a list of typed refs,
+    /// `part:<id>`, `data:<id>`, `term:<word>`, `line:<k>@<address>`, `edges:<i>,<j>` (docair-5n2).
     #[serde(default)]
-    pub context: Option<String>,
+    pub context: Option<AskContext>,
+}
+
+/// A question's context: one id, as the page sent before, or a list of typed refs.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum AskContext {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl AskContext {
+    fn refs(self) -> Vec<String> {
+        match self {
+            AskContext::One(s) => vec![s],
+            AskContext::Many(v) => v,
+        }
+    }
+}
+
+/// Ask with what the question points at in words; refs that name nothing join the reply's problems.
+fn ask_about(
+    ai: &AiConfig,
+    graph: &Graph,
+    question: &str,
+    history: &[Turn],
+    refs: &[String],
+) -> anyhow::Result<docair_ai::Reply> {
+    let (about, problems) = docair_ai::ask_context::about(graph, refs);
+    let mut reply = docair_ai::ask(ai, graph, question, history, about.as_deref())?;
+    reply.problems.extend(problems);
+    Ok(reply)
 }
 
 /***
@@ -509,6 +615,7 @@ pub struct AskRequest {
  * @id      docair-server.ask
  * @http    POST /api/ask
  * @calls   docair-ai.ask.ask (question, graph, history) -> Reply
+ * @calls   docair-ai.ask_context.about "turns what the question points at into words"
  ***/
 async fn ask(
     State(config): State<Config>,
@@ -539,24 +646,24 @@ async fn ask(
         context,
         ..
     } = req;
+    let refs = context.map(AskContext::refs).unwrap_or_default();
     let Some(graph) = graph else {
         // The project's own graph; the answer is taken into the project.
         let project = served(&config)?;
         let graph = project.lock().graph.clone();
         let fresh = history.is_empty();
         let answer = tokio::task::spawn_blocking(move || {
-            let reply = docair_ai::ask(&ai, &graph, &question, &history, context.as_deref())
+            let reply = ask_about(&ai, &graph, &question, &history, &refs)
                 .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
             project::answered(&project, reply, fresh)
         })
         .await??;
         return Ok(Json(answer).into_response());
     };
-    let reply = tokio::task::spawn_blocking(move || {
-        docair_ai::ask(&ai, &graph, &question, &history, context.as_deref())
-    })
-    .await?
-    .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    let reply =
+        tokio::task::spawn_blocking(move || ask_about(&ai, &graph, &question, &history, &refs))
+            .await?
+            .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     Ok(Json(reply).into_response())
 }
 
@@ -874,8 +981,120 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{said}");
-        let (status, _, _) = call(
+        let (status, _, gone) = call(
             Request::get("/api/projects/0123456789abcdef0123456789abcdef/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(gone.contains("\"error\""), "a call gets JSON: {gone}");
+        // Opened in the frame or a new tab, a dropped upload is a page that says so.
+        let (status, cors, gone) = call(
+            Request::get("/api/projects/0123456789abcdef0123456789abcdef/")
+                .header("accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(cors.as_deref(), Some("*"));
+        assert!(gone.contains("This upload is no longer kept"), "{gone}");
+    }
+
+    /// Two server pods: an upload kept by one is reached through the other; an id naming no server pod is not forwarded.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pod_forwards_an_upload_it_does_not_keep() {
+        let listen = || async { tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap() };
+        let (la, lb) = (listen().await, listen().await);
+        let (a, b) = (
+            la.local_addr().unwrap().to_string(),
+            lb.local_addr().unwrap().to_string(),
+        );
+        let pod = |me: &str| Config {
+            peers: Some(peers::Peers {
+                me: me.to_string(),
+                lookup: b.clone(),
+            }),
+            ..Config::default()
+        };
+        let (app_a, app_b) = (router(pod(&a)), router(pod(&b)));
+        tokio::spawn(axum::serve(la, app_a.clone()).into_future());
+        tokio::spawn(axum::serve(lb, app_b.clone()).into_future());
+        let call = |app: Router, req: Request<Body>| async move {
+            let res = app.oneshot(req).await.unwrap();
+            let status = res.status();
+            let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            (status, String::from_utf8_lossy(&bytes).to_string())
+        };
+        let (content_type, body) = multipart(&[(
+            "shop/README.md",
+            "# Shop\n\n```docair\nThe shop.\n\n@id      app\n@kind    module\n@part-of shop\n```\n",
+        )]);
+        let (status, json) = call(
+            app_b.clone(),
+            Request::post("/api/scan")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let page = json["page"].as_str().unwrap().to_string();
+        let id = page
+            .trim_start_matches("/api/projects/")
+            .trim_end_matches('/');
+        assert_eq!(
+            peers::pod_of(id).as_deref(),
+            Some(b.as_str()),
+            "the id names pod B"
+        );
+        // Pod A keeps nothing: it forwards the page and a question to B.
+        let (status, html) = call(
+            app_a.clone(),
+            Request::get(&page)
+                .header("accept", "text/html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{html}");
+        assert!(html.contains("docair-packed"), "B's page through A");
+        let (status, said) = call(
+            app_a.clone(),
+            Request::post(format!("{page}api/ask"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"question":"How does it work?"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "B's answer, AI off: {said}"
+        );
+        // An id naming an address that is no server pod is not forwarded.
+        let forged = format!(
+            "/api/projects/{}-0123456789abcdef0123456789abcdef/",
+            peers::Peers {
+                me: "127.0.0.1:1".into(),
+                lookup: String::new()
+            }
+            .prefix()
+        );
+        let (status, gone) = call(
+            app_a.clone(),
+            Request::get(&forged).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(gone.contains("no longer kept"), "{gone}");
+        // A forwarded request is never forwarded again.
+        let (status, _) = call(
+            app_a,
+            Request::get(&page)
+                .header(peers::FORWARDED, "1")
                 .body(Body::empty())
                 .unwrap(),
         )

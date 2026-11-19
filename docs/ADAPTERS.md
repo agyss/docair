@@ -276,8 +276,11 @@ match left unbound is skipped. Rule `axum.route.yaml`: `.route("/x",
 get(a))`, also `get(a).post(b)` chains, gives the routes the handlers serve
 and the router's calls to them. In an `any`, list the longest pattern first:
 ast-grep keeps the first pattern that fits and doesn't try the next one when
-a constraint then fails. Not yet: axum `nest` prefixes (beads, a follow-up of
-step 4).
+a constraint then fails. axum `nest` prefixes are composed in the Rust adapter
+(docair-4wk.9): `.nest("/api", api())` puts `/api` in front of every route
+the function `api` builds, `.nest("/admin", admin)` in front of the routes
+the `let admin = …` before it builds, and a nest inside a nest adds up
+(`/api/v1`).
 
 **Added in step 5:** `requests: http` facts (`method`, `path`, an optional
 `reply`); `payload` and `reply` are left out when a match has none; and
@@ -342,6 +345,13 @@ the item defined at the reference's definition (the callee), in its project
 pass. `docair.toml`'s `[code] run_indexers = true` runs `rust-analyzer scip`
 (docair: +4.5 s per scan), `[code] scip = [...]` reads index files built
 elsewhere; W119 when rust-analyzer fails, nothing when it isn't installed.
+The same setting runs `scip-typescript index` in each folder with a
+`tsconfig.json` above TypeScript files that has it in `node_modules/.bin`
+(docair-4wk.14; docair's `web/` pins it as a dev dependency); its paths are
+made the project's (`web/src/app/app.ts`), the TypeScript adapter maps
+references like the Rust one, and a call the syntax also found stays one
+line. It is kept like rust-analyzer's index, under the tool's version, the
+sources and `package-lock.json` (0.5 s for docair's web app).
 An indexer builds the code (build scripts and procedural macros run), so an
 upload to the server never runs one (`Options::untrusted`), and a `scip`
 path must stay inside the root (`config::inside`).
@@ -449,7 +459,7 @@ Built in docair-4wk.18. What the code reads and writes splits in two:
 
 | The code | It knows | Becomes |
 |----------|----------|---------|
-| `std::env::var("DOCAIR_MAX_FILES")`, `process.env.PORT` | the variable, by name | a request at `Meet::Env`; `env::link` gives it a certain `@reads` from what sets the variable: a Deployment's `env` value, a `configMapKeyRef`/`secretKeyRef`, or every key of an `envFrom` ConfigMap or Secret. `one-of` when several set it; nothing in the project sets it → `@requests env:NAME` |
+| `std::env::var("DOCAIR_MAX_FILES")`, `process.env.PORT` | the variable, by name | a request at `Meet::Env`; `env::link` gives it a certain `@reads` from what sets the variable: a Deployment's `env` value, a `configMapKeyRef`/`secretKeyRef`, or every key of an `envFrom` ConfigMap or Secret; a `fieldRef` or `resourceFieldRef` (Kubernetes fills it from the pod) is set by nothing. `one-of` when several set it; nothing in the project sets it → `@requests env:NAME` |
 | `fs::read_to_string(…)`, `fs::write(…)`, `fs.readFileSync(…)`, Terraform `file(…)` | that a file is read or written, not which store | `@reads file:` / `@writes file:` |
 | a request through an HTTP client crate (`ureq`, `reqwest`, from the code index) | that a request goes out, not to which system | `@calls net:` |
 
@@ -468,9 +478,14 @@ passes, as a string, a `const`, or a `let` of a `const`
 `env.get(var)` → `env::var(key)`). Free functions and closures match
 `f(…)` calls, methods `x.f(…)` calls.
 
-Not yet: (b) a store that says where it is, so that code with the path
-written out gets a certain line without a block (docair-4wk.25); reads of
-`const` tables (`LANGUAGES`); Dockerfiles and Terraform `local-exec`. On
+A store that says where it is (`@path docs/walkthroughs/*.json`, SPEC §3.5's
+tag table) gets a certain line from code that writes a fitting path out,
+before the blocks are asked (docair-4wk.25): `fs::read_to_string("data/shop.json")`
+reads the store with `@path data/*.json`, with no `@reads` on the function;
+a folder of the glob fits too (`fs::read_dir("docs/walkthroughs")`).
+docair's own stores say their paths, though its code builds them at run time
+(`root.join(".env")`), so they gain no line yet. Not yet: reads of
+`const` tables (`LANGUAGES`); what Dockerfiles and `local-exec` read and write (they are read for the program a Service reaches, §7). On
 docair: `@reads` 12 of 20 confirmed and 1 behind a call, `@writes` 5 of 7.
 
 ---
@@ -514,9 +529,15 @@ nothing: no words (`"…"`), and no wording of what travels that differs from
 the code. Only a certain line makes a tag repeated. Tidy never touches `@id`,
 `@kind`, `@part-of`, `@flow` or the block's text.
 
-Every scan finds the repeated tags, without AI, and puts them into the graph
-as proposed edits (`tidy`: the same `Change` model as the AI's edits, SPEC
-§10.6), each with the code that says the same.
+docair finds the repeated tags without AI (`docair_core::tidy::repeated`,
+from the graph each scan builds), each with the code that says the same, and
+turns them into proposed edits (`tidy::changes`: the same `Change` model as
+the AI's edits, SPEC §10.6). They are worked out when asked, not stored in the
+graph: `docair tidy`, the one-line hint of `docair build` and `docair check`,
+the page docair writes, and `GET`/`POST /api/tidy` of `docair serve` and of a
+kept upload. Built: the CLI, the hint, the routes and the page (the table
+below; `page_tidy.rs`, e2e `tidy.spec.ts`); on docair itself it
+found 4 (two `@in … from`, two `@calls` without words), and removed them.
 
 | Where | What it shows |
 |-------|---------------|
@@ -571,9 +592,19 @@ a chart's `values.yaml`:
 | `port: name: http` in an Ingress path | the path keeps its Service (before, only `port: number:` closed a path) |
 
 A line goes to the `@id` of the block that documents the other end, else to
-the Terraform resource. Not yet: from a Service to the program its pods run
-(the image, the Dockerfile that builds it, the crate or app in it,
-docair-4wk.26).
+the Terraform resource.
+
+**From a Service to the program its pods run** (docair-4wk.26). A Service
+selects its workloads; a workload's container `image` (filled from the
+chart's values: `docair-server:dev`) is built by a Terraform `local-exec`
+`docker build -f <Dockerfile> -t <image>` (locals expanded, matched by the
+image's repository); the Dockerfile's `RUN cargo build -p <crate>` makes a
+crate whose `src/main.rs` is what runs, so the Service gets a certain line to
+`<crate>.main`; without a crate, a file the Dockerfile copies in that a block
+documents is what runs (`COPY docker/nginx.conf …` → `nginx`). On docair:
+`k8s.svc.docair-server → docair-server.main` and `k8s.svc.docair-web → nginx`
+come from code; the hand-written `@calls docair-server.router` is behind
+`main`'s call to `router`.
 
 ## 8. What becomes a node
 

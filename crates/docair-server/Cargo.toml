@@ -22,11 +22,13 @@ axum.workspace = true
 docair-ai.workspace = true
 docair-core.workspace = true
 docair-viewer.workspace = true
+docair-scip.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tower.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]

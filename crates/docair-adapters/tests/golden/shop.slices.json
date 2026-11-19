@@ -298,6 +298,94 @@
   {
     "schema": "docair.slice/0",
     "seed": {
+      "kind": "flow",
+      "id": "keep"
+    },
+    "ends": [
+      {
+        "id": "shop-ui.cart",
+        "stable": false,
+        "within": "shop-ui"
+      },
+      {
+        "id": "orders-db",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "shop-ui.cart",
+      "orders.create",
+      "orders-db"
+    ],
+    "steps": [
+      {
+        "nodes": [
+          "shop-ui.cart"
+        ],
+        "label": "the cart sends the order"
+      },
+      {
+        "nodes": [
+          "orders.create"
+        ],
+        "lines": [
+          2
+        ],
+        "label": "the API takes the order"
+      },
+      {
+        "nodes": [
+          "orders-db"
+        ],
+        "lines": [
+          0
+        ],
+        "label": "the order is written"
+      }
+    ],
+    "lines": [
+      {
+        "edge": 2,
+        "from": "shop-ui.cart",
+        "to": "orders.create",
+        "kind": "call"
+      },
+      {
+        "edge": 0,
+        "from": "orders.create",
+        "to": "orders-db",
+        "kind": "write"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "browser",
+        "more": 0
+      },
+      {
+        "id": "cluster",
+        "more": 0
+      },
+      {
+        "id": "infra",
+        "more": 1
+      },
+      {
+        "id": "orders-api",
+        "more": 1
+      },
+      {
+        "id": "shop-ui",
+        "more": 0
+      }
+    ],
+    "data": [
+      "data.order"
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
       "kind": "part",
       "id": "tf.cluster"
     },

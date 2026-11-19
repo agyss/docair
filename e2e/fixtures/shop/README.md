@@ -35,4 +35,5 @@ The orders table in Postgres.
 @id      orders-db
 @kind    store
 @part-of cluster
+@flow    keep 3 "the order is written"
 ```

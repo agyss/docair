@@ -24,13 +24,15 @@ docair-ai.workspace = true
 docair-core.workspace = true
 docair-layout.workspace = true
 docair-viewer.workspace = true
+docair-scip.workspace = true
+tempfile.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum.workspace = true
 docair-server = { path = "../docair-server" }
 tokio.workspace = true
 tower-http.workspace = true
+notify.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 tower.workspace = true

@@ -104,8 +104,12 @@ export interface ServedCopy {
  * @calls   docair-cli.serve.cmd_serve "serves the copy, with the fake model"
  ***/
 export async function serve(name: string): Promise<ServedCopy> {
-  const folder = copyOf(name);
-  const proc: ChildProcess = spawn(docair, ['serve', folder, '--bind', '127.0.0.1:0'], {
+  return serveFolder(copyOf(name));
+}
+
+/** `docair serve` on a folder that is already there (removed with it when stopped), at a port the system picks, with the fake model. */
+export async function serveFolder(folder: string, args: string[] = []): Promise<ServedCopy> {
+  const proc: ChildProcess = spawn(docair, ['serve', folder, '--bind', '127.0.0.1:0', ...args], {
     env: { ...process.env, ...fakeAiEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

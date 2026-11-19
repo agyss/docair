@@ -48,7 +48,7 @@ test.describe('add and remove sections', () => {
    *
    * @part-of e2e.sections
    * @covers  docair-viewer.doc-page.hide "checks the details offer to hide"
-   * @covers  docair-viewer.page_panels.look.details "checks the details show the part"
+   * @covers  docair-viewer.page_panels.panel-graph.details "checks the details show the part"
    ***/
   test('Hide this section in the details', async ({ page }) => {
     await openStatic(page, 'shop', '#layer/apps');
@@ -100,33 +100,34 @@ test.describe('add and remove sections', () => {
   });
 
   /***
-   * `[view] show` in docair.toml shows a part inside a hidden section: docair draws the section with only that part in it.
+   * `[view] show` in docair.toml shows a part inside a hidden section when the page opens: the section comes back with only that part, its siblings hidden, as chips.
    *
    * @part-of e2e.sections
-   * @covers  docair-core.layer_view.picture "checks [view] show brings a part back inside a hidden section"
+   * @covers  docair-viewer.doc-page.hide "checks [view] show opens a part in a hidden section"
    ***/
   test('docair.toml [view] show opens a part inside a hidden section', async ({ page }) => {
     await openStatic(page, 'shop-show', '#layer/code');
     const now = await pictured(page);
     expect(now).toEqual(expect.arrayContaining(['orders.create', 'orders-db']));
-    // Left out by docair, not hidden by the reader: not in the picture at all.
-    await expect(page.locator('#pic [data-id="tf.cluster"]')).toHaveCount(0);
-    await expect(page.getByTestId('hidden-bar')).toBeHidden();
+    expect(now).not.toContain('tf.cluster');
+    await expect(page.locator('#pic g.part[data-id="tf.cluster"]')).toHaveClass(/\bhidden\b/);
+    expect(await shown(page, ['infra', 'cluster', 'tf.cluster'])).toEqual(['infra', 'cluster']);
+    await expect(page.getByTestId('hidden-chip')).toHaveText(['kind_cluster.shop ×']);
   });
 
   /***
-   * `[view] hide` in docair.toml decides what the documentation leaves out: docair draws no picture with it (docs/SLICES.md §4).
+   * `[view] hide` in docair.toml decides what the page starts with hidden; docair draws it all the same, so its chip shows it again (docair-702.13).
    *
    * @part-of e2e.sections
-   * @covers  docair-core.layer_view.picture "checks [view] hide leaves the section out of every picture"
+   * @covers  docair-viewer.doc-page.hide "checks the page opens partly hidden, and the chip shows it"
    * @covers  docair-core.config.load "checks the config supplies the hide list"
    ***/
   test('docair.toml [view] hide is the default', async ({ page }) => {
-    for (const layer of ['overview', 'apps', 'code']) {
-      await openStatic(page, 'shop-hidden', `#layer/${layer}`);
-      await expect(page.locator('#pic [data-id="infra"], #pic [data-id="tf.cluster"]'), layer).toHaveCount(0);
-    }
-    expect(await pictured(page)).toContain('shop-ui');
-    await expect(page.getByTestId('hidden-bar')).toBeHidden();
+    await openStatic(page, 'shop-hidden', '#layer/code');
+    await expect(page.getByTestId('hidden-chip')).toHaveText('infra host ×');
+    expect(await pictured(page)).not.toContain('tf.cluster');
+    await expect(page.locator('#pic g.part[data-id="tf.cluster"]')).toHaveClass(/\bhidden\b/);
+    await page.getByTestId('hidden-chip').click();
+    await expect.poll(() => pictured(page)).toContain('tf.cluster');
   });
 });

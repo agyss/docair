@@ -35,6 +35,22 @@ else
   fail "POST /api/scan answered $code: $(head -c 200 "$tmp/scan.json")"
 fi
 
+# 2b. The upload is kept as a project: its page answers through every server pod (docs/SLICES.md §8).
+page=$(jq -r '.page // empty' "$tmp/scan.json")
+if [ -n "$page" ]; then
+  answers=""
+  for _ in 1 2 3 4 5 6; do
+    answers="$answers $(curl -s -o /dev/null -w '%{http_code}' -H 'accept: text/html' "$BASE$page")"
+  done
+  if [ "$(echo $answers | tr ' ' '\n' | sort -u)" = 200 ]; then
+    pass "the kept upload's page answers 6 times in a row, whichever pod gets it"
+  else
+    fail "the kept upload's page answered:$answers"
+  fi
+else
+  fail "POST /api/scan gave no page address"
+fi
+
 # 3. Paths that leave the upload are refused.
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/scan" -F "file=@$tmp/demo/README.md;filename=../escape.md")
 [ "$code" = 400 ] && pass "an upload path with .. is refused (400)" || fail "an upload path with .. answered $code, expected 400"

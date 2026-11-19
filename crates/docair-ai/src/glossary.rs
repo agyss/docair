@@ -320,6 +320,13 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
                 serde_json::to_string(&checks_here).expect("checks serialize")
             ));
         }
+        // Words docair found that name no part and nothing explains: entries for those a reader needs.
+        if b == 0 && !m.unnamed.is_empty() {
+            tail.push_str(&format!(
+                "\nWords without a part or an entry (write entries for those a reader of these docs needs):\n{}\n",
+                serde_json::to_string(&m.unnamed).expect("words serialize")
+            ));
+        }
         let reply = if b == 0 {
             let full = format!(
                 "System `{}`. Explained already: {known_text}.\nAt most {limit} new terms.\nThe texts:\n{}\nThe words on the lines:\n{}{tail}",
@@ -389,6 +396,17 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
         {
             continue;
         }
+        // Proposed before and no longer in the glossary: the reviewer dropped it (docair-6sg).
+        if m.decisions
+            .iter()
+            .any(|(w, d)| d.proposed && stem(w) == stem(&t.term))
+        {
+            problems.push(format!(
+                "`{}` was dropped from the glossary before; left out",
+                t.term
+            ));
+            continue;
+        }
         if !occurs(&t.term, &corpus) && !t.aliases.iter().any(|a| occurs(a, &corpus)) {
             problems.push(format!("`{}` does not occur in the docs; left out", t.term));
             continue;
@@ -407,6 +425,16 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
 
     // Decisions and checks: the decisions file, entries built from the code, entries rewritten to agree with it.
     let mut decisions: BTreeMap<String, Decision> = m.decisions.clone();
+    // Each new entry is marked as proposed, so a reviewer's dropping it later is remembered.
+    for t in &terms {
+        decisions
+            .entry(t.term.to_lowercase())
+            .or_insert_with(|| Decision {
+                proposed: true,
+                why: Some("the model proposed the entry".into()),
+                ..Decision::default()
+            });
+    }
     let mut rewrites: Vec<Change> = Vec::new();
     let (mut settled, mut ordinary, mut checked, mut rewritten) = (0, 0, 0, 0);
     let mut seen: HashSet<String> = HashSet::new();

@@ -90,22 +90,22 @@ test.describe('clarify with AI', () => {
   });
 
   /***
-   * "I don't care about …" is a view change: applied, it goes into docair.toml, and the documentation leaves the section out.
+   * "I don't care about …" hides that section in the page at once, as the reader's own hiding; Undo shows it again, and docair.toml is never written.
    *
    * @part-of e2e.ask
-   * @covers  docair-server.project.apply "checks the view change goes into docair.toml"
-   * @covers  docair-server.project.project-session.apply "checks the documentation is written again"
+   * @covers  docair-server.project.answered "checks a view change does not wait to be applied"
+   * @covers  docair-viewer.doc-page.chat "checks the view change hides at once, and Undo"
    ***/
-  test("I don't care about it hides it, once applied", async ({ page }) => {
+  test("I don't care about it hides it, and Undo shows it again", async ({ page }) => {
+    const toml = fs.readFileSync(path.join(served.folder, 'docair.toml'), 'utf8');
     const reply = await ask(page, "I don't care about the infrastructure");
     await expect(reply.getByTestId('view-change')).toContainText('infra');
-    await reply.getByTestId('review').click();
-    await expect(reply.getByTestId('diff')).toContainText('+hide = ["infra"]');
-    await apply(page);
-    expect(fs.readFileSync(path.join(served.folder, 'docair.toml'), 'utf8')).toMatch(/hide = \["infra"\]/);
-    await go(page, '#layer/code');
-    await expect(page.locator('#pic svg.docair-pic[data-layer="code"]')).toBeAttached();
-    await expect(page.locator('#pic [data-id="tf.cluster"]')).toHaveCount(0);
+    await expect(page.getByTestId('hidden-chip')).toHaveText('infra host ×');
+    await expect(reply.getByTestId('apply')).toHaveCount(0);
+    await reply.getByTestId('undo').click();
+    await expect(page.getByTestId('hidden-bar')).toBeHidden();
+    await expect(reply).toContainText('undone');
+    expect(fs.readFileSync(path.join(served.folder, 'docair.toml'), 'utf8')).toBe(toml);
   });
 
   /***
@@ -200,6 +200,75 @@ test.describe('clarify with AI', () => {
       .at(-1);
     expect(question).toContain('orders.create');
   });
+
+  /***
+   * A question can point at several things at once: parts, data, terms and lines, as typed refs; one that names nothing is said to be left out.
+   *
+   * @part-of e2e.ask
+   * @covers  docair-ai.ask_context.about "checks typed refs become words for the model"
+   * @covers  docair-server.ask "checks the server takes a list as context"
+   ***/
+  test('a question points at parts, data, terms and lines', async ({ page }) => {
+    const res = await page.request.post(`${served.url}/api/ask`, {
+      data: { question: 'How do these fit together, pointed at?', context: ['part:orders.create', 'data:data.order', 'term:order', 'edges:0', 'part:ghost'] },
+    });
+    expect(res.status()).toBe(200);
+    const answer = await res.json();
+    expect(answer.reply.problems.join(' ')).toContain('part:ghost');
+    const all = await (await page.request.get(`${fakeAi}/requests`)).json();
+    const sent = all
+      .map((r: any) => r.messages.filter((m: any) => m.role === 'user').at(-1).content as string)
+      .filter((q: string) => q.includes('How do these fit together, pointed at?'))
+      .at(-1);
+    expect(sent).toContain('- part `orders.create`');
+    expect(sent).toContain('- datum `data.order`');
+    expect(sent).toContain('- term "order"');
+    expect(sent).toContain('- line `');
+  });
+
+  /***
+   * ✦ Ask about this, in a part's details, a line's details and a datum's page, puts each into the question as a chip; the question carries them as typed refs, and the model gets the facts of all three.
+   *
+   * @part-of e2e.ask
+   * @covers  docair-viewer.doc-page.chat "checks Ask about this puts things into the question"
+   * @covers  docair-viewer.page_panels.panels "checks a part's details offer Ask about this"
+   ***/
+  test('✦ Ask about this puts a part, a line and a datum into one question', async ({ page }) => {
+    await select(page, 'orders.create');
+    await page.locator('#details [data-test="ask-about"]').click();
+    // A line's words in sight, free of the legend and of data chips: a click there picks the line.
+    const at = await page.evaluate(() => {
+      for (const w of document.querySelectorAll('#pic .words')) {
+        if (w.querySelector('[data-data]')) continue;
+        const b = w.querySelector('rect')!.getBoundingClientRect();
+        const [x, y] = [b.left + b.width / 2, b.top + b.height / 2];
+        if (document.elementFromPoint(x, y)?.closest('#pic .words') === w) return { x, y };
+      }
+      return null;
+    });
+    expect(at, 'a line to point at').toBeTruthy();
+    await page.mouse.click(at!.x, at!.y);
+    await expect(page.getByTestId('line-details')).toBeVisible();
+    await page.locator('#details [data-test="ask-about"]').click();
+    await page.getByTestId('data-button').click();
+    await page.locator('#details [data-about="data.order"]').first().click();
+    await expect(page.getByTestId('data-title')).toBeVisible();
+    await page.locator('#details [data-test="ask-about"]').click();
+    const refs = await page.locator('#chat [data-test="context"] .chip-x').evaluateAll((bs) => bs.map((b) => (b as HTMLElement).title));
+    expect(refs).toHaveLength(3);
+    expect(refs[0]).toBe('part:orders.create');
+    expect(refs[1]).toMatch(/^edge:/);
+    expect(refs[2]).toBe('data:data.order');
+    await ask(page, 'How do a part, a line and a datum fit together, pointed at in the page?');
+    const all = await (await page.request.get(`${fakeAi}/requests`)).json();
+    const sent = all
+      .map((r: any) => r.messages.filter((m: any) => m.role === 'user').at(-1).content as string)
+      .filter((q: string) => q.includes('pointed at in the page?'))
+      .at(-1);
+    expect(sent).toContain('- part `orders.create`');
+    expect(sent).toContain('- line `');
+    expect(sent).toContain('- datum `data.order`');
+  });
 });
 
 /***
@@ -234,15 +303,21 @@ test.describe('clarify with AI in an uploaded page', () => {
       await expect(f.getByTestId('msg-ai')).toHaveCount(before + 1);
       return f.getByTestId('msg-ai').last();
     };
+    // A walkthrough writes the documentation again: the frame reloads with it.
+    const written = page.waitForEvent('framenavigated', { predicate: (x) => x.url().includes('/api/projects/'), timeout: 20_000 });
     const walk = await ask('How does checkout work in the upload?');
     await expect(walk.getByTestId('play')).toContainText('3 steps');
+    await written;
     await expect(f.locator('body[data-ready="true"]')).toBeAttached();
     await f.getByTestId('msg-ai').last().getByTestId('play').click();
     await expect(f.getByTestId('step-card')).toContainText('step 1 of 3');
     const fix = await ask('Listing orders also reads the orders table; that is missing.');
     await expect(fix.getByTestId('edits')).toContainText('orders.list');
-    await fix.getByTestId('apply').click();
     // The frame reloads from the server with the edit in; the conversation is kept.
+    const reloaded = page.waitForEvent('framenavigated', { predicate: (x) => x.url().includes('/api/projects/'), timeout: 20_000 });
+    await fix.getByTestId('apply').click();
+    await reloaded;
+    await expect(f.locator('body[data-ready="true"]')).toBeAttached();
     await expect(f.getByTestId('msg-ai').last().getByTestId('apply')).toContainText('Applied');
     await expect(f.getByTestId('msg-ai')).toHaveCount(2);
     await frame().evaluate(() => (location.hash = '#part/orders.list'));

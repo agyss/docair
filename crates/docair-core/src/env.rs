@@ -12,7 +12,6 @@ use crate::facts::{Evidence, Facts, Meet, Reach, Relation, Serve, Target, Verb};
  * nothing in the project sets stays a `@requests env:NAME` on the part.
  *
  * @id  docair-core.env.link
- * @in  facts: Facts[] from docair-core.adapter.collect
  ***/
 pub fn link(all: &mut [Facts]) {
     // The code reads in one adapter's facts, the settings in another's (infra).

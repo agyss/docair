@@ -195,7 +195,6 @@ struct Index<'g> {
     children: HashMap<&'g str, Vec<&'g str>>,
     out_of: HashMap<&'g str, Vec<usize>>,
     cls: HashMap<&'g str, PartClass>,
-    hidden: HashSet<&'g str>,
     tests: bool,
 }
 
@@ -223,11 +222,9 @@ impl<'g> Index<'g> {
             children,
             out_of,
             cls: HashMap::new(),
-            hidden: HashSet::new(),
             tests: tests.unwrap_or(graph.view.tests),
         };
         ix.classify();
-        ix.load_view();
         ix
     }
 
@@ -389,44 +386,8 @@ impl<'g> Index<'g> {
         self.cls = cls;
     }
 
-    /// What the page hides when it opens: `[view] hide`, with `[view] show` brought back inside (SPEC §11).
-    fn load_view(&mut self) {
-        let view = &self.graph.view;
-        self.hidden = view
-            .hide
-            .iter()
-            .filter_map(|id| self.nodes.get(id.as_str()).map(|n| n.id.as_str()))
-            .collect();
-        for id in &view.show {
-            if let Some(n) = self.nodes.get(id.as_str()) {
-                self.reveal_within(n.id.as_str());
-            }
-        }
-    }
-
-    /// Show a part whose section is hidden: each group from the highest hidden one down comes back, its other children are hidden.
-    fn reveal_within(&mut self, id: &'g str) {
-        let mut path: Vec<&str> = self.ancestors(id);
-        path.reverse();
-        path.push(id);
-        let Some(first) = path.iter().position(|x| self.hidden.contains(x)) else {
-            return;
-        };
-        for j in first..path.len() {
-            self.hidden.remove(path[j]);
-            if j == path.len() - 1 {
-                break;
-            }
-            let sibs: Vec<&str> = self.kids(path[j]).to_vec();
-            for sib in sibs {
-                if sib != path[j + 1] && !self.is_data(sib) {
-                    self.hidden.insert(sib);
-                }
-            }
-        }
-    }
-
-    /// A node is left out: it or a group around it is hidden, or it is a test while tests are off.
+    /// A node is left out: it is a test, or inside one, while tests are off. `[view] hide` leaves
+    /// nothing out: the page starts with those parts hidden, and the reader can show them (docair-702.13).
     fn hidden_node(&self, id: &str) -> bool {
         let mut cur = Some(id);
         let mut steps = 0;
@@ -434,7 +395,7 @@ impl<'g> Index<'g> {
             if c == self.sys || steps > self.nodes.len() {
                 break;
             }
-            if self.hidden.contains(c) || (!self.tests && self.kind(c) == "test") {
+            if !self.tests && self.kind(c) == "test" {
                 return true;
             }
             cur = self.parent(c);
@@ -1295,6 +1256,7 @@ mod tests {
 
     fn edge(payload: &str, label: &str) -> Edge {
         Edge {
+            id: String::new(),
             from: "a".into(),
             to: "b".into(),
             kind: EdgeKind::Call,
@@ -1305,13 +1267,13 @@ mod tests {
             text: None,
             carries: Vec::new(),
             carries_back: Vec::new(),
-            from_code: false,
-            from_api: None,
+            evidence: None,
             reach: None,
             tag: String::new(),
             source: crate::model::SourceRef {
                 file: String::new(),
                 line: 0,
+                end: None,
             },
             origin: Origin::Authored,
         }

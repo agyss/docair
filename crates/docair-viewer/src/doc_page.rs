@@ -16,8 +16,8 @@ use docair_core::slice::{SeedKind, SliceSeed};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    escape_text, fill, layout_input, layout_store, page_panels, page_walks, script_js, script_json,
-    svg,
+    escape_text, fill, layout_input, layout_store, page_changes, page_panels, page_walks,
+    script_js, script_json, svg,
 };
 
 const TEMPLATE: &str = include_str!("../assets/page.html");
@@ -213,13 +213,7 @@ fn spots(graph: &Graph) -> Spots {
         let Some((pic, walk)) = found else {
             continue;
         };
-        let title = match seed.kind {
-            SeedKind::Data => format!("Datum {}", name(&seed.id)),
-            SeedKind::Route => format!("Route {}", name(&seed.id)),
-            SeedKind::Flow => format!("Scenario {}", seed.id),
-            SeedKind::Walkthrough => format!("Walkthrough {}", seed.id),
-            SeedKind::Part => name(&seed.id),
-        };
+        let title = slice_title(seed, &name);
         let addr = slice_addr(seed);
         out.add(
             addr.clone(),
@@ -290,6 +284,8 @@ fn side_by_side<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Ve
 struct DrawnPictures {
     packed: Vec<String>,
     walks: Vec<Option<Value>>,
+    /// For each picture, what moving a part needs (docair-9qv): its layout input and its layout, packed.
+    moves: Vec<String>,
 }
 
 fn draw_all(
@@ -300,6 +296,7 @@ fn draw_all(
 ) -> DrawnPictures {
     let linker = crate::page_glossary::Linker::new(graph);
     let steps: Vec<Mutex<Option<Value>>> = pictures.iter().map(|_| Mutex::new(None)).collect();
+    let moves: Vec<Mutex<String>> = pictures.iter().map(|_| Mutex::new(String::new())).collect();
     let mut order: Vec<usize> = (0..pictures.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(pictures[i].lines.len() + pictures[i].parts.len()));
     let next = AtomicUsize::new(0);
@@ -328,6 +325,14 @@ fn draw_all(
                         .unwrap_or_else(|| layout_input::lay_out_with(graph, pic, &ahead));
                     *packed[i].lock().expect("no worker panics") =
                         pack(&svg::draw(graph, pic, &laid));
+                    let input = layout_input::input_with(
+                        graph,
+                        pic,
+                        &docair_layout::Monospace::default(),
+                        &ahead,
+                    );
+                    *moves[i].lock().expect("no worker panics") =
+                        pack(&json!({ "input": input, "layout": laid }).to_string());
                     if let Some((seed, slice)) = walk {
                         *steps[i].lock().expect("no worker panics") =
                             Some(page_walks::steps(graph, pic, &laid, seed, slice, &linker));
@@ -342,6 +347,10 @@ fn draw_all(
             .map(|m| m.into_inner().expect("no worker panics"))
             .collect(),
         walks: steps
+            .into_iter()
+            .map(|m| m.into_inner().expect("no worker panics"))
+            .collect(),
+        moves: moves
             .into_iter()
             .map(|m| m.into_inner().expect("no worker panics"))
             .collect(),
@@ -409,17 +418,56 @@ pub fn render_page(graph: &Graph) -> String {
     render_page_keeping(graph, Some(&cache_dir().join("layouts")))
 }
 
+/// A slice's title, as the crumbs and the walks say it: `Scenario checkout`, `Datum order`.
+pub(crate) fn slice_title(seed: &SliceSeed, name: &dyn Fn(&str) -> String) -> String {
+    match seed.kind {
+        SeedKind::Data => format!("Datum {}", name(&seed.id)),
+        SeedKind::Route => format!("Route {}", name(&seed.id)),
+        SeedKind::Flow => format!("Scenario {}", seed.id),
+        SeedKind::Walkthrough => format!("Walkthrough {}", seed.id),
+        SeedKind::Part => name(&seed.id),
+    }
+}
+
 /// As `render_page`, with layouts kept in `keep`, or none kept.
 pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
+    render_page_with(graph, keep, None)
+}
+
+/// What changed between two versions of the project, for the page's changes section
+/// (docs/CHANGES.md §7, docair-zrr.7), with what the model explained about it (docs/EXPLAIN.md,
+/// docair-8l6.6).
+pub struct Changed<'a> {
+    /// The graph at A, the version before.
+    pub before: &'a Graph,
+    /// What `docair diff` found between A and B.
+    pub changes: &'a docair_core::changes::Changes,
+    /// The stored findings (`docair_ai::explain::ChangeFindings` as JSON), when there are any.
+    pub findings: Option<&'a Value>,
+}
+
+/// As `render_page_keeping`, with the changes section when `changed` is given (`docair build
+/// --changes <A>`): the changed flows' list, and each flow's slice before and after (docair-zrr.7).
+pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Changed>) -> String {
     let all = spots(graph);
     let drawn = draw_all(graph, &all.pictures, &all.walks, keep);
     let mut packed = drawn.packed;
+    // The changes section: each changed flow's picture, before and after, packed after the others.
+    let view = changed.map(|c| page_changes::change_view(graph, c, keep));
+    let changes_at = packed.len();
+    for c in view.iter().flat_map(|v| &v.pictures) {
+        packed.push(pack(&c.svg));
+    }
     let sections: std::collections::HashSet<String> = all
         .spots
         .iter()
         .filter_map(|s| s.addr.strip_prefix("box/").map(str::to_string))
         .collect();
-    let panels = page_panels::panels(graph, &sections);
+    let mut panels = page_panels::panels(graph, &sections);
+    if let Some(v) = &view {
+        panels.data["changes"] = Value::String(v.list.clone());
+        panels.data["flowChanges"] = Value::Object(v.details.clone());
+    }
     // The panels and the walks' steps go with the pictures, packed the same way, last.
     packed.push(pack(&panels.data.to_string()));
     let panels_at = packed.len() - 1;
@@ -441,8 +489,25 @@ pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
             walk_steps.insert(s.addr.clone(), steps.clone());
         }
     }
+    // An explained workflow is walked through like any walk, on its side of the change.
+    for c in view.iter().flat_map(|v| &v.pictures) {
+        if let Some(w) = &c.walk {
+            walk_steps.insert(c.addr.clone(), w.clone());
+        }
+    }
     packed.push(pack(&Value::Object(walk_steps).to_string()));
     let walks_at = packed.len() - 1;
+    // Moving a part by hand: each picture's layout input and layout, then docair's router as WebAssembly.
+    let moves_at = packed.len();
+    packed.extend(drawn.moves);
+    // A picture of a change is not moved by hand: it has no layout of its own to move in.
+    for _ in view.iter().flat_map(|v| &v.pictures) {
+        packed.push(pack("{}"));
+    }
+    packed.push(base64::engine::general_purpose::STANDARD.encode(
+        miniz_oxide::deflate::compress_to_vec(docair_layout_wasm::MODULE, PACK_LEVEL),
+    ));
+    let router_at = packed.len() - 1;
     let (walk_bar, tours) = page_walks::walk_list(graph, &walk_list);
     let infos = layers(graph);
     let mut pictures = Map::new();
@@ -454,6 +519,15 @@ pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
         if let Some(k) = s.layer {
             p["layer"] = json!(key_name(k));
         }
+        // Where a part picked by its address went, in words (docair-702.15): in orders-api · Apps.
+        let layer_name = s
+            .layer
+            .and_then(|k| infos.iter().find(|l| l.key == k))
+            .map(|l| l.name);
+        p["where"] = json!(match (s.addr.starts_with("box/"), layer_name) {
+            (true, Some(layer)) => format!("in {} · {layer}", s.title),
+            _ => format!("in {}", s.title),
+        });
         if let Some(d) = &s.datum {
             p["datum"] = json!(d);
         }
@@ -475,6 +549,23 @@ pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
         }
         pictures.insert(s.addr.clone(), p);
     }
+    // Each changed flow's picture: still (nothing in it is moved by hand), with its details.
+    for (k, c) in view.iter().flat_map(|v| &v.pictures).enumerate() {
+        let mut p = json!({
+            "title": c.title,
+            "crumbs": c.crumbs.iter().map(|(l, a)| json!([l, a])).collect::<Vec<_>>(),
+            "where": format!("in {}", c.title),
+            "svg": changes_at + k,
+            "still": true,
+        });
+        if let Some(seed) = &c.change {
+            p["change"] = json!(seed);
+        }
+        if c.walk.is_some() {
+            p["walk"] = json!(true);
+        }
+        pictures.insert(c.addr.clone(), p);
+    }
     let first = ["layer/apps"]
         .into_iter()
         .map(str::to_string)
@@ -489,13 +580,18 @@ pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
     let index = json!({
         "system": graph.system,
         "tests": graph.view.tests,
+        // What the page starts with hidden ([view] in docair.toml); the pictures hold everything.
+        "view": { "hide": graph.view.hide, "show": graph.view.show },
         "first": first,
         "pictures": pictures,
         "home": homes(graph, &all),
         "panels": panels_at,
         "walks": walks_at,
+        // The packed picture i moves with packed[moves + i]; the router is packed[router].
+        "moves": moves_at,
+        "router": router_at,
         // The words the script puts around what the CLI wrote.
-        "words": { "more": "… {n} more" },
+        "words": { "more": "… {n} more", "ask": "✦ Ask about this" },
     });
     let links: String = infos
         .iter()
@@ -538,6 +634,7 @@ pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
             ("layers", &links),
             ("tests", &tests),
             ("buttons", &panels.buttons),
+            ("changes", view.as_ref().map_or("", |v| v.button.as_str())),
             ("ask", crate::page_ai::BUTTON),
             ("chat", &crate::page_ai::panel()),
             ("walks", &walk_bar),
@@ -548,6 +645,8 @@ pub fn render_page_keeping(graph: &Graph, keep: Option<&Path>) -> String {
             ("diag-class", &panels.diag.0),
             ("diag", &escape_text(&panels.diag.1)),
             ("diag-title", &escape_text(&panels.diag.2)),
+            ("tidy", &panels.tidy.0),
+            ("tidy-banner", &panels.tidy.1),
             ("index", &script_json(&index.to_string())),
             ("packed", &script_json(&Value::from(packed).to_string())),
             ("app", &script_js(SCRIPT)),

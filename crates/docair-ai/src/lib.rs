@@ -6,6 +6,14 @@
 pub mod ask;
 pub mod client;
 pub mod config;
+/***
+ * The AI explains what two commits change: links, explanations and workflows, bound against both graphs (docs/EXPLAIN.md).
+ ***/
+pub mod explain;
+/***
+ * What a question points at: parts, lines, data and terms the reader picked, turned into words for the model.
+ ***/
+pub mod ask_context;
 pub mod glossary;
 pub mod word;
 

@@ -497,7 +497,9 @@ pub(crate) fn glossary(graph: &Graph, linker: &Linker) -> Glossary {
         );
         // The entry in full.
         let mut e = format!(
-            r#"<div class="gl-nav"><a class="link" data-glossary>← Glossary</a><a class="link" data-back hidden> · back</a></div><h2 data-test="term-title"><span class="glyph">¶</span>{}</h2>"#,
+            r#"<div class="gl-nav"><a class="link" data-glossary>← Glossary</a><a class="link" data-back hidden> · back</a></div><h2 data-test="term-title"><span class="glyph">¶</span>{}</h2><a class="link ask-about" data-ref="term:{}" data-label="{}" data-test="ask-about">✦ Ask about this</a>"#,
+            escape_text(&t.term),
+            escape_text(&t.term),
             escape_text(&t.term)
         );
         if !t.aliases.is_empty() {
@@ -691,7 +693,9 @@ pub(crate) fn glossary(graph: &Graph, linker: &Linker) -> Glossary {
             }
         );
         let mut page = format!(
-            r#"<div class="gl-nav"><a class="link" data-data-list>← Data</a></div><h2 data-test="data-title"><span class="glyph">◇</span>{} <span class="badge">data</span></h2>"#,
+            r#"<div class="gl-nav"><a class="link" data-data-list>← Data</a></div><h2 data-test="data-title"><span class="glyph">◇</span>{} <span class="badge">data</span></h2><a class="link ask-about" data-ref="data:{}" data-label="{}" data-test="ask-about">✦ Ask about this</a>"#,
+            escape_text(&d.name),
+            escape_text(&d.id),
             escape_text(&d.name)
         );
         if !d.summary.is_empty() {

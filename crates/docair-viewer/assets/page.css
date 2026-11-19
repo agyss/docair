@@ -41,3 +41,42 @@ a.seg { color: inherit; text-decoration: none; display: inline-block; }
 #flow .tour-chip.on { border-color: var(--flow); background: var(--flow-soft); font-weight: 600; }
 #details .tour { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
 #details a.chip { text-decoration: none; color: inherit; }
+/* A selected line (docair-nts): it stands out, and its details list the lines it stands for. */
+#pic .line.sel { --ec: var(--accent); }
+#pic .line.sel > .ln { stroke-width: 3; }
+#pic .line, #pic .words { cursor: pointer; }
+#details .line-head { font-size: 15px; }
+#details .line-edges .tip-edge { margin: 8px 0; padding-top: 6px; border-top: 1px solid var(--line); }
+#details .line-edges .where, #details .line-edges .mono { color: var(--muted); font-size: 12px; }
+/* The legend draws each kind and line as the pictures do (docair-pqw). */
+#legend { max-height: 62vh; overflow: auto; }
+#legend .grid { grid-template-columns: 38px 1fr; }
+#legend svg.docair-pic { display: block; }
+#legend .row { display: contents; }
+#legend .row[hidden] { display: none; }
+#legend summary { cursor: pointer; color: var(--muted); margin-top: 6px; }
+#legend summary h4 { display: inline; }
+/* An open chat takes its own room beside the details, so a reader can keep pointing at parts to ask about (docair-5n2). */
+@media (min-width: 1100px) { body:has(#chat:not([hidden])) #app { margin-right: min(400px, 100vw); } body #chat { top: 0; } }
+/* Tidy (docs/ADAPTERS.md §6.1): the button in the accent colour while tags repeat, the banner under the header, the panel's list. */
+#btn-tidy.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+#tidy-banner { grid-area: banner; display: flex; gap: 8px; align-items: center; justify-content: center; padding: 5px 12px; background: var(--panel-2); border-bottom: 1px solid var(--accent); font-size: 12.5px; }
+#tidy-banner[hidden] { display: none; }
+#details .tidy-block { margin: 6px 0 10px; }
+#details .tidy-tag { display: block; margin-top: 4px; }
+#details .tidy-code { margin-left: 22px; font-size: 12px; }
+#details .tidy-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+#details .diff { max-height: 40vh; overflow: auto; font-size: 11.5px; background: var(--panel-2); padding: 8px; border-radius: 6px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.badge.tidy { color: var(--accent); }
+/* What needs docair serve shows once a server answers. */
+body[data-served="true"] [data-served][hidden] { display: inline-block; }
+/* Changes (docs/CHANGES.md §7): a flow before and after, side by side; what it gained green, what it lost red and dashed. */
+.docair-pic .side-title { font-size: 18px; font-weight: 650; fill: var(--text); }
+.docair-pic .side-missing rect { fill: none; stroke: var(--muted); stroke-dasharray: 6 4; }
+.docair-pic .side-missing text { fill: var(--muted); font-size: 14px; text-anchor: middle; dominant-baseline: middle; }
+.docair-pic .ch-added > .sh, .docair-pic .ch-added > .ln { stroke: #1a7f37; stroke-width: 3; }
+.docair-pic .ch-removed > .sh, .docair-pic .ch-removed > .ln { stroke: #cf222e; stroke-width: 3; stroke-dasharray: 6 4; }
+#details .changes-list li { margin: 6px 0; }
+.badge.ch-new { color: #1a7f37; }
+.badge.ch-gone { color: #cf222e; }

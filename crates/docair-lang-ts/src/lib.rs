@@ -114,8 +114,90 @@ impl Adapter for TsAdapter {
             .filter(|f| f.lang.name == "html")
             .map(|f| (f.rel.clone(), f.text.clone()))
             .collect();
-        link(read, &html)
+        let mut diags = Vec::new();
+        let index = ts_index(project, &mut diags);
+        let mut facts = link_with_index(read, &html, index.as_ref());
+        facts.diagnostics.extend(diags);
+        facts
     }
+}
+
+/***
+ * The code index of the project's TypeScript: with `[code] run_indexers`, what scip-typescript writes for each folder with a `tsconfig.json` that has it installed (`node_modules/.bin`), kept until the sources change. Paths are made the project's.
+ *
+ * @calls docair-scip.kept_ts_index "runs scip-typescript, or takes the kept index"
+ ***/
+fn ts_index(
+    project: &Project,
+    diags: &mut Vec<docair_core::model::Diagnostic>,
+) -> Option<docair_scip::Index> {
+    let code = project.config.code.as_ref()?;
+    if !code.run_indexers {
+        return None;
+    }
+    let first = project.files.first()?;
+    let root = first.path.ancestors().nth(first.rel.split('/').count())?;
+    let mut all: Option<docair_scip::Index> = None;
+    // The folders with a tsconfig.json above the TypeScript files (it is not a file docair reads).
+    let mut dirs: Vec<String> = Vec::new();
+    for f in project.files.iter().filter(|f| f.lang.name == "typescript") {
+        let mut d = f.rel.as_str();
+        while let Some((up, _)) = d.rsplit_once('/') {
+            if root.join(up).join("tsconfig.json").is_file() {
+                if !dirs.iter().any(|x| x == up) {
+                    dirs.push(up.to_string());
+                }
+                break;
+            }
+            d = up;
+        }
+    }
+    for rel_dir in &dirs {
+        let rel_dir = rel_dir.as_str();
+        let dir = root.join(rel_dir);
+        if docair_scip::scip_typescript_in(&dir).is_none() {
+            continue;
+        }
+        let cfg_rel = format!("{rel_dir}/tsconfig.json");
+        let under = |rel: &str| rel_dir.is_empty() || rel.starts_with(&format!("{rel_dir}/"));
+        let sources: Vec<(&str, &str)> = project
+            .files
+            .iter()
+            .filter(|f| under(&f.rel))
+            .filter(|f| {
+                [".ts", ".tsx", ".js", ".mjs", ".json"]
+                    .iter()
+                    .any(|e| f.rel.ends_with(e))
+            })
+            .map(|f| (f.rel.as_str(), f.text.as_str()))
+            .collect();
+        match docair_scip::kept_ts_index(&dir, &sources, &docair_scip::cache_dir()) {
+            Ok(path) => match docair_scip::Index::read(&path) {
+                Ok(i) => {
+                    let i = i.under(rel_dir);
+                    match all.as_mut() {
+                        Some(a) => a.extend(i),
+                        None => all = Some(i),
+                    }
+                }
+                Err(e) => diags.push(
+                    docair_core::model::Diagnostic::new(
+                        "W113",
+                        format!("cannot read the code index: {e}"),
+                    )
+                    .at(&cfg_rel, 1),
+                ),
+            },
+            Err(e) => diags.push(
+                docair_core::model::Diagnostic::new(
+                    "W119",
+                    format!("no TypeScript code index for the calls: {e}"),
+                )
+                .at(&cfg_rel, 1),
+            ),
+        }
+    }
+    all
 }
 
 /// Where a declaration's code is, so that what a rule finds can be put on it.
@@ -204,6 +286,8 @@ pub struct FileRead {
     posts: Vec<PostedMessage>,
     listens: Vec<MessageHandler>,
     named: Vec<NamedCall>,
+    /// `x.m(…)` on a value of no known type: (line, method, code) (docs/ADAPTERS.md §5.5).
+    could: Vec<(usize, String, String)>,
 }
 
 struct Reader<'a> {
@@ -221,6 +305,7 @@ struct Reader<'a> {
     posts: Vec<PostedMessage>,
     listens: Vec<MessageHandler>,
     named: Vec<NamedCall>,
+    could: Vec<(usize, String, String)>,
 }
 
 /// The facts of one file on its own (tests, fixtures): calls across files need [`link`] over all of them.
@@ -255,6 +340,7 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             posts: Vec::new(),
             listens: Vec::new(),
             named: Vec::new(),
+            could: Vec::new(),
         };
     };
     // The project's root: the package of a file is never looked for above it.
@@ -280,6 +366,7 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
         posts: Vec::new(),
         listens: Vec::new(),
         named: Vec::new(),
+        could: Vec::new(),
     };
     // The file is a module: its undocumented declarations sit in it. When
     // nothing ends up in it, the build leaves it out.
@@ -308,6 +395,7 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
         posts: r.posts,
         listens: r.listens,
         named: r.named,
+        could: r.could,
     }
 }
 
@@ -387,6 +475,7 @@ impl Reader<'_> {
                 .then(|| ts_signature(self.line_text(line)))
                 .flatten(),
             docs: docs_of(anchor, self.src),
+            end: Some(node.end_position().row + 1),
             ..Symbol::at(key, &self.file.rel, line)
         });
         line
@@ -649,6 +738,7 @@ impl Reader<'_> {
             name: Some(name),
             kind: Some(Inferred::new("function", "tree-sitter: call_expression")),
             parents: self.up(),
+            end: Some(stmt.end_position().row + 1),
             ..Symbol::at(key, &self.file.rel, line)
         });
     }
@@ -676,6 +766,7 @@ impl Reader<'_> {
             name: Some(title),
             kind: Some(Inferred::new("test", "test call")),
             docs: docs_of(stmt, self.src),
+            end: Some(stmt.end_position().row + 1),
             ..Symbol::at(key, &self.file.rel, line)
         });
         // The tests inside a group's callback.
@@ -724,6 +815,19 @@ impl Reader<'_> {
                     method,
                     self.text(f).to_string(),
                 );
+                continue;
+            }
+            // `x.m(…)` on anything but `this`: which class `x` is, the syntax doesn't say.
+            if f.kind() == "member_expression"
+                && f.child_by_field_name("object")
+                    .is_some_and(|o| o.kind() != "this")
+                && let Some(p) = f.child_by_field_name("property")
+            {
+                self.could.push((
+                    n.start_position().row + 1,
+                    self.text(p).to_string(),
+                    self.text(f).to_string(),
+                ));
                 continue;
             }
             let (name, on_this) = match f.kind() {
@@ -1089,7 +1193,195 @@ impl Reader<'_> {
  * or function of that name in the project. A line through messages reaches
  * one of several parts when listeners in several files take that type.
  ***/
+/// More candidates than this for a call by name: no could lines.
+const MAX_CANDIDATES: usize = 5;
+
+/// Method names the platform's own objects have (arrays, strings, maps, promises, the DOM,
+/// observables, the console): a call by such a name is far more often theirs.
+const JS_STD_METHODS: &[&str] = &[
+    "add",
+    "addEventListener",
+    "all",
+    "append",
+    "appendChild",
+    "apply",
+    "assign",
+    "at",
+    "bind",
+    "call",
+    "catch",
+    "clear",
+    "click",
+    "close",
+    "closest",
+    "complete",
+    "concat",
+    "contains",
+    "debug",
+    "delete",
+    "dispatchEvent",
+    "emit",
+    "endsWith",
+    "entries",
+    "error",
+    "every",
+    "exec",
+    "fill",
+    "filter",
+    "finally",
+    "find",
+    "findIndex",
+    "flat",
+    "flatMap",
+    "focus",
+    "forEach",
+    "freeze",
+    "from",
+    "get",
+    "getAttribute",
+    "getBoundingClientRect",
+    "getElementById",
+    "has",
+    "includes",
+    "indexOf",
+    "info",
+    "join",
+    "json",
+    "keys",
+    "log",
+    "map",
+    "match",
+    "matches",
+    "max",
+    "min",
+    "next",
+    "now",
+    "open",
+    "padStart",
+    "parse",
+    "pipe",
+    "pop",
+    "postMessage",
+    "preventDefault",
+    "push",
+    "querySelector",
+    "querySelectorAll",
+    "race",
+    "reduce",
+    "reject",
+    "remove",
+    "removeEventListener",
+    "replace",
+    "resolve",
+    "reverse",
+    "round",
+    "scrollIntoView",
+    "send",
+    "set",
+    "setAttribute",
+    "shift",
+    "slice",
+    "some",
+    "sort",
+    "splice",
+    "split",
+    "startsWith",
+    "stopPropagation",
+    "stringify",
+    "subscribe",
+    "test",
+    "text",
+    "then",
+    "toFixed",
+    "toggle",
+    "toLowerCase",
+    "toString",
+    "toUpperCase",
+    "trim",
+    "unshift",
+    "update",
+    "values",
+    "warn",
+    "write",
+];
+
 pub fn link(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
+    link_with_index(files, html, None)
+}
+
+/***
+ * As `link`, and with a code index the calls it knows: from the function or method a reference is in to the one its symbol is defined as, certain.
+ ***/
+pub fn link_with_index(
+    files: Vec<FileRead>,
+    html: &HashMap<String, String>,
+    index: Option<&docair_scip::Index>,
+) -> Facts {
+    let mut extra: Vec<Relation> = Vec::new();
+    if let Some(index) = index {
+        let site_at: HashMap<(&str, usize), &str> = files
+            .iter()
+            .flat_map(|f| {
+                f.sites
+                    .iter()
+                    .filter(|s| s.callable)
+                    .map(move |s| ((f.rel.as_str(), s.start), s.key.as_str()))
+            })
+            .collect();
+        let mut seen = HashSet::new();
+        for f in files.iter().filter(|f| index.covers(&f.rel)) {
+            for r in index.calls(&f.rel) {
+                let Some(caller) = f
+                    .sites
+                    .iter()
+                    .filter(|s| s.start <= r.line && r.line <= s.end)
+                    .min_by_key(|s| s.end - s.start)
+                else {
+                    continue;
+                };
+                let Some(to) = index
+                    .definition(&r.symbol)
+                    .and_then(|(path, line)| site_at.get(&(path, line)))
+                else {
+                    continue;
+                };
+                if *to == caller.key || !seen.insert((caller.key.clone(), to.to_string())) {
+                    continue;
+                }
+                extra.push(Relation {
+                    from: caller.key.clone(),
+                    ..Relation::new(
+                        Verb::Calls,
+                        Target::Symbol(to.to_string()),
+                        Evidence::new(
+                            r.line,
+                            format!("scip-typescript: {}", docair_scip::short(&r.symbol)),
+                        ),
+                    )
+                });
+            }
+        }
+    }
+    let mut out = link_inner(files, html);
+    // The index's calls first: a call the syntax also found is the same line.
+    let known: HashSet<(String, String)> = out
+        .relations
+        .iter()
+        .filter(|r| r.verb == Verb::Calls)
+        .filter_map(|r| match &r.to {
+            Target::Symbol(t) => Some((r.from.clone(), t.clone())),
+            _ => None,
+        })
+        .collect();
+    out.relations
+        .extend(extra.into_iter().filter(|r| match &r.to {
+            Target::Symbol(t) => !known.contains(&(r.from.clone(), t.clone())),
+            _ => true,
+        }));
+    out
+}
+
+fn link_inner(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
     let mut out = Facts::default();
     let rels: HashMap<&str, usize> = files
         .iter()
@@ -1258,6 +1550,44 @@ pub fn link(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
                 );
                 let reach = several.then_some(Reach::OneOf);
                 line(&p.by, &l.handler, Evidence::new(p.line, why), reach);
+            }
+        }
+    }
+    // Could lines: `x.m(…)` could reach each class method of that name, unless the platform has it too.
+    let mut methods: HashMap<&str, Vec<&Site>> = HashMap::new();
+    for f in &files {
+        for site in f.sites.iter().filter(|s| s.callable && s.class.is_some()) {
+            methods.entry(site.name.as_str()).or_default().push(site);
+        }
+    }
+    for f in &files {
+        for (at, m, text) in &f.could {
+            if JS_STD_METHODS.contains(&m.as_str()) {
+                continue;
+            }
+            let Some(caller) = f
+                .sites
+                .iter()
+                .filter(|s| s.start <= *at && *at <= s.end)
+                .min_by_key(|s| s.end - s.start)
+            else {
+                continue;
+            };
+            let to: Vec<&&Site> = methods
+                .get(m.as_str())
+                .into_iter()
+                .flatten()
+                .filter(|s| s.key != caller.key)
+                .collect();
+            if (1..=MAX_CANDIDATES).contains(&to.len()) {
+                for site in to {
+                    line(
+                        &caller.key,
+                        &site.key,
+                        Evidence::new(*at, format!("tree-sitter: {text}(…), by its name")),
+                        Some(Reach::Could),
+                    );
+                }
             }
         }
     }
@@ -1788,6 +2118,38 @@ mod tests {
         assert_eq!(on_disk, built_in);
         assert_eq!(rules(false).ids().count(), RULES.len());
         assert_eq!(rules(true).ids().count(), RULES.len());
+    }
+
+    /// `x.m(…)` of unknown type could reach each class method of that name; platform names give nothing (docair-4wk.31).
+    #[test]
+    fn a_method_of_unknown_type_could_be_each_of_that_name() {
+        let text = "export class Orders {\n  save(o: object) {}\n}\nexport class Carts {\n  save(c: object) {}\n}\nexport function run(x: any) {\n  x.save({});\n  x.map((y: any) => y);\n}\n";
+        let facts = facts_with(&source("src/app/run.ts", text), rules(false));
+        let names: HashMap<String, String> = facts
+            .symbols
+            .iter()
+            .map(|s| (s.key.clone(), s.id.clone().unwrap_or_default()))
+            .collect();
+        let could: Vec<String> = facts
+            .relations
+            .iter()
+            .filter(|r| r.reach == Reach::Could)
+            .map(|r| match &r.to {
+                Target::Symbol(k) => format!(
+                    "{} -> {}",
+                    names[&r.from],
+                    names.get(k).cloned().unwrap_or_default()
+                ),
+                t => format!("{t:?}"),
+            })
+            .collect();
+        assert_eq!(could.len(), 2, "{could:?}");
+        assert!(
+            could
+                .iter()
+                .all(|c| c.contains("run ->") && c.ends_with(".save")),
+            "{could:?}"
+        );
     }
 
     /// What a block documents, and what is drawn without one.

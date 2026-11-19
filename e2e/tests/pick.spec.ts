@@ -55,7 +55,7 @@ test.describe('pick a part', () => {
    *
    * @part-of e2e.pick
    * @covers  docair-viewer.doc-page.move "checks a click in the picture selects without moving the camera"
-   * @covers  docair-viewer.page_panels.look.details "checks the details of the part clicked"
+   * @covers  docair-viewer.page_panels.panel-graph.details "checks the details of the part clicked"
    ***/
   test('a part clicked on the canvas is selected where it is', async ({ page }) => {
     await openStatic(page, 'shop', '#layer/code');

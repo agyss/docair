@@ -93,13 +93,13 @@ to the topics.
 3. **Words and pruning** (after resolve). A call that reaches a described
    route through `http:` and says nothing of what it sends takes the
    description's request and answer; a line to or from a topic takes its
-   message. Such an edge carries `from_api` (the file), and the page says
+   message. Such an edge carries `evidence` (`source: api` and the file), and the page says
    "· from api/openapi.yaml". Inside an `external` part, endpoints nothing
    calls are dropped, so a vendored description with hundreds of operations
    adds only the ones the code uses.
 
 No new node fields: what a description says lives in tags, docs and
-`Edge.from_api`, which the viewer already shows.
+`Edge.evidence` (it replaced `from_api` and `from_code`, docair-4wk.11), which the viewer shows.
 
 ## 4. Warnings
 

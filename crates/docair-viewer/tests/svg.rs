@@ -42,6 +42,17 @@ fn golden(file: &str, actual: &str) {
     }
 }
 
+/// A colour written out, `#rgb` or `#rrggbb` (with or without alpha). The `#` of `&#10;` between
+/// a line's ids, or of a twin line's `#2`, is none.
+fn has_hex_colour(svg: &str) -> bool {
+    svg.match_indices('#').any(|(at, _)| {
+        let rest = &svg[at + 1..];
+        let digits = rest.chars().take_while(char::is_ascii_hexdigit).count();
+        matches!(digits, 3 | 4 | 6 | 8)
+            && !rest[digits..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
 /// Every element closes, in order: the drawing is well-formed XML.
 fn assert_well_formed(svg: &str) {
     let mut open: Vec<&str> = Vec::new();
@@ -84,7 +95,7 @@ fn check(g: &Graph, p: &LayerPicture, file: &str) {
     let lines = drawn.matches(r#"<g class="line "#).count();
     assert_eq!(lines, p.lines.len(), "{file} draws every line");
     assert!(
-        !drawn.contains('#'),
+        !has_hex_colour(&drawn),
         "{file} takes its colours from classes"
     );
     golden(file, &drawn);
@@ -163,4 +174,39 @@ fn a_picture_of_its_own_has_its_colours() {
     );
     assert!(file.contains(".docair-pic .sh"), "the pictures' stylesheet");
     assert!(file.contains(r#"<rect class="bg""#), "a background");
+}
+
+/// A line that stands for one test says what the test checks; one without words says "1 test" (docair-702.14).
+#[test]
+fn a_line_for_one_test_shows_its_words() {
+    let dir = std::env::temp_dir().join(format!("docair-one-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("README.md"),
+        "# Shop\n\n```docair\nThe cart.\n\n@id      cart\n@kind    component\n```\n\n```docair\nThe shop's front end.\n\n@id      front\n@kind    component\n```\n\n```docair\nBuying works.\n\n@id      buy\n@kind    test\n@covers  cart \"checks the cart\"\n```\n\n```docair\nThe front end works.\n\n@id      opens\n@kind    test\n@covers  front\n```\n",
+    )
+    .unwrap();
+    let g = scan(&dir, docair_adapters::all(), &Options::default()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut drawn = String::new();
+    for l in layers(&g) {
+        if let Some(p) = picture(&g, l.key, &[], Some(true)) {
+            drawn.push_str(&svg::draw(&g, &p, &layout_input::lay_out(&g, &p)));
+        }
+    }
+    assert!(
+        drawn.contains("checks the cart"),
+        "a line for one test with words shows them: {drawn}"
+    );
+    assert!(drawn.contains(">1 test<"), "one without words says 1 test");
+}
+
+/// The check for colours written out finds a colour and passes a line's ids.
+#[test]
+fn a_colour_written_out_is_found_and_a_lines_ids_are_not() {
+    assert!(has_hex_colour(r##"<rect fill="#fff"/>"##));
+    assert!(has_hex_colour(r##"<rect style="stroke:#1a2b3c"/>"##));
+    assert!(!has_hex_colour(
+        r#"<g data-edges="a -call-> b&#10;a -call-> b #2"/>"#
+    ));
 }

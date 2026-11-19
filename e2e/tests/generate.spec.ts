@@ -4,6 +4,36 @@ import os from 'node:os';
 import path from 'node:path';
 import { fixture, generate } from './helpers';
 
+/** Clicks on links inside the framed page, which must move inside the page, not away from it. */
+async function framedLinksStay(page: import('@playwright/test').Page, how: 'src' | 'srcdoc') {
+    if (how === 'srcdoc') {
+      // A server that keeps no upload: the frame gets the page as a srcdoc.
+      await page.route('**/api/scan', async (route) => {
+        const res = await route.fetch();
+        const body = await res.json();
+        delete body.page;
+        await route.fulfill({ response: res, json: body });
+      });
+    }
+    await generate(page, fixture('shop'));
+    const f = page.frameLocator('[data-test="page"]');
+    const frame = () => page.frames().find((x) => x !== page.mainFrame())!;
+    await frame().evaluate(() => (location.hash = '#part/shop-ui.cart'));
+    await expect(f.locator('#details .meta')).toContainText('shop-ui.cart');
+    // A plain link to a part in the details.
+    await f.locator('#details a.link[title="orders.create"]').first().click();
+    await expect(f.locator('#details .meta')).toContainText('orders.create');
+    await expect(f.locator('body[data-ready="true"]')).toBeAttached();
+    await expect(f.locator('#pic svg.docair-pic')).toBeAttached();
+    // A code span that names a part, in a glossary popup's entry.
+    await frame().evaluate(() => (location.hash = '#part/shop-ui.cart'));
+    await f.locator('#details .term[data-term="order"]').click();
+    await f.locator('#details code.node-ref', { hasText: 'orders.create' }).click();
+    await expect(f.locator('#details h2')).toContainText('create_order');
+    await expect(page.getByTestId('result')).toBeVisible();
+    expect(await page.locator('app-upload-panel').count()).toBe(0);
+}
+
 /***
  * Generate the docs: a project folder goes into the web app, a docair page comes out.
  *
@@ -113,4 +143,26 @@ test.describe('generate the docs', () => {
     await expect(page.locator('app-upload-panel')).toBeVisible();
     await expect(page.getByTestId('result')).toHaveCount(0);
   });
+
+  /***
+   * A link clicked inside the framed page moves inside the page: a part's link in the details, a code span naming a part, with the page loaded by its address (docair-sra).
+   *
+   * @part-of e2e.generate
+   * @covers  docair-web.result-view "checks clicks inside the frame stay in the page"
+   * @covers  docair-viewer.doc-page.move "checks fragment links in a framed page"
+   ***/
+  test('a click on a link in the framed page stays in the page (src)', async ({ page }) => {
+    await framedLinksStay(page, 'src');
+  });
+
+  /***
+   * The same with the page given to the frame as a srcdoc, as a server that keeps no upload does.
+   *
+   * @part-of e2e.generate
+   * @covers  docair-web.result-view "checks clicks inside a srcdoc frame stay in the page"
+   ***/
+  test('a click on a link in the framed page stays in the page (srcdoc)', async ({ page }) => {
+    await framedLinksStay(page, 'srcdoc');
+  });
+
 });

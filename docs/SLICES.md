@@ -145,6 +145,11 @@ box's parts, knowing on which side each line leaves; then docair's own router
   prices.
 * **The same input, the same picture.** No clock, no chance, no time limit
   that changes a result. Golden tests and docair-zrr depend on it.
+* **A slice keeps its words' size** (docair-702.27). A layer or a section
+  shrinks what each box holds to a budget (top-down); a slice is laid out
+  without one (`layout_input::options_for`), so the picture grows, the reader
+  pans, and Follow's first step reads at 8.8 px or more. On docair's own
+  data.graph the smallest word went from 3.2 to 11 units.
 * **Kept layouts.** The CLI keeps each picture's layout under a key made of
   what the layout reads and of the layout code's version. docs/REGENERATE.md
   §2 measured why: a key that holds more (a part's name, a test result, a
@@ -218,8 +223,23 @@ moves them says why, `DOCAIR_BLESS=1` rewrites them.
 | step through a walk: classes, camera, tokens | lay out anything |
 | unpack a picture before it is shown | |
 | send questions to `docair serve` and show the answer | |
+| move a part the reader drags, and draw the lines docair-layout routed again for it | |
 
 Its budget is 1,000 lines, checked by a test.
+
+**Moving a part by hand** (docair-9qv). The page carries docair-layout's move
+of a part built to WebAssembly (`crates/docair-layout-wasm`, about 90 kB
+gzipped, kept built in the repository with the code version it was built
+from, so no build needs a wasm32 target). While the reader holds a part,
+each time it has moved a whole track (8 px), and when they drop it, the
+script hands the module the picture's layout input, its layout and how far
+the part moved; the module shifts the part and what it holds, grows the boxes
+around it, routes the lines that touch it again around every part, places
+their words, and answers with each line ready to draw (`d` and the arrow, as
+the SVG writes them). While held, the lines follow and the words wait; on
+the drop they take their place. The router is the one `docair build` lays
+out with; the script only sets attributes. A move lasts until the page is
+loaded again.
 
 ## 8. The AI in the HTML: `docair serve`
 
@@ -284,6 +304,24 @@ and serves it at `/api/projects/<id>/` with the routes above, open to any
 origin for the sandboxed frame. The frame shows the page by that address, so
 an applied edit reloads it from the server. (First decided otherwise,
 docair-702.10; the user asked for the AI in uploads the same day.)
+
+**More than one server pod** (docair-702.32). An upload is kept in the pod
+that took it, so each pod forwards a request for an upload it does not keep
+to the pod that does:
+
+| Piece | How |
+|-------|-----|
+| the id | `<pod>-<random>`: the pod's address in hex (its IP from the downward API, `DOCAIR_POD_IP`, and the port of `DOCAIR_PEERS`, which every pod listens on), then 32 random hex digits. Without those two settings (one pod, `docair serve`), the id is the random part alone, as before |
+| forwarding | a request for `/api/projects/<id>/…` the pod does not keep goes to the pod in the id: same method, path, query, body, `content-type` and `accept`; its answer comes back as it is, with CORS added |
+| only to server pods | the pod forwards only to an address that `DOCAIR_PEERS` (a headless Service, `docair-server-peers:8080`) resolves to, so a made-up id cannot send the server anywhere else |
+| no loops | a forwarded request carries `x-docair-forwarded: 1` and is never forwarded again |
+| a pod that is gone | its uploads are gone too: the answer is the 404 *no longer kept*, a page or JSON as before |
+| the cluster | the chart sets `DOCAIR_POD_IP` in the Deployment and `DOCAIR_PEERS` in the ConfigMap, adds the headless Service, and the NetworkPolicy lets server pods reach each other on 8080; `server.replicas` is 2 again |
+
+Shared storage instead (a volume both pods write) would need a
+ReadWriteMany provisioner, which kind does not have, and every pod would
+still scan the upload into its own memory. Routing by the id in front of the
+pods cannot work: the id is made by whichever pod took the upload.
 
 ## 9. Each feature, and what happens to it
 
@@ -367,11 +405,11 @@ behaviour changes; 7 go, because what they test goes.
 | levels | a layer without any part of the walk is off while it plays | goes | a walk is its own picture, not played on a layer |
 | levels | the legend shows from the start | stays | the legend the CLI wrote |
 | levels | the details before anything is selected | stays | the same |
-| levels | lines follow a part that is moved | goes | parts are not moved by hand |
+| levels | lines follow a part that is moved | comes back | docair's router, built to WebAssembly, routes the lines of a part dragged in the page; they end on its border at right angles and cross no part (docair-9qv, §7) |
 | levels | every line is drawn at right angles and ends on its part | stays | the SVG's line paths: right angles, ends on a part's border (also a Rust test) |
 | levels | a walk's lines point ahead | changes | a walk's slice is laid out with its lines pointing ahead: the CLI gives the layout that hint (viewer.js `flowHints`, walked lines; not yet in layout_input) |
 | levels | top-down draws its own lines, off the parts and off each other | stays | the SVG's lines cross no part (also measured in Rust) |
-| levels | top-down routes the lines again after a part is moved | goes | parts are not moved by hand |
+| levels | top-down routes the lines again after a part is moved | goes | lines follow a part that is moved checks the lines routed again |
 | meanings | a word the code defines explains itself and names its part | stays | the popup |
 | meanings | an unchecked glossary entry gives way to the code | stays | the popup |
 | meanings | docair glossary settles the open words once | stays | unchanged: it tests the CLI |
@@ -407,7 +445,7 @@ Proposed; nothing is closed or changed before the user agrees.
 | docair-4wk.12, lines that reach one of several parts | part of step 4 |
 | docair-54p, the data kind's colours | part of step 4 |
 | docair-4wk.15, walks use request lines | part of step 1 |
-| docair-mpx, the code as a dependency matrix | a picture the CLI could draw too; decided on its own |
+| docair-mpx, the code as a dependency matrix | dropped: not needed |
 | BUNDLES.md | one line for the many lines between two boxes carries over to the Rust router and drawing (steps 3 and 4) for big sections, such as docair-core's; decided there by the numbers. Its alternative, routing in parallel in browser workers, is gone |
 
 ## 12. Steps

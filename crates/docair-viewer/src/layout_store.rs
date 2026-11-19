@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::Result;
 use docair_core::layer_view::LayerPicture;
 use docair_core::model::Graph;
-use docair_layout::{Layout, Monospace, Options};
+use docair_layout::{Layout, Monospace};
 
 /***
  * Lay out a picture, or take its layout from `dir` when one is kept there under the same key; a new layout is kept.
@@ -28,7 +28,7 @@ pub fn lay_out_kept_with(
 ) -> Result<(Layout, bool)> {
     let font = Monospace::default();
     let input = crate::layout_input::input_with(graph, pic, &font, ahead);
-    let options = Options::default();
+    let options = crate::layout_input::options_for(pic);
     let path = dir.join(format!("{}.json", docair_layout::key(&input, &options)));
     if let Ok(text) = std::fs::read_to_string(&path)
         && let Ok(laid) = serde_json::from_str::<Layout>(&text)

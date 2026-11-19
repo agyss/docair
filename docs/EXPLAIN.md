@@ -1,9 +1,9 @@
 # Explaining changes: the AI links and explains
 
-Design for the epic docair-8l6. **Draft:** written before the slices
-(docs/SLICES.md, docair-702) were built. Once they are done, this doc and the
-epic's steps are discussed again and updated (docair-zrr.1) before any step
-starts.
+Design for the epic docair-8l6. Written before the slices (docs/SLICES.md,
+docair-702) were built, and updated once they were (docair-zrr.1,
+2026-11-19): the questions of §7 are decided (decision issues under
+docair-8l6).
 
 ## 1. The problem
 
@@ -61,6 +61,25 @@ what happens to them:
 It reuses the docair-ai crate, the model configuration (`[ai]`, the key only
 in `.env`) and the fake AI for tests. A run has a cost limit.
 
+**Built** (docair-8l6.1 to 8l6.5, 8l6.7): `docair_ai::explain`
+(`digest`, `bind`, `explain`, `comment`) and `docair explain <A> [<B>]`
+(`crates/docair-cli/src/diff.rs`). The model gets each changed flow's seed,
+how it changed, its changed, added and removed parts in a few words, and its
+lines added and removed; the first request also the parts removed at A and
+added at B, to link. Its answer is bound: a link only from a part removed at
+A to one added at B, an explanation only of a changed flow and naming only
+ids of A or B, a workflow step only with parts of A (before) or B (after).
+The findings go to `docs/changes/<A>..<B>.json` (`docair.explained/0`, short
+commit ids, `work` for the working tree); a flow already there, a human's
+correction above all, is not asked about again. The fake AI answers
+explain requests; e2e `cli.spec.ts` runs it on two commits of the shop.
+The page (docair-8l6.6, `crates/docair-viewer/src/page_changes.rs`) shows a
+flow's finding in its details in the changes section, and walks its workflow
+before and after on that side's picture (`#changes/<seed>/before`, `/after`);
+the list shows the links and counts what is not explained yet, with the
+command, and a button when docair serve shows the page; e2e
+`changes.spec.ts`.
+
 ## 6. Steps
 
 | Step | Issue | What |
@@ -76,11 +95,13 @@ in `.env`) and the fake AI for tests. A run has a cost limit.
 Step 1 needs `docair diff`'s changed slices (docair-zrr.6), step 6 needs
 `docair serve` (docair-702.6).
 
-## 7. To decide
+## 7. Decided (docair-zrr.1)
 
-| # | Question | First thought |
-|---|----------|---------------|
-| 1 | which model by default, and the input's size limit | the configured model; the limit set from its context size |
-| 2 | what a person's correction looks like | as in walkthroughs: the file is edited, `recorded.by: human` |
-| 3 | does a workflow from the user's side need a declared start? | no: it starts at the first request the browser sends, or at a declared `@flow` |
-| 4 | the language of the comment on the pull request | plain English, one line per changed flow, details folded |
+| # | Question | Decided |
+|---|----------|---------|
+| 1 | which model by default, and the input's size limit | the configured model (`[ai]`); the input is cut at 60,000 characters per request, a diff larger than that is sent flow by flow |
+| 2 | what a person's correction looks like | the findings file is edited by hand and its `recorded.by` set to `human`; docair never asks the model again about a finding a human recorded |
+| 3 | does a workflow from the user's side need a declared start? | no: it starts at the first part outside the system (`external`) on a changed flow, else at the flow's first step |
+| 4 | the language of the comment on the pull request | plain English, one line per changed flow, the explanation under it, links and workflows folded in `<details>` |
+| 5 | (new) where the findings go | `[explain] store` in `docair.toml`, default `docs/changes`: one JSON file per pair of commits (`<A>..<B>.json`) |
+| 6 | (new) the cost limit | `[explain] max_requests`, default 8 requests per run; a run that would need more stops and says which flows are left |

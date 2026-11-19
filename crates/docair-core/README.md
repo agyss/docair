@@ -40,6 +40,7 @@ The recorded walkthroughs, `docs/walkthroughs/*.json`: questions answered step b
 @id      walkthrough-files
 @kind    store
 @part-of project-files
+@path    docs/walkthroughs/*.json
 ```
 
 ```docair
@@ -48,6 +49,7 @@ Test reports: the Playwright JSON reports named in `[tests] results` (e2e/test-r
 @id      test-reports
 @kind    store
 @part-of project-files
+@path    e2e/test-results/results.json
 ```
 
 ```docair
@@ -56,6 +58,7 @@ The glossaries: `GLOSSARY.md` files (and those listed in `glossary` in docair.to
 @id      glossary-files
 @kind    store
 @part-of project-files
+@path    **/GLOSSARY.md
 ```
 
 ```docair
@@ -64,4 +67,5 @@ The decisions about words: `docs/meanings.toml` (or `meanings` in docair.toml). 
 @id      meanings-file
 @kind    store
 @part-of project-files
+@path    docs/meanings.toml
 ```

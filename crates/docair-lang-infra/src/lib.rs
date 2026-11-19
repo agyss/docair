@@ -145,6 +145,15 @@ struct K8sObject {
     env: Vec<EnvSet>,
     /// ConfigMap, Secret: the keys of `data` and `stringData`.
     keys: Vec<String>,
+    /// Workload: its containers' images, as written (`{{ .Values.server.image.repository }}:…`), filled from the chart's values once read.
+    images: Vec<String>,
+}
+
+/// What a Dockerfile builds: the Rust crates `cargo build -p` builds, and the project files it copies in.
+#[derive(Debug, Clone, Default)]
+struct DockerBuild {
+    crates: Vec<String>,
+    copies: Vec<String>,
 }
 
 /// How a workload's container gets an environment variable.
@@ -263,6 +272,7 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
     let mut class = None;
     let mut env: Vec<EnvSet> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
+    let mut images: Vec<String> = Vec::new();
     // A path stack of keys by indentation, to know where a line is.
     let mut stack: Vec<(usize, String)> = Vec::new();
     let mut host = String::new();
@@ -316,8 +326,20 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
                 target_port = Some(value.clone())
             }
             (["spec"], "ingressClassName") => class = Some(value.clone()),
+            (p, "image") if p.contains(&"containers") => images.push(value.clone()),
             // Environment: `env: - name: X`, then `valueFrom: secretKeyRef: name: …`.
             (p, "name") if p.last() == Some(&"env") => env.push(EnvSet::Value(value.clone())),
+            // `valueFrom: fieldRef` or `resourceFieldRef`: Kubernetes fills it from the pod itself
+            // (the downward API), so no setting sets it.
+            (p, "fieldPath" | "resource")
+                if p.len() >= 2
+                    && p[p.len() - 2] == "valueFrom"
+                    && matches!(p[p.len() - 1], "fieldRef" | "resourceFieldRef") =>
+            {
+                if matches!(env.last(), Some(EnvSet::Value(_))) {
+                    env.pop();
+                }
+            }
             (p, "name")
                 if p.len() >= 2
                     && p[p.len() - 2] == "valueFrom"
@@ -434,6 +456,7 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
         class,
         env,
         keys,
+        images,
     })
 }
 
@@ -477,6 +500,12 @@ struct Index {
     subs: Vec<Sub>,
     /// The `@id` of the authored block on a code line: (file, line) → id.
     ids_at: HashMap<(String, usize), String>,
+    /// Dockerfiles by path: what each builds.
+    dockerfiles: HashMap<String, DockerBuild>,
+    /// Image repository → the Dockerfile Terraform's `docker build -f … -t …` builds it from.
+    builds: HashMap<String, String>,
+    /// Rust crate name → the id of its `main`, when the crate has a `src/main.rs`.
+    mains: HashMap<String, String>,
 }
 
 /// A block inside a Terraform resource, with its own attributes.
@@ -691,6 +720,19 @@ impl Index {
                     }
                 }
             }
+            if f.lang.name == "dockerfile" {
+                a.dockerfiles.insert(f.rel.clone(), docker_build(&f.text));
+            }
+            // A crate with a `main`: what `cargo build -p` makes runs it (`<crate>.main`, the Rust adapter's id).
+            if f.rel.ends_with("Cargo.toml")
+                && let Some(name) = package_name(&f.text)
+                && files
+                    .iter()
+                    .any(|x| x.rel == format!("{}src/main.rs", dir_prefix(&f.rel)))
+            {
+                a.mains
+                    .insert(name.clone(), format!("{}.main", slug(&name)));
+            }
             if f.rel.ends_with("/values.yaml") || f.rel == "values.yaml" {
                 a.values
                     .insert(dir_of(&f.rel).to_string(), flat_values(&f.text));
@@ -741,6 +783,24 @@ impl Index {
         for o in &mut a.objects {
             if let Some(c) = o.class.clone().filter(|c| c.contains("{{")) {
                 o.class = chart_of(&o.file).and_then(|d| from_values(&c, a.values.get(d)));
+            }
+            // Images, filled from the chart's values: `docair-server:dev`.
+            let values = chart_of(&o.file).and_then(|d| a.values.get(d));
+            o.images = o
+                .images
+                .iter()
+                .filter_map(|i| fill_values(i, values))
+                .collect();
+        }
+        // What Terraform builds: `docker build -f docker/server.Dockerfile -t ${local.server_image} .`.
+        for r in &a.resources {
+            for l in &r.body {
+                for (dockerfile, tag) in docker_builds(l) {
+                    let tag = expand_locals(&tag, &a.locals);
+                    if let Some(repo) = image_repo(&tag) {
+                        a.builds.insert(repo, dockerfile);
+                    }
+                }
             }
         }
         // What the clusters and releases are called, now that every file is read.
@@ -1211,11 +1271,189 @@ impl Index {
                         )
                         .payload(o.target_port.as_ref().map(|p| format!("port {p}"))),
                     );
+                    // The program the pods run: image → the Dockerfile that builds it → what it builds (docair-4wk.26).
+                    for image in &w.images {
+                        if let Some((program, why)) = self.program_of(image) {
+                            tags.push(Relation::new(
+                                Verb::Calls,
+                                Target::Ref(program),
+                                Evidence::new(
+                                    o.line,
+                                    format!("{} {}: image {image}, {why}", w.kind, w.name),
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
         }
         tags
     }
+}
+
+impl Index {
+    /// What a pod with this image runs: the `main` of the crate its Dockerfile builds, else the part
+    /// a file it copies in declares (nginx's config); with the reason, for the evidence.
+    fn program_of(&self, image: &str) -> Option<(String, String)> {
+        let repo = image_repo(image)?;
+        let dockerfile = self.builds.get(&repo)?;
+        let build = self.dockerfiles.get(dockerfile)?;
+        if let Some((name, main)) = build
+            .crates
+            .iter()
+            .find_map(|c| self.mains.get(c).map(|m| (c, m)))
+        {
+            return Some((
+                main.clone(),
+                format!("built by {dockerfile} (cargo build -p {name})"),
+            ));
+        }
+        build.copies.iter().find_map(|copied| {
+            self.ids_at
+                .iter()
+                .filter(|((file, _), _)| file == copied)
+                .min_by_key(|((_, line), _)| *line)
+                .map(|(_, id)| {
+                    (
+                        id.clone(),
+                        format!("built by {dockerfile}, which copies {copied}"),
+                    )
+                })
+        })
+    }
+}
+
+/// What a Dockerfile builds: `RUN cargo build … -p <crate>` and `COPY <file> …` of project files (not `--from` a stage).
+fn docker_build(text: &str) -> DockerBuild {
+    let mut out = DockerBuild::default();
+    for l in text.lines().map(str::trim) {
+        let words: Vec<&str> = l.split_whitespace().collect();
+        match words.first().map(|w| w.to_ascii_uppercase()).as_deref() {
+            Some("RUN") if words.contains(&"cargo") && words.contains(&"build") => {
+                for (k, w) in words.iter().enumerate() {
+                    if matches!(*w, "-p" | "--package")
+                        && let Some(c) = words.get(k + 1)
+                    {
+                        out.crates.push(c.trim_matches('"').to_string());
+                    } else if let Some(c) = w.strip_prefix("--package=") {
+                        out.crates.push(c.to_string());
+                    }
+                }
+            }
+            Some("COPY") | Some("ADD") if !words.iter().any(|w| w.starts_with("--from")) => {
+                let args: Vec<&str> = words[1..]
+                    .iter()
+                    .filter(|w| !w.starts_with("--"))
+                    .copied()
+                    .collect();
+                if args.len() >= 2 {
+                    out.copies.extend(
+                        args[..args.len() - 1]
+                            .iter()
+                            .map(|a| a.trim_start_matches("./").to_string()),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The `docker build` commands in a line: (Dockerfile, tag) of each, `-f`/`--file` and `-t`/`--tag`.
+fn docker_builds(line: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let line = line
+        .trim()
+        .trim_start_matches("command")
+        .trim()
+        .trim_start_matches('=')
+        .trim()
+        .trim_matches('"');
+    for part in line.split("&&").flat_map(|p| p.split(';')) {
+        let words: Vec<&str> = part.split_whitespace().collect();
+        let Some(at) = words.windows(2).position(|w| w == ["docker", "build"]) else {
+            continue;
+        };
+        let rest = &words[at + 2..];
+        let flag = |names: &[&str]| {
+            rest.windows(2)
+                .find(|w| names.contains(&w[0]))
+                .map(|w| w[1].trim_matches('"').to_string())
+        };
+        let dockerfile = flag(&["-f", "--file"]).unwrap_or_else(|| "Dockerfile".to_string());
+        if let Some(tag) = flag(&["-t", "--tag"]) {
+            out.push((dockerfile.trim_start_matches("./").to_string(), tag));
+        }
+    }
+    out
+}
+
+/// `${local.x}` replaced by the local's value, a few levels deep; other interpolations stay.
+fn expand_locals(text: &str, locals: &HashMap<String, String>) -> String {
+    let mut out = text.to_string();
+    for _ in 0..4 {
+        let Some(start) = out.find("${local.") else {
+            break;
+        };
+        let Some(len) = out[start..].find('}') else {
+            break;
+        };
+        let name = &out[start + 8..start + len];
+        let Some(v) = locals.get(name) else {
+            break;
+        };
+        out = format!("{}{v}{}", &out[..start], &out[start + len + 1..]);
+    }
+    out
+}
+
+/// An image's repository: `docair-server` of `docair-server:dev` or `registry/docair-server:1.2`; none while it is not known.
+fn image_repo(image: &str) -> Option<String> {
+    let repo = image
+        .rsplit_once(':')
+        .map_or(image, |(r, tag)| if tag.contains('/') { image } else { r });
+    let repo = repo.rsplit('/').next().unwrap_or(repo).trim();
+    (!repo.is_empty() && !repo.contains("${") && !repo.contains("{{")).then(|| repo.to_string())
+}
+
+/// A template filled from the chart's values: every `{{ .Values.x }}` in it; none when one is not known.
+fn fill_values(text: &str, values: Option<&HashMap<String, String>>) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let end = rest[start..].find("}}")? + start + 2;
+        out.push_str(&rest[..start]);
+        out.push_str(&from_values(&rest[start..end], values)?);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// `name = "x"` under `[package]` in a Cargo.toml.
+fn package_name(toml: &str) -> Option<String> {
+    let mut in_package = false;
+    for l in toml.lines().map(str::trim) {
+        if l.starts_with('[') {
+            in_package = l == "[package]";
+        } else if in_package && let Some(v) = l.strip_prefix("name") {
+            return Some(
+                v.trim()
+                    .trim_start_matches('=')
+                    .trim()
+                    .trim_matches('"')
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
+/// `crates/docair-server/` of `crates/docair-server/Cargo.toml`; empty at the root.
+fn dir_prefix(rel: &str) -> String {
+    rel.rsplit_once('/')
+        .map_or(String::new(), |(d, _)| format!("{d}/"))
 }
 
 /// Whether a line of Terraform reads a file: `file(…)`, `filesha1(…)`, `templatefile(…)`, `fileset(…)`.
@@ -1621,10 +1859,10 @@ mod tests {
         assert_eq!(o[1].id(), "k8s.svc.api");
     }
 
-    /// What sets a variable: a ConfigMap through `envFrom`, a Secret key through `secretKeyRef`, a workload's own `value`.
+    /// What sets a variable: a ConfigMap through `envFrom`, a Secret key through `secretKeyRef`, a workload's own `value`; nothing for one Kubernetes fills from the pod (`fieldRef`).
     #[test]
     fn the_variables_objects_set() {
-        let dep = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: server\nspec:\n  template:\n    spec:\n      containers:\n        - name: server\n          ports:\n            - name: http\n              containerPort: 8080\n          envFrom:\n            - configMapRef:\n                name: server\n          {{- if .Values.ai.apiKey }}\n          env:\n            - name: DOCAIR_BIND\n              value: 0.0.0.0:8080\n            - name: DOCAIR_AI_API_KEY\n              valueFrom:\n                secretKeyRef:\n                  name: {{ .Values.ai.existingSecret | default \"ai\" }}\n                  key: api-key\n          {{- end }}\n";
+        let dep = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: server\nspec:\n  template:\n    spec:\n      containers:\n        - name: server\n          ports:\n            - name: http\n              containerPort: 8080\n          envFrom:\n            - configMapRef:\n                name: server\n          env:\n            - name: DOCAIR_POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n          {{- if .Values.ai.apiKey }}\n            - name: DOCAIR_BIND\n              value: 0.0.0.0:8080\n            - name: DOCAIR_AI_API_KEY\n              valueFrom:\n                secretKeyRef:\n                  name: {{ .Values.ai.existingSecret | default \"ai\" }}\n                  key: api-key\n          {{- end }}\n";
         let cm = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: server\ndata:\n  DOCAIR_MAX_FILES: {{ .Values.maxFiles | quote }}\n  {{- with .Values.ai.model }}\n  DOCAIR_AI_MODEL: {{ . | quote }}\n  {{- end }}\n";
         let secret = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: ai\nstringData:\n  api-key: {{ .Values.ai.apiKey | quote }}\n";
         let mut objects = k8s_objects("c/templates/deploy.yaml", dep);

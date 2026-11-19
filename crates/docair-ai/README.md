@@ -31,4 +31,5 @@ The AI endpoint: any API that speaks OpenAI's chat completions, for example Toge
 @id      dotenv
 @kind    store
 @part-of project-files
+@path    .env
 ```

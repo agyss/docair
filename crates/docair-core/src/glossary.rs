@@ -79,6 +79,7 @@ pub fn parse(rel: &str, text: &str) -> Vec<Term> {
             source: SourceRef {
                 file: rel.to_string(),
                 line,
+                end: None,
             },
             from: String::new(),
             node: None,

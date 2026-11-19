@@ -42,6 +42,24 @@ function reply(messages) {
       checks,
     };
   }
+  // Explaining changes (docair explain): one explanation per flow, naming a part it was given; a link when parts were removed and added.
+  if ((messages[0]?.content || '').startsWith('You explain changes')) {
+    const user = messages[1]?.content || '';
+    const input = JSON.parse(user.slice(user.indexOf('{')));
+    const flows = (input.flows || []).map((f) => {
+      const part = (f.changed || [])[0] || (f.parts_added || [])[0];
+      const added = (f.parts_added || [])[0];
+      return {
+        seed: f.seed,
+        explanation: part ? `\`${part.id}\` changed, so this flow ${f.how === 'new' ? 'is new' : 'goes another way'}.` : 'This flow changed.',
+        ...(added ? { workflow: { title: `use ${f.seed}`, before: [], after: [{ title: `reaches ${added.name}`, nodes: [added.id] }] } } : {}),
+      };
+    });
+    const removed = input['removed at A'] || [];
+    const addedB = input['added at B'] || [];
+    const links = removed.length && addedB.length ? [{ a: removed[0].id, b: addedB[0].id, why: 'the same part, renamed and changed' }] : [];
+    return { links, flows };
+  }
   const users = messages.filter((m) => m.role === 'user');
   const q = (users.at(-1)?.content || '').toLowerCase();
   // users[0] is the graph; the rest before the last are earlier turns.

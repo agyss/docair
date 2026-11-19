@@ -202,8 +202,15 @@ pub(crate) fn bind_open_refs(nodes: &mut [Node], index: &HashMap<String, usize>)
                 .iter()
                 .find(|(p, _)| tag.value.starts_with(p))
                 .map_or(&[][..], |(_, k)| *k);
-            // The part's own block first, then its callers', up to three calls up.
-            let mut found = named(i, &tag.name, kinds);
+            // A path the code writes out finds the store whose `@path` fits it, for certain (docair-4wk.25).
+            let path = tag.value.strip_prefix("file:").unwrap_or("").trim();
+            let by_path = path_stores(nodes, path);
+            // Else the part's own block first, then its callers', up to three calls up.
+            let mut found = if by_path.is_empty() {
+                named(i, &tag.name, kinds)
+            } else {
+                by_path
+            };
             let mut seen = vec![i];
             let mut ring = vec![i];
             for _ in 0..3 {
@@ -247,6 +254,71 @@ pub(crate) fn bind_open_refs(nodes: &mut [Node], index: &HashMap<String, usize>)
     }
 }
 
+/// The stores whose `@path` globs fit a path the code writes out.
+fn path_stores(nodes: &[Node], path: &str) -> Vec<String> {
+    if path.is_empty() {
+        return Vec::new();
+    }
+    let path = path.trim_start_matches("./").trim_end_matches('/');
+    nodes
+        .iter()
+        .filter(|n| n.kind == "store")
+        .filter(|n| {
+            n.tags_named("path")
+                .any(|t| path_fits(path, t.value.trim()))
+        })
+        .map(|n| n.id.clone())
+        .collect()
+}
+
+/// Whether a path fits a glob: `*` any part of one segment, `**` any number of segments; a path
+/// that is the folder of the glob (`docs/walkthroughs` for `docs/walkthroughs/*.json`) fits too.
+pub fn path_fits(path: &str, glob: &str) -> bool {
+    let glob = glob.trim_start_matches("./").trim_end_matches('/');
+    let path = path.trim_start_matches("./").trim_end_matches('/');
+    let segs = |s: &str| -> Vec<String> {
+        s.split('/')
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (p, g) = (segs(path), segs(glob));
+    fn seg_fits(s: &str, g: &str) -> bool {
+        // `*` and `?` inside one segment.
+        let (s, g): (Vec<char>, Vec<char>) = (s.chars().collect(), g.chars().collect());
+        let (mut i, mut j, mut star, mut mark) = (0, 0, None, 0);
+        while i < s.len() {
+            if j < g.len() && (g[j] == '?' || g[j] == s[i]) {
+                i += 1;
+                j += 1;
+            } else if j < g.len() && g[j] == '*' {
+                star = Some(j);
+                mark = i;
+                j += 1;
+            } else if let Some(st) = star {
+                j = st + 1;
+                mark += 1;
+                i = mark;
+            } else {
+                return false;
+            }
+        }
+        g[j..].iter().all(|&c| c == '*')
+    }
+    fn fits(p: &[String], g: &[String]) -> bool {
+        match g.first() {
+            None => p.is_empty(),
+            Some(first) if first == "**" => (0..=p.len()).any(|k| fits(&p[k..], &g[1..])),
+            Some(first) => !p.is_empty() && seg_fits(&p[0], first) && fits(&p[1..], &g[1..]),
+        }
+    }
+    if fits(&p, &g) {
+        return true;
+    }
+    // The folder of the glob: the glob without its last segment.
+    !p.is_empty() && fits(&p, &g[..g.len().saturating_sub(1)])
+}
+
 pub(crate) struct Resolved {
     pub(crate) id: String,
     sub: Option<String>,
@@ -254,7 +326,7 @@ pub(crate) struct Resolved {
 }
 
 /***
- * Turn every data-flow tag into an edge, and give every flow step its path.
+ * Turn every data-flow tag into an edge; the flow steps get their paths later, once request lines are in (`flow_paths`).
  *
  * Unresolved refs become placeholder nodes with E001 so that nothing is
  * dropped silently. Topics are created the first time they are referenced.
@@ -263,14 +335,13 @@ pub(crate) struct Resolved {
  * @flow  scan 10 "refs become edges, flows get paths"
  * @in    nodes: Node[] from docair-core.build.build
  * @calls docair-core.route.route.fit "compares called paths with routes"
- * @calls docair-core.resolve.flow_paths "orders the scenario steps and links them"
- * @out   graph: Node[] + Edge[] + Flow[]
+ * @out   graph: Node[] + Edge[]
  ***/
 pub fn resolve(
     mut nodes: Vec<Node>,
     system: &str,
     diags: &mut Vec<Diagnostic>,
-) -> (Vec<Node>, Vec<Edge>, Vec<Flow>) {
+) -> (Vec<Node>, Vec<Edge>) {
     let mut index: HashMap<String, usize> = nodes
         .iter()
         .enumerate()
@@ -384,6 +455,26 @@ pub fn resolve(
                     }
                 }
             };
+            // A sub-part of code is no part a reader can find: a stale ref that kept a prefix
+            // (`docair-core.infra.discover` after the module moved) binds to the whole crate.
+            if let Some(sub) = &resolved.sub {
+                let kind_of = index.get(&resolved.id).map(|&i| nodes[i].kind.as_str());
+                if kind_of.is_some_and(|k| CODE_KINDS.contains(&k)) {
+                    diags.push(
+                        Diagnostic::new(
+                            "W122",
+                            format!(
+                                "`{target}` in @{} names no part: `{}` is a {} and has no part `{sub}`, so the line goes to all of it",
+                                tag.name,
+                                resolved.id,
+                                kind_of.unwrap_or("part")
+                            ),
+                        )
+                        .at(&file, tag.line)
+                        .node(&node_id),
+                    );
+                }
+            }
             let label = edge_label(kind, label.or(resolved.sub), &payload, &reply);
             let (from, to) = if outgoing {
                 (node_id.clone(), resolved.id)
@@ -416,6 +507,7 @@ pub fn resolve(
             }
             by_pair.insert((from.clone(), to.clone()), edges.len());
             edges.push(Edge {
+                id: String::new(),
                 from,
                 to,
                 kind,
@@ -426,13 +518,13 @@ pub fn resolve(
                 carries_back: vec![],
                 payload,
                 reply,
-                from_code: false,
-                from_api: None,
+                evidence: None,
                 reach: tag.reach.filter(|r| *r != Reach::Certain),
                 tag: format!("@{} {}", tag.name, tag.value),
                 source: SourceRef {
                     file: file.clone(),
                     line: tag.line,
+                    end: None,
                 },
                 origin: tag.origin,
             });
@@ -441,8 +533,7 @@ pub fn resolve(
 
     word_calls_from_code(&nodes, &mut edges);
     find_carried_data(&nodes, &mut edges);
-    let flows = flow_paths(&nodes, &edges, diags);
-    (nodes, edges, flows)
+    (nodes, edges)
 }
 
 /// Data nodes whose name (or a `@carried-as` word) occurs in what an edge carries there or, for a call, back (SPEC §3.6).
@@ -532,7 +623,9 @@ fn word_calls_from_code(nodes: &[Node], edges: &mut [Edge]) {
         };
         e.payload = payload;
         e.reply = reply;
-        e.from_code = true;
+        e.evidence = Some(crate::model::LineEvidence::code(
+            index.get(e.to.as_str()).and_then(|n| n.source.as_ref()),
+        ));
     }
 }
 
@@ -569,6 +662,18 @@ fn add_node(
         code_from: None,
     });
 }
+
+/// Kinds of code: a ref into one of them names a part by its id, never by the sub-part form.
+const CODE_KINDS: &[&str] = &[
+    "system",
+    "service",
+    "module",
+    "component",
+    "function",
+    "job",
+    "workload",
+    "test",
+];
 
 pub(crate) fn resolve_ref(
     r: &str,
@@ -838,6 +943,7 @@ mod tests {
             source: Some(SourceRef {
                 file: "f".into(),
                 line: 1,
+                end: None,
             }),
             symbol: None,
             http: None,
@@ -884,7 +990,7 @@ mod tests {
             .push(Tag::inferred("writes", "file:", 6, "fs::write(…)"));
         let nodes = vec![store("walks"), external, load, post, chat, lonely];
         let mut diags = Vec::new();
-        let (_, edges, _) = resolve(nodes, "shop", &mut diags);
+        let (_, edges) = resolve(nodes, "shop", &mut diags);
         let mut lines: Vec<(String, String, EdgeKind)> = edges
             .iter()
             .map(|e| (e.from.clone(), e.to.clone(), e.kind))
@@ -924,7 +1030,7 @@ mod tests {
             r,
         ];
         let mut diags = vec![];
-        let (_, edges, _) = resolve(nodes, "shop", &mut diags);
+        let (_, edges) = resolve(nodes, "shop", &mut diags);
         let edge = |a: &str, b: &str| edges.iter().find(|e| e.from == a && e.to == b).unwrap();
         let carries = |a: &str, b: &str| edge(a, b).carries.clone();
         assert_eq!(
@@ -1022,10 +1128,13 @@ mod tests {
                 });
                 n
             },
-            node("db", &[]),
+            Node {
+                kind: "store".into(),
+                ..node("db", &[])
+            },
         ];
         let mut d = Vec::new();
-        let (_, edges, _) = resolve(nodes, "shop", &mut d);
+        let (_, edges) = resolve(nodes, "shop", &mut d);
         let call = edges.iter().find(|e| e.kind == EdgeKind::Call).unwrap();
         assert_eq!(call.label.as_deref(), Some("(CreateOrder) → Order"));
         assert_eq!(
@@ -1076,14 +1185,18 @@ mod tests {
                 ],
             ),
             create,
-            node("orders-db", &[]),
+            Node {
+                kind: "store".into(),
+                ..node("orders-db", &[])
+            },
             node(
                 "mailer.send",
                 &[("consumes", "order.created"), ("flow", "checkout 3")],
             ),
         ];
         let mut d = Vec::new();
-        let (nodes, edges, flows) = resolve(nodes, "shop", &mut d);
+        let (nodes, edges) = resolve(nodes, "shop", &mut d);
+        let flows = flow_paths(&nodes, &edges, &mut d);
 
         let cart_to_create: Vec<&Edge> = edges
             .iter()
@@ -1150,7 +1263,7 @@ mod tests {
             node("release.app", &[]),
         ];
         let mut d = Vec::new();
-        let (_, edges, _) = resolve(nodes, "shop", &mut d);
+        let (_, edges) = resolve(nodes, "shop", &mut d);
         assert_eq!(edges[0].kind, EdgeKind::Create);
         assert_eq!(
             (edges[0].from.as_str(), edges[0].to.as_str()),
@@ -1164,8 +1277,64 @@ mod tests {
     fn broken_flow_warns() {
         let nodes = vec![node("a", &[("flow", "f 1")]), node("b", &[("flow", "f 2")])];
         let mut d = Vec::new();
-        let (_, _, flows) = resolve(nodes, "shop", &mut d);
+        let (nodes, edges) = resolve(nodes, "shop", &mut d);
+        let flows = flow_paths(&nodes, &edges, &mut d);
         assert_eq!(d[0].code, "W104");
         assert!(flows[0].steps[1].path.is_empty());
+    }
+
+    /// A path the code writes out fits a store's `@path` glob (docair-4wk.25).
+    #[test]
+    fn paths_fit_store_globs() {
+        assert!(path_fits(".env", ".env"));
+        assert!(path_fits(
+            "./docs/walkthroughs/a.json",
+            "docs/walkthroughs/*.json"
+        ));
+        assert!(
+            path_fits("docs/walkthroughs", "docs/walkthroughs/*.json"),
+            "the folder of the glob"
+        );
+        assert!(path_fits("data/a/b/c.csv", "data/**"));
+        assert!(path_fits("data/x.csv", "data/**/*.csv"));
+        assert!(!path_fits("docs/other/a.json", "docs/walkthroughs/*.json"));
+        assert!(
+            !path_fits("docs", "docs/walkthroughs/*.json"),
+            "a folder further up is no fit"
+        );
+        assert!(!path_fits(".env.example", ".env"));
+    }
+
+    /// A store that says where it is gets a certain line from code that writes its path out, without a block.
+    #[test]
+    fn a_file_the_code_names_binds_to_the_store_that_says_its_path() {
+        let mut walks = Node {
+            kind: "store".into(),
+            ..node("walks", &[])
+        };
+        walks.tags.push(Tag {
+            name: "path".into(),
+            value: "docs/walkthroughs/*.json".into(),
+            line: 1,
+            origin: Origin::Authored,
+            reason: None,
+            reach: None,
+        });
+        let mut load = node("load", &[]);
+        load.tags.push(Tag::inferred(
+            "reads",
+            "file:docs/walkthroughs",
+            3,
+            "fs::read_dir(\"docs/walkthroughs\")",
+        ));
+        let nodes = vec![walks, load];
+        let mut diags = Vec::new();
+        let (_, edges) = resolve(nodes, "shop", &mut diags);
+        let read = edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Read)
+            .expect("a read line");
+        assert_eq!((read.from.as_str(), read.to.as_str()), ("walks", "load"));
+        assert!(read.reach.is_none(), "certain");
     }
 }

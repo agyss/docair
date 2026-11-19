@@ -21,7 +21,6 @@ use crate::model::SourceFile;
  * @flow  scan 4 "walk the project"
  * @reads project-files "provides the files to scan"
  * @reads docair-core.lang.languages "maps file extensions to languages"
- * @in    config: Config from docair-core.config.load
  * @out   files: SourceFile[]
  ***/
 pub fn discover(root: &Path, config: &Config) -> Result<Vec<SourceFile>> {

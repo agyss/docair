@@ -28,6 +28,9 @@ pub enum Origin {
 pub struct SourceRef {
     pub file: String,
     pub line: usize,
+    /// The part's last line, when known: its code's end, or its block's (docair-zrr.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +117,8 @@ pub struct Hints {
     pub declares_file: Option<String>,
     /// Functions: parameter names and the simplified return type, from the code.
     pub signature: Option<Signature>,
+    /// The symbol's last line, from the adapter.
+    pub end: Option<usize>,
 }
 
 /// What a function takes and gives back, as the code declares it (SPEC §6).
@@ -275,6 +280,58 @@ pub struct Change {
     pub why: String,
 }
 
+/// Where a line's words come from (docs/ADAPTERS.md §3): which source, and where in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineEvidence {
+    /// `code`: the callee's signature; `api`: an API description.
+    pub source: String,
+    /// The file: the callee's, or the description's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// The rule that took the words: `signature`, `described`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+}
+
+impl LineEvidence {
+    /// The words come from the callee's signature, at its place in the code.
+    pub fn code(at: Option<&SourceRef>) -> LineEvidence {
+        LineEvidence {
+            source: "code".into(),
+            file: at.map(|s| s.file.clone()),
+            line: at.map(|s| s.line),
+            rule: Some("signature".into()),
+        }
+    }
+
+    /// The words come from an API description.
+    pub fn api(file: String) -> LineEvidence {
+        LineEvidence {
+            source: "api".into(),
+            file: Some(file),
+            line: None,
+            rule: Some("described".into()),
+        }
+    }
+}
+
+impl Edge {
+    /// The payload and reply were taken from the callee's signature, not from the tag.
+    pub fn words_from_code(&self) -> bool {
+        self.evidence.as_ref().is_some_and(|e| e.source == "code")
+    }
+
+    /// The API description the payload and reply were taken from.
+    pub fn words_from_api(&self) -> Option<&str> {
+        self.evidence
+            .as_ref()
+            .filter(|e| e.source == "api")
+            .and_then(|e| e.file.as_deref())
+    }
+}
+
 impl Node {
     pub fn tags_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Tag> + 'a {
         self.tags.iter().filter(move |t| t.name == name)
@@ -300,6 +357,10 @@ pub enum EdgeKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edge {
+    /// Unique and stable across scans: `<from> -<kind>-> <to>`, with its label or `#2` only when
+    /// two lines would share it (docair-svh). Given once the scan's lines are final.
+    #[serde(default)]
+    pub id: String,
     pub from: String,
     pub to: String,
     pub kind: EdgeKind,
@@ -323,12 +384,10 @@ pub struct Edge {
     /// Calls only: data nodes the reply carries back: their names occur in the reply (SPEC §3.6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carries_back: Vec<String>,
-    /// The payload and reply were taken from the callee's signature, not from the tag (SPEC §4.2).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub from_code: bool,
-    /// The payload and reply were taken from this API description (docs/IMPORTS.md).
+    /// Where the payload and reply come from when the tag does not say them: the callee's signature
+    /// (SPEC §4.2) or an API description (docs/IMPORTS.md); none when the tag says them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_api: Option<String>,
+    pub evidence: Option<LineEvidence>,
     /// How sure the code is about where this line goes; none means certain (docs/ADAPTERS.md §5.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reach: Option<Reach>,

@@ -25,6 +25,8 @@ pub const KNOWN_TAGS: &[&str] = &[
     "selects",
     "runs-in",
     "carried-as",
+    "path",
+    "defines",
 ];
 
 pub const KNOWN_KINDS: &[&str] = &[

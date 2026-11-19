@@ -170,6 +170,25 @@ impl Index {
         self.docs.extend(other.docs);
     }
 
+    /// The index with every document's path under `prefix`: an indexer run in `web/` writes
+    /// `src/app/app.ts`, the project knows `web/src/app/app.ts`.
+    pub fn under(self, prefix: &str) -> Index {
+        if prefix.is_empty() {
+            return self;
+        }
+        let at = |p: String| format!("{}/{p}", prefix.trim_end_matches('/'));
+        Index {
+            refs: self.refs.into_iter().map(|(p, r)| (at(p), r)).collect(),
+            defs: self
+                .defs
+                .into_iter()
+                .map(|(s, (p, l))| (s, (at(p), l)))
+                .collect(),
+            impls: self.impls,
+            docs: self.docs.into_iter().map(at).collect(),
+        }
+    }
+
     /// Whether the index read this file.
     pub fn covers(&self, path: &str) -> bool {
         self.docs.contains(path)
@@ -256,6 +275,60 @@ pub fn rust_index_key(version: &str, sources: &[(&str, &str)], lock: &str) -> St
     fnv(&mut h, &[1]);
     fnv(&mut h, lock.as_bytes());
     format!("{h:016x}")
+}
+
+/// scip-typescript installed for a TypeScript project: `node_modules/.bin/scip-typescript` in its folder.
+pub fn scip_typescript_in(dir: &Path) -> Option<std::path::PathBuf> {
+    let bin = dir
+        .join("node_modules")
+        .join(".bin")
+        .join("scip-typescript");
+    bin.is_file().then_some(bin)
+}
+
+/***
+ * The index scip-typescript writes for the TypeScript project in `dir`, kept like rust-analyzer's: under the tool's version, the sources and the lock file, so it runs again only when the code changed.
+ *
+ * `sources` are the files it reads, by path and text.
+ ***/
+pub fn kept_ts_index(
+    dir: &Path,
+    sources: &[(&str, &str)],
+    keep: &Path,
+) -> Result<std::path::PathBuf, String> {
+    let bin = scip_typescript_in(dir).ok_or("scip-typescript is not installed in node_modules")?;
+    let version =
+        std::fs::read_to_string(dir.join("node_modules/@sourcegraph/scip-typescript/package.json"))
+            .unwrap_or_default();
+    let lock = std::fs::read_to_string(dir.join("package-lock.json")).unwrap_or_default();
+    let path = keep.join(format!(
+        "ts-{}.scip",
+        rust_index_key(&version, sources, &lock)
+    ));
+    if path.is_file() {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(keep).map_err(|e| format!("{}: {e}", keep.display()))?;
+    let fresh = keep.join(format!("ts-{}.scip.part", std::process::id()));
+    let out = std::process::Command::new(&bin)
+        .arg("index")
+        .arg("--cwd")
+        .arg(dir)
+        .arg("--output")
+        .arg(&fresh)
+        .output()
+        .map_err(|e| format!("{}: {e}", bin.display()))?;
+    if !out.status.success() || !fresh.is_file() {
+        return Err(format!(
+            "scip-typescript failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .last()
+                .unwrap_or("")
+        ));
+    }
+    std::fs::rename(&fresh, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
 }
 
 /// Where docair keeps what it can make again: `$DOCAIR_CACHE`, else the user's cache folder.

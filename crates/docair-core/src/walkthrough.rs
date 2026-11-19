@@ -275,6 +275,7 @@ mod tests {
 
     fn edge(from: &str, to: &str) -> Edge {
         Edge {
+            id: String::new(),
             from: from.into(),
             to: to.into(),
             kind: EdgeKind::Call,
@@ -285,13 +286,13 @@ mod tests {
             text: None,
             carries: vec![],
             carries_back: vec![],
-            from_code: false,
-            from_api: None,
+            evidence: None,
             reach: None,
             tag: "@calls".into(),
             source: SourceRef {
                 file: "x".into(),
                 line: 1,
+                end: None,
             },
             origin: Origin::Authored,
         }

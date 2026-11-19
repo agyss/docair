@@ -518,7 +518,7 @@ pub fn ask(
     }
     let mut message = question.to_string();
     if let Some(ctx) = context.filter(|c| !c.trim().is_empty()) {
-        message.push_str(&format!("\n\n(Selected on the chart: {ctx})"));
+        message.push_str(&format!("\n\n(What the question points at:\n{ctx})"));
     }
     messages.push(Message::user(message));
 
@@ -619,6 +619,7 @@ mod tests {
             source: Some(SourceRef {
                 file: "src/a.rs".into(),
                 line: 3,
+                end: None,
             }),
             symbol: Some("fn a".into()),
             http: None,

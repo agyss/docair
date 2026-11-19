@@ -13,6 +13,7 @@ docair-adapters = { path = "crates/docair-adapters" }
 docair-ai = { path = "crates/docair-ai" }
 docair-core = { path = "crates/docair-core" }
 docair-layout = { path = "crates/docair-layout" }
+docair-layout-wasm = { path = "crates/docair-layout-wasm" }
 docair-lang-apis = { path = "crates/docair-lang-apis" }
 docair-lang-generic = { path = "crates/docair-lang-generic" }
 docair-lang-infra = { path = "crates/docair-lang-infra" }
@@ -53,4 +54,15 @@ tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["fs"] }
 tempfile = "3.27.0"
 similar = "3.2.1"
+# 8.2.2 is younger than two weeks (docs/LIBRARIES.md).
+notify = "=8.2.1"
 ureq = { version = "3.5.2", features = ["json"] }
+
+# The page's WebAssembly module (scripts/build-layout-wasm.sh): small over fast.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,9 +1,9 @@
 # Changes: what two commits change in app structure and flows
 
-Design for the epic docair-zrr. **Draft:** written before the slices
-(docs/SLICES.md, docair-702) were built. Once they are done, this doc and the
-epic's steps are discussed again and updated (docair-zrr.1) before any step
-starts.
+Design for the epic docair-zrr. Written before the slices (docs/SLICES.md,
+docair-702) were built, and updated once they were (docair-zrr.1,
+2026-11-19): what epic 1 built is used as it is, and the questions of §7 are
+decided (decision issues under docair-zrr).
 
 ## 1. The problem
 
@@ -37,9 +37,11 @@ The changed parts are the union of:
 
 1. **what the graph diff shows changed**, at A or at B: parts, lines and
    tags added, removed or changed. A removed part exists only at A.
-2. **the parts the changed lines fall in.** That needs each part to know
-   where it ends: today a part has a file and its first line only
-   (`SourceRef` in `crates/docair-core/src/model.rs`).
+2. **the parts the changed lines fall in.** Each part knows where it ends
+   (`SourceRef.end`, docair-zrr.2): the end of its code (Rust and
+   TypeScript items, from the adapters), else the end of its block; parts
+   the infrastructure adapter discovers without a block have no end yet,
+   and their changes come from the graph diff.
 
 The first catches what the second cannot: a route registered in another
 file, a config file (Helm values, `nginx.conf`) that reroutes a request
@@ -48,6 +50,14 @@ without touching any code part.
 **Moves and renames.** Each part gets a fingerprint of its body. A part gone
 at B and a part new at B with the same fingerprint are one part, moved or
 renamed. docair links these itself; the AI links only what it cannot prove.
+
+**What epic 1 gives this epic.** Every line has an id that says what it is
+(`shop-ui.cart -call-> orders.create`, docair-svh), so lines are compared by
+id, and a moved part's lines are matched once its new id is known. Every
+slice has a seed with a stable name (`flow:checkout`, `data.order`, a part's
+id; `docair_core::slice::all`), and its ends (`SliceEnd`), so flows are
+compared by seed. The page draws any slice the CLI hands it, so the changes
+section is two slices per changed flow, drawn by docair.
 
 ## 4. Comparing the slices
 
@@ -67,11 +77,31 @@ is a false alarm, and false alarms teach reviewers to stop reading.
 ## 5. Output
 
 * **JSON** (`docair.changes/0`): the changed parts, the changed flows with
-  their steps at A and B, the moves; read by docair-8l6.
+  their steps at A and B, the moves; read by docair-8l6. `working_tree` is
+  true when B is the working tree, not a commit, so asking about the pair
+  again leaves B out.
 * **Markdown:** a short summary, one line per changed flow.
 * **The HTML:** a changes section. Each changed flow at A and at B side by
   side; the parts that stayed keep their positions (SLICES.md §5, positions
   from before).
+
+**Built** (docair-zrr.2 to zrr.6, zrr.8): `SourceRef.end`;
+`docair_core::diff` (`fingerprint`, `fingerprints`, `diff`);
+`docair_core::changes` (`changes`, `markdown`, `changed_lines`); `docair diff`
+in `crates/docair-cli/src/diff.rs`. On docair, HEAD against the working tree
+takes 9 s with both graphs scanned. The changes section of the page
+(docair-zrr.7, `docair build --changes <A>`) is built in
+`crates/docair-viewer/src/page_changes.rs`: the header's **Δ Changes · n**
+opens the list of changed flows (new, gone or changed, uncertain ones marked,
+the moves apart), and each flow opens at `#changes/<seed>` as one picture of
+its slice at A and at B side by side, drawn like any slice, what it now goes
+through marked green at B and what it no longer does red at A. Both versions are
+laid out as one picture (docair-zrr.17): a part both have is in the same
+place on both sides, and a part only one side has leaves its room empty on
+the other.
+`docair serve --changes <A>` serves the same page and writes it again with
+each change; the comparison is shared by the CLI and the server
+(`docair_server::commits`).
 
 ## 6. Steps
 
@@ -89,12 +119,13 @@ is a false alarm, and false alarms teach reviewers to stop reading.
 Step 5 also needs the slices (docair-702.1), step 6 the generated HTML
 (docair-702.5).
 
-## 7. To decide
+## 7. Decided (docair-zrr.1)
 
-| # | Question | First thought |
-|---|----------|---------------|
-| 1 | how commit A's files are read | a `git worktree` in a scratch folder, removed afterwards |
-| 2 | can uncommitted work be B? | yes: B is the working tree when no commit is given |
-| 3 | a change in what docair reads (a new adapter, a changed `docair.toml`) | listed apart, so it is not taken for a change in the code |
-| 4 | code indexers (SCIP) are slow; two commits double it | keep the index per commit, next to the kept graph |
-| 5 | how far a flow reaches from a changed part | to its ends with stable names, at most as far as its slice |
+| # | Question | Decided |
+|---|----------|---------|
+| 1 | how commit A's files are read | `git worktree add --detach` of each commit into a scratch folder, removed afterwards; an untracked file of the working tree is never read for a commit |
+| 2 | can uncommitted work be B? | yes: `docair diff <A>` compares A with the working tree, `docair diff <A> <B>` two commits |
+| 3 | a change in what docair reads (a new adapter, a changed `docair.toml`) | the two graphs' `generator` and `docair.toml` are compared; a difference is reported first, as *the reading changed*, so it is not taken for a change in the code |
+| 4 | code indexers (SCIP) are slow; two commits double it | the graph of a commit is kept in the cache folder under the commit, docair's version and the `docair.toml` (`graphs/<key>.json`); the code index is kept by its sources already |
+| 5 | how far a flow reaches from a changed part | the slices whose parts hold a changed part, from `slice::all`, compared by seed |
+| 6 | (new) the changes section in the HTML | a picture per changed flow at A and at B, drawn by docair like every slice; built in the page's files (the other session's), from the JSON this epic writes |

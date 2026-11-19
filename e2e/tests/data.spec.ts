@@ -14,7 +14,7 @@ test.describe('code and data', () => {
    *
    * @part-of e2e.data
    * @covers  docair-core.build.build "checks @runs-in places the part where it runs"
-   * @covers  docair-viewer.page_panels.look.details "checks the details say where it runs and where its code comes from"
+   * @covers  docair-viewer.page_panels.panel-graph.details "checks the details say where it runs and where its code comes from"
    ***/
   test('the shop front end is drawn in the browser, where it runs', async ({ page }) => {
     const node = graphOf('shop').nodes.find((n: any) => n.id === 'shop-ui');
@@ -63,6 +63,42 @@ test.describe('code and data', () => {
     await page.getByTestId('unfollow').click();
     await expect(page.getByTestId('follow-bar')).toBeHidden();
     await expect(page).not.toHaveURL(/#slice\//);
+  });
+
+  /***
+   * Follow opens at the datum's first step, at a size to read: the camera shows the step at 0.8 to 1.3 screen pixels per unit, and a slice is laid out without shrinking what its boxes hold, so every word in view is 8 px or more.
+   *
+   * @part-of e2e.data
+   * @covers  docair-viewer.layout_input.options_for "checks a slice keeps its words at their size"
+   * @covers  docair-viewer.doc-page.walk "checks Follow opens at the first step's camera"
+   ***/
+  test("Follow opens at the datum's first step, at a size to read", async ({ page }) => {
+    await openStatic(page, 'shop', '#slice/data.order');
+    await expect(page.getByTestId('step-card')).toContainText('step 1 of 4');
+    // The camera comes to rest on the first step.
+    let view = '';
+    await expect
+      .poll(async () => {
+        const was = view;
+        view = (await page.locator('#pic svg.docair-pic').getAttribute('viewBox')) || '';
+        return was === view;
+      })
+      .toBe(true);
+    const r = await page.evaluate(() => {
+      const pic = document.querySelector('#pic')!.getBoundingClientRect();
+      const svg = document.querySelector('#pic svg.docair-pic') as SVGSVGElement;
+      const sizes = [...svg.querySelectorAll('text')]
+        .filter((t) => {
+          const b = t.getBoundingClientRect();
+          return b.width > 0 && b.right > pic.left && b.left < pic.right && b.bottom > pic.top && b.top < pic.bottom;
+        })
+        .map((t) => parseFloat(getComputedStyle(t).fontSize) * (t as SVGGraphicsElement).getScreenCTM()!.a);
+      return { scale: svg.getScreenCTM()!.a, words: sizes.length, smallest: Math.min(...sizes) };
+    });
+    expect(r.scale).toBeGreaterThanOrEqual(0.79);
+    expect(r.scale).toBeLessThanOrEqual(1.31);
+    expect(r.words).toBeGreaterThan(3);
+    expect(r.smallest).toBeGreaterThanOrEqual(8);
   });
 
   /***

@@ -28,18 +28,16 @@ const WALK_ZOOM = [0.8, 1.3];
  * @id      docair-viewer.doc-page.unpack
  * @part-of docair-viewer.doc-page
  ***/
+const inflate = (i) => new Response(new Blob([Uint8Array.from(atob(PACKED[i]), (c) => c.charCodeAt(0))]).stream().pipeThrough(new DecompressionStream('deflate-raw')));
 async function unpack(i) {
-  if (!unpacked.has(i)) {
-    const bytes = Uint8Array.from(atob(PACKED[i]), (c) => c.charCodeAt(0));
-    const flat = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    unpacked.set(i, await new Response(flat).text());
-  }
+  if (!unpacked.has(i)) unpacked.set(i, await inflate(i).text());
   return unpacked.get(i);
 }
 
 const esc = (id) => CSS.escape(id);
 /** The address a # names, the first picture when it names none. */
 const addressOf = (hash) => decodeURIComponent(hash.replace(/^#/, '')) || IX.first;
+const download = (text, name) => Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'text/x-diff' })), download: name }).click();
 const go = (addr) => (location.hash = `#${addr.split('/').map(encodeURIComponent).join('/')}`);
 
 /***
@@ -55,10 +53,12 @@ const go = (addr) => (location.hash = `#${addr.split('/').map(encodeURIComponent
 async function show(addr, keepView = false) {
   const run = ++S.run;
   let part = null;
+  let moved = false;
   if (addr.startsWith('part/')) {
     part = addr.slice(5);
     if (drawnHere(part)) return select(part, true);
     addr = IX.home[part] || IX.first;
+    moved = true;
   }
   if (!IX.pictures[addr]) addr = IX.first;
   const p = IX.pictures[addr];
@@ -68,6 +68,9 @@ async function show(addr, keepView = false) {
   $('#pic').innerHTML = text;
   S.svg = $('#pic > svg');
   S.addr = addr;
+  // The legend explains what this picture holds, and no more.
+  for (const r of document.querySelectorAll('#legend .row')) r.hidden = !S.svg.querySelector(r.dataset.in);
+  for (const g of document.querySelectorAll('#legend .group')) g.hidden = !g.querySelector('.row:not([hidden])');
   const [x, y, w, h] = S.svg.getAttribute('viewBox').split(' ').map(Number);
   S.full = { x, y, w, h };
   if (keepView && view) setView(view);
@@ -82,11 +85,16 @@ async function show(addr, keepView = false) {
   const left = !!W;
   if (p.walk) await startWalk(addr);
   else W = null;
-  if (part) select(part, true);
-  else if (S.selected && drawnHere(S.selected)) {
+  if (part) {
+    select(part, true);
+    // A part picked by its address that took the reader elsewhere: the page says where.
+    if (moved && p.where) toast(p.where);
+  } else if (S.selected && drawnHere(S.selected)) {
     mark(S.selected);
     if (left && !W) details(S.selected);
   } else if (W || left) details(null);
+  if (p.change && !part) panel(P.flowChanges[p.change]);
+  else if (addr.startsWith('box/') && !part && !W) details((S.selected = addr.slice(4)));
 }
 
 /** Following a datum: its slice is on screen, and the bar above the picture says so. */
@@ -140,7 +148,10 @@ function openDoc(target) {
  ***/
 function wirePopups() {
   const pop = $('#term-pop');
-  const marked = '.term, .node-ref, .data-ref';
+  // Tidy's banner stays closed for this reader until the count changes.
+  if ($('#tidy-banner') && stored('localStorage', `docair:tidy:${IX.system}`) === $('#tidy-banner').dataset.count) $('#tidy-banner').hidden = true;
+  // The data a picture's line words name are marked too (rect.chip, tspan.d with data-data).
+  const marked = '.term, .node-ref, .data-ref, #pic [data-data]';
   let timer = 0;
   const open = (t) => {
     const html = P.pops[t.dataset.term ? `term:${t.dataset.term}` : t.dataset.node ? `node:${t.dataset.node}` : `data:${t.dataset.data}`];
@@ -177,6 +188,9 @@ function wirePopups() {
       if (href.startsWith('docair-doc:')) {
         ev.preventDefault();
         openDoc(href.slice('docair-doc:'.length));
+      } else if (href.startsWith('#') && !ev.defaultPrevented && !ev.ctrlKey && !ev.metaKey) {
+        // An address in the page: in a frame made from srcdoc, the link itself would load the frame's parent (docair-sra).
+        ev.preventDefault(), (location.hash = href);
       } else if (/^https?:/.test(href)) {
         a.target = '_blank';
         a.rel = 'noopener';
@@ -184,17 +198,28 @@ function wirePopups() {
       return;
     }
     const t = ev.target.closest?.('.term, [data-term-open]');
-    const d = ev.target.closest?.('.data-ref, [data-about]');
+    const d = ev.target.closest?.('.data-ref, [data-about], #pic [data-data]');
     const n = ev.target.closest?.('.node-ref');
     if (t || d || n) pop.hidden = true;
     if (t) panel(P.terms[t.dataset.term || t.dataset.termOpen]);
-    else if (d && !d.closest('#pic')) panel(P.details[d.dataset.data || d.dataset.about]);
+    else if (d) panel(P.details[d.dataset.data || d.dataset.about]);
     else if (n) go(`part/${n.dataset.node}`);
     else if (ev.target.closest?.('[data-glossary], #btn-glossary')) panel(P.glossary);
     else if (ev.target.closest?.('[data-data-list], #btn-data')) panel(P.dataList);
     else if (ev.target.closest?.('#details [data-back]')) select(S.selected, false);
     else if (ev.target.closest?.('[data-test="reader-close"]')) $('#reader').hidden = true;
     else if (ev.target.closest?.('[data-test="unfollow"]')) go(S.before || IX.first);
+    else if (ev.target.closest?.('[data-tidy-open], #btn-tidy')) panel(P.tidy);
+    else if (ev.target.closest?.('[data-tidy-close]')) ($('#tidy-banner').hidden = true), stored('localStorage', `docair:tidy:${IX.system}`, $('#tidy-banner').dataset.count);
+    else if (ev.target.closest?.('[data-test="tidy-copy"]')) navigator.clipboard?.writeText(ev.target.dataset.command).then(() => toast(ev.target.dataset.copied), () => {});
+    else if (ev.target.closest?.('[data-changes-list], #btn-changes')) panel(P.changes);
+    // ✦ Ask about this: the thing goes along with the next question, as a chip in the panel.
+    const about = ev.target.closest?.('[data-ref]');
+    if (about) {
+      S.refs = [...(S.refs || []).filter(([r]) => r !== about.dataset.ref), [about.dataset.ref, about.dataset.label]];
+      if ($('#chat')?.hidden) $('#btn-ask')?.click();
+      context();
+    }
   });
   $('#details').addEventListener('input', (ev) => {
     if (!ev.target.matches('.gl-search')) return;
@@ -220,36 +245,9 @@ function wireChat() {
   const meta = document.querySelector('meta[name="docair-serve"]')?.content;
   const base = location.protocol.startsWith('http') ? '.' : meta ? meta.replace(/\/$/, '') : null;
   const key = `docair:chat:${IX.system}`;
-  // The conversation is kept across reloads: in sessionStorage, else, in a sandboxed frame where that throws, in window.name.
-  const keep = {
-    get() {
-      try {
-        return JSON.parse(sessionStorage.getItem(key) || 'null');
-      } catch (_) {
-        try {
-          return JSON.parse(window.name || '{}')[key] || null;
-        } catch (_e) {
-          return null;
-        }
-      }
-    },
-    set(value) {
-      try {
-        sessionStorage.setItem(key, JSON.stringify(value));
-      } catch (_) {
-        let all = {};
-        try {
-          all = JSON.parse(window.name || '{}');
-        } catch (_e) {
-          /* a name of its own: replaced */
-        }
-        all[key] = value;
-        window.name = JSON.stringify(all);
-      }
-    },
-  };
-  let state = keep.get() || { log: [], history: [], open: false };
-  const save = () => keep.set(state);
+  // The conversation is kept across reloads, for the tab.
+  let state = stored('sessionStorage', key) || { log: [], history: [], open: false };
+  const save = () => stored('sessionStorage', key, state);
   const log = chat.querySelector('.log');
   const add = (e) => {
     const m = document.createElement('div');
@@ -258,9 +256,17 @@ function wireChat() {
     if (e.role === 'ai') m.innerHTML = e.html;
     else m.textContent = e.text;
     if (e.applied) applied(m);
+    if (e.undone) undone(m);
     log.append(m);
     log.scrollTop = log.scrollHeight;
     return m;
+  };
+  const ids = (list) => (list || '').split(' ').filter(Boolean);
+  const undone = (m) => {
+    const v = m.querySelector('[data-test="view-change"]');
+    if (!v) return;
+    v.querySelector('[data-test="undo"]').hidden = true;
+    v.querySelector('[data-undone]').hidden = false;
   };
   const applied = (m) => {
     const b = m.querySelector('[data-test="apply"]');
@@ -270,6 +276,7 @@ function wireChat() {
     b.children[1].hidden = false;
   };
   state.log.forEach(add);
+  const say = (e) => (state.log.push(e), add(e), save());
   const open = (on) => {
     chat.hidden = !on;
     state.open = on;
@@ -278,17 +285,19 @@ function wireChat() {
   $('#btn-ask')?.addEventListener('click', () => open(chat.hidden));
   chat.querySelector('[data-chat-close]').addEventListener('click', () => open(false));
   chat.hidden = !state.open;
-  const off = (which) => {
-    chat.querySelector(`[data-test="${which}"]`).hidden = false;
+  // Off, the panel says why: its own words, or the server's (an upload it no longer keeps).
+  const off = (which, said) => {
+    Object.assign(chat.querySelector(`[data-test="${which}"]`), { hidden: false }, said ? { textContent: said } : {});
     for (const b of chat.querySelectorAll('.tool, .send, .suggest, textarea')) b.disabled = true;
   };
   if (base === null) return off('no-server');
   fetch(`${base}/api/ai`)
     .then((r) => r.json())
     .then((ai) => {
+      if (!ai.error) document.body.dataset.served = 'true';
       chat.querySelector('[data-test="model"]').textContent = ai.model || '';
       chat.querySelector('.model-name').textContent = ai.model || '';
-      if (!ai.enabled) off('ai-off');
+      if (!ai.enabled) off('ai-off', ai.error);
     })
     .catch(() => off('no-server'));
   // Documentation written again from elsewhere (another tab, the project's files): the page reloads.
@@ -310,30 +319,21 @@ function wireChat() {
     return a;
   };
   const ask = async (path, body, said) => {
-    if (said) {
-      state.log.push({ role: 'user', text: said });
-      add(state.log[state.log.length - 1]);
-    }
+    if (said) say({ role: 'user', text: said });
     busy(true);
     try {
       const a = await post(path, body);
-      const e = { role: 'ai', html: a.html || '' };
-      if (!a.html) {
-        const p = document.createElement('p');
-        p.className = 'answer';
-        p.textContent = a.reply?.answer || '';
-        e.html = p.outerHTML;
-      }
+      const e = { role: 'ai', html: a.html || Object.assign(document.createElement('p'), { className: 'answer', textContent: a.reply?.answer || '' }).outerHTML };
       state.log.push(e);
-      add(e);
+      // A view change hides and shows at once, as the reader's own hiding.
+      const view = add(e).querySelector('[data-test="view-change"]');
+      if (view && typeof setHidden === 'function') setHidden(ids(view.dataset.hide), ids(view.dataset.show));
       if (said) state.history.push({ question: said, answer: a.reply?.answer || '' });
       if (a.version) version = a.version;
       save();
       if (a.regenerated) location.reload();
     } catch (err) {
-      state.log.push({ role: 'error', text: err.message });
-      add(state.log[state.log.length - 1]);
-      save();
+      say({ role: 'error', text: err.message });
     }
     busy(false);
   };
@@ -342,14 +342,14 @@ function wireChat() {
     const q = question.value.trim();
     if (!q) return;
     question.value = '';
-    ask('/api/ask', { question: q, history: state.history, ...(S.selected ? { context: S.selected } : {}) }, q);
+    const refs = context();
+    ask('/api/ask', { question: q, history: state.history, ...(refs.length ? { context: refs } : {}) }, q);
   };
   chat.querySelector('form').addEventListener('submit', (ev) => (ev.preventDefault(), send()));
   question.addEventListener('keydown', (ev) => ev.key === 'Enter' && !ev.shiftKey && (ev.preventDefault(), send()));
   for (const b of chat.querySelectorAll('.suggest')) b.addEventListener('click', () => ((question.value = b.textContent), send()));
   chat.querySelector('[data-test="word-lines"]').addEventListener('click', () => ask('/api/word', S.selected ? { scope: S.selected } : {}, null));
   chat.querySelector('[data-test="explain-terms"]').addEventListener('click', () => ask('/api/glossary', {}, null));
-  chat.querySelector('[data-context-clear]').addEventListener('click', () => context(null, true));
   log.addEventListener('click', async (ev) => {
     const m = ev.target.closest('.msg');
     const review = ev.target.closest('[data-test="review"]');
@@ -359,11 +359,16 @@ function wireChat() {
       review.children[0].hidden = !diff.hidden;
       review.children[1].hidden = diff.hidden;
     }
-    if (ev.target.closest('[data-test="download-patch"]')) {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([m.querySelector('[data-test="diff"]').textContent], { type: 'text/x-diff' }));
-      a.download = 'docair.patch';
-      a.click();
+    if (ev.target.closest('[data-test="download-patch"]')) download(m.querySelector('[data-test="diff"]').textContent, 'docair.patch');
+    const undo = ev.target.closest('[data-test="undo"]');
+    if (undo) {
+      const v = undo.closest('[data-test="view-change"]');
+      setHidden(ids(v.dataset.show), []);
+      setHidden([], ids(v.dataset.hide));
+      undone(m);
+      const k = [...log.querySelectorAll('.msg')].indexOf(m);
+      if (state.log[k]) state.log[k].undone = true;
+      save();
     }
     const apply = ev.target.closest('[data-test="apply"]');
     if (apply && !apply.disabled) {
@@ -377,22 +382,45 @@ function wireChat() {
         save();
         if (a.regenerated) location.reload();
       } catch (err) {
-        state.log.push({ role: 'error', text: err.message });
-        add(state.log[state.log.length - 1]);
-        save();
+        say({ role: 'error', text: err.message });
       }
       busy(false);
     }
   });
+  // Tidy (docs/ADAPTERS.md §6.1): the server shows the patch and tidies the ticked tags, or one, then the page reloads.
+  document.addEventListener('click', async (ev) => {
+    if (ev.target.closest('[data-tidy-open], #btn-tidy')) fetch(`${base}/api/tidy`).then((r) => r.json()).then((t) => Object.assign($('#details [data-test="tidy-diff"]') || {}, { textContent: t.patch || '', hidden: !t.patch })).catch(() => {});
+    if (ev.target.closest('[data-test="tidy-patch"]')) download((await (await fetch(`${base}/api/tidy`)).json()).patch || '', 'docair-tidy.patch');
+    const explain = ev.target.closest('[data-test="explain"]');
+    if (explain) ((explain.disabled = true), post('/api/explain', { a: explain.dataset.a, b: explain.dataset.b || undefined }).then(() => location.reload(), (err) => toast(err.message)));
+    const one = ev.target.closest('[data-tidy-one]');
+    if (!one && !ev.target.closest('[data-test="tidy-apply"]')) return;
+    const tags = (one ? [one] : [...document.querySelectorAll('#details .tidy-tag input:checked')]).map((x) => ({ node: x.dataset.node, tag: x.dataset.tag }));
+    const a = tags.length && (await post('/api/tidy', { tags }).catch((err) => toast(err.message)));
+    if (a?.regenerated) location.reload();
+  });
 }
 
 /** What a question is about: the selected part, until the reader clears it. */
-function context(id, cleared) {
+function context() {
   const c = $('#chat [data-test="context"]');
-  if (!c) return;
-  if (cleared) S.selected = null;
-  c.hidden = !id;
-  c.querySelector('b').textContent = id ? P.names[id] ?? id : '';
+  if (!c) return [];
+  const sel = S.selected ? [[`part:${S.selected}`, P.names[S.selected] ?? S.selected]] : [];
+  const refs = [...sel, ...(S.refs || []).filter(([r]) => r !== sel[0]?.[0])];
+  c.querySelector('.refs').replaceChildren(
+    ...refs.map(([ref, label]) => Object.assign(document.createElement('button'), { className: 'chip-x', type: 'button', textContent: `${label} ×`, title: ref, onclick: () => ((S.refs = (S.refs || []).filter(([r]) => r !== ref)), ref === sel[0]?.[0] && (S.selected = null), context()) })),
+  );
+  c.hidden = !refs.length;
+  return refs.flatMap(([r]) => r.split('\n'));
+}
+
+/** A short note over the picture, for a few seconds. */
+function toast(text) {
+  const t = $('#toast');
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (t.hidden = true), 3500);
 }
 
 /** The part as itself in the picture on screen. */
@@ -543,6 +571,83 @@ async function tokens(st, run) {
   if (W && W.run === run) hops.forEach((h) => (h.classList.remove('cur'), h.classList.add('done')));
 }
 
+/***
+ * Select a line: it stands out, and the details show its two ends and the lines of the graph it stands for, as the CLI wrote them.
+ *
+ * @id      docair-viewer.doc-page.pick-line
+ * @part-of docair-viewer.doc-page
+ ***/
+function pickLine(l) {
+  mark(null);
+  S.selected = null;
+  l.classList.add('sel');
+  const box = $('#details');
+  box.innerHTML = W ? W.steps[W.k].card : '';
+  const head = document.createElement('h2');
+  head.className = 'line-head';
+  [l.dataset.from, l.dataset.to].forEach((id, k) =>
+    head.append(...(k ? [' → '] : []), Object.assign(document.createElement('a'), { className: 'link', href: `#part/${encodeURIComponent(id)}`, title: id, textContent: P.names[id] ?? id })),
+  );
+  const lines = document.createElement('div');
+  lines.className = 'line-edges';
+  lines.dataset.test = 'line-details';
+  lines.innerHTML = l.dataset.edges.split('\n').map((e) => P.lines[e] || '').join('');
+  const ask = Object.assign(document.createElement('a'), { className: 'link ask-about', textContent: IX.words.ask });
+  Object.assign(ask.dataset, { ref: l.dataset.edges.split('\n').map((e) => `edge:${e}`).join('\n'), label: head.textContent, test: 'ask-about' });
+  box.append(head, ask, lines);
+}
+
+/***
+ * Move a part by hand: the lines that touch it are routed again around everything that stays, by docair's own router built to WebAssembly (docair-layout-wasm). A move lasts until the page reloads.
+ *
+ * @id      docair-viewer.doc-page.move-part
+ * @part-of docair-viewer.doc-page
+ ***/
+async function movePart(id, dx, dy, held) {
+  const w = (S.router ||= (await WebAssembly.instantiate(await inflate(IX.router).arrayBuffer())).instance.exports);
+  const p = IX.pictures[S.addr];
+  const i = p.svg ?? (S.tests ? p.on : p.off);
+  S.moved ||= {};
+  const was = (S.moved[i] ||= JSON.parse(await unpack(IX.moves + i)));
+  if (held?.done) return;
+  was.first ||= was.layout;
+  const widths = {};
+  for (const l of S.svg.querySelectorAll('.line')) widths[l.dataset.id] = Number(l.querySelector('.ln').getAttribute('stroke-width'));
+  const ask = new TextEncoder().encode(JSON.stringify({ input: was.input, layout: was.layout, part: id, dx, dy, widths }));
+  const at = w.alloc(ask.length);
+  new Uint8Array(w.memory.buffer, at, ask.length).set(ask);
+  const res = w.move_part_json(at, ask.length);
+  const [ptr, len] = [Number(res >> 32n), Number(res & 0xffffffffn)];
+  const answer = JSON.parse(new TextDecoder().decode(new Uint8Array(w.memory.buffer, ptr, len)));
+  w.free(ptr, len);
+  if (answer.error) return held || toast(answer.error);
+  if (!held) was.layout = answer.layout;
+  // In place: a part moves; a box takes its new place and size, its name and mark follow its top; lines are drawn anew.
+  const shift = (g, x, y) => {
+    if (!g) return;
+    g.dataset.t ??= g.getAttribute('transform') || '';
+    g.setAttribute('transform', `translate(${x} ${y}) ${g.dataset.t}`);
+  };
+  for (const m of answer.parts) {
+    const g = S.svg.querySelector(`[data-id="${esc(m.id)}"]`);
+    const o = was.first.placement.parts[m.part];
+    if (!g || !o || held?.along.some(([x]) => x === g)) continue;
+    if (!g.classList.contains('box')) {
+      shift(g, m.at.x - o.x, m.at.y - o.y);
+      continue;
+    }
+    for (const r of g.querySelectorAll(':scope > rect')) for (const [k, v] of Object.entries({ x: m.at.x - m.at.w / 2, y: m.at.y - m.at.h / 2, width: m.at.w, height: m.at.h })) r.setAttribute(k, v);
+    shift(g.querySelector('.bn'), m.at.x - o.x, m.at.y - m.at.h / 2 - (o.y - o.h / 2));
+    shift(g.querySelector('.tf-mark'), m.at.x - m.at.w / 2 - (o.x - o.w / 2), m.at.y - m.at.h / 2 - (o.y - o.h / 2));
+  }
+  for (const l of answer.lines) {
+    const g = S.svg.querySelector(`.line[data-id="${l.id}"]`);
+    if (g && l.drawn) g.querySelector('.ln').setAttribute('d', l.drawn.d), g.querySelector('.ah').setAttribute('d', l.drawn.arrow);
+    const o = was.first.words[l.line];
+    if (l.words && o && !held) shift(S.svg.querySelector(`.words[data-line="${l.id}"]`), l.words.x - o.x, l.words.y - o.y);
+  }
+}
+
 /** Mark a part in the picture, and the lines that touch it. */
 function mark(id) {
   if (!S.svg) return null;
@@ -571,10 +676,12 @@ function look(cx, cy, scale) {
 /** The whole picture, in the middle of the canvas. */
 function fit() {
   look(S.full.x + S.full.w / 2, S.full.y + S.full.h / 2, fitScale());
+  S.fitted = true;
 }
 
 function setView(v) {
   S.view = v;
+  S.fitted = false;
   S.svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
 }
 
@@ -642,6 +749,14 @@ function hideLinks() {
 
 /** Hide parts and show others; a part inside a hidden section comes back with only itself in it. */
 function setHidden(hide, show) {
+  hideShow(hide, show);
+  remember();
+  applyHidden();
+  if (S.selected) mark(hiddenPart(S.selected) ? null : S.selected);
+}
+
+/** Hide parts and show others in S.hidden: a part shown inside a hidden section brings that section back with only it. */
+function hideShow(hide, show) {
   for (const id of hide) S.hidden.add(id);
   const kids = new Map();
   for (const [id, p] of Object.entries(P.parents)) kids.set(p, [...(kids.get(p) || []), id]);
@@ -656,27 +771,32 @@ function setHidden(hide, show) {
       for (const sib of kids.get(path[j]) || []) if (sib !== path[j + 1]) S.hidden.add(sib);
     }
   }
-  remember();
-  applyHidden();
-  if (S.selected) mark(hiddenPart(S.selected) ? null : S.selected);
 }
 
 const viewKey = () => `docair:page:${IX.system}`;
-function remember() {
+/** JSON in the browser's storage; where that throws (a sandboxed frame), window.name keeps it across reloads. */
+function stored(store, key, value) {
   try {
-    localStorage.setItem(viewKey(), JSON.stringify({ hidden: [...S.hidden], tests: S.tests }));
+    if (value === undefined) return JSON.parse(window[store].getItem(key) || 'null');
+    window[store].setItem(key, JSON.stringify(value));
   } catch (_) {
-    /* not remembered, still applied */
+    let all = {};
+    try {
+      all = JSON.parse(window.name || '{}');
+    } catch (_e) {
+      /* a name of its own: replaced */
+    }
+    if (value === undefined) return all[key] ?? null;
+    window.name = JSON.stringify({ ...all, [key]: value });
   }
 }
+const remember = () => stored('localStorage', viewKey(), { hidden: [...S.hidden], tests: S.tests });
 function recall() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(viewKey()) || 'null');
-    if (Array.isArray(saved?.hidden)) S.hidden = new Set(saved.hidden.filter((id) => id in P.names));
-    if (typeof saved?.tests === 'boolean') S.tests = saved.tests;
-  } catch (_) {
-    /* storage can be blocked; the defaults stand */
-  }
+  // What docair.toml [view] hides starts hidden (docair-702.13); the chips show it again.
+  hideShow((IX.view?.hide || []).filter((id) => id in P.names), (IX.view?.show || []).filter((id) => id in P.names));
+  const saved = stored('localStorage', viewKey());
+  if (Array.isArray(saved?.hidden)) S.hidden = new Set(saved.hidden.filter((id) => id in P.names));
+  if (typeof saved?.tests === 'boolean') S.tests = saved.tests;
 }
 
 /** Show the tests or leave them out: the pictures as the CLI drew them with tests, or without. */
@@ -716,11 +836,13 @@ function search() {
 /** The tip of a part, or of a line: the lines of the graph it stands for, the first 8 of them. */
 function tip(ev) {
   const t = $('#tip');
+  // Over a datum in a line's words, the datum's popup shows instead.
+  if (ev.target.closest?.('#pic [data-data]')) return (t.hidden = true);
   const words = ev.target.closest?.('#pic .words');
   const g = words ? S.svg.querySelector(`.line[data-id="${words.dataset.line}"]`) : ev.target.closest?.('#pic .part, #pic .box, #pic .line');
   if (!g || !P) return (t.hidden = true);
   if (g.classList.contains('line')) {
-    const edges = g.dataset.edges.split(' ').map(Number);
+    const edges = g.dataset.edges.split('\n');
     t.innerHTML = edges.slice(0, 8).map((i) => P.lines[i]).join('') + (edges.length > 8 ? `<div>${IX.words.more.replace('{n}', edges.length - 8)}</div>` : '');
   } else t.innerHTML = P.tips[g.dataset.id] || '';
   const r = $('#graph').getBoundingClientRect();
@@ -756,34 +878,51 @@ function wire() {
   }, { passive: false });
   let drag = null;
   pic.addEventListener('pointerdown', (ev) => {
-    if (S.svg && ev.button === 0) drag = { x: ev.clientX, y: ev.clientY, view: S.view, moved: false };
+    if (!S.svg || ev.button !== 0) return;
+    // A part or a box is moved by hand, with what it holds; anywhere else the picture pans.
+    const g = !IX.pictures[S.addr]?.still && ev.target.closest?.('#pic .part, #pic .box');
+    const id = g?.dataset.id;
+    const along = g ? [...S.svg.querySelectorAll('.part, .box')].filter((x) => { for (let c = x.dataset.id; c; c = P.parents[c]) if (c === id) return true; return false; }) : [];
+    drag = { x: ev.clientX, y: ev.clientY, view: S.view, moved: false, id, along: along.map((x) => [x, x.getAttribute('transform') || '']) };
   });
   window.addEventListener('pointermove', (ev) => {
     if (!drag) return tip(ev);
-    const dx = ev.clientX - drag.x;
-    const dy = ev.clientY - drag.y;
+    const [dx, dy] = [ev.clientX - drag.x, ev.clientY - drag.y];
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;
     drag.moved = true;
     $('#tip').hidden = true;
     S.svg.classList.add('panning');
     const r = S.svg.getBoundingClientRect();
     const u = Math.max(S.view.w / r.width, S.view.h / r.height);
-    setView({ ...drag.view, x: drag.view.x - dx * u, y: drag.view.y - dy * u });
+    [drag.dx, drag.dy] = [dx * u, dy * u];
+    if (drag.id) for (const [x, t] of drag.along) x.setAttribute('transform', `translate(${drag.dx} ${drag.dy}) ${t}`);
+    else setView({ ...drag.view, x: drag.view.x - dx * u, y: drag.view.y - dy * u });
+    // While held, its lines are routed again each time it has moved a whole track (8 px); their words wait until it is put down.
+    const track = `${Math.round(drag.dx / 8)} ${Math.round(drag.dy / 8)}`;
+    if (drag.id && track !== drag.track) (drag.track = track), movePart(drag.id, drag.dx, drag.dy, drag);
   });
   window.addEventListener('pointerup', (ev) => {
     const was = drag;
     drag = null;
     S.svg?.classList.remove('panning');
+    if (was?.moved && was.id) {
+      was.done = true;
+      for (const [x, t] of was.along) x.setAttribute('transform', t);
+      return movePart(was.id, was.dx, was.dy);
+    }
     if (!was || was.moved) return;
     const g = ev.target.closest?.('#pic .part, #pic .box');
-    if (!g) return;
+    if (!g) {
+      // A line, or its words (not a datum in them): the line is selected.
+      const w = ev.target.closest?.('#pic .words');
+      const l = w ? S.svg.querySelector(`.line[data-id="${w.dataset.line}"]`) : ev.target.closest?.('#pic .line');
+      if (l && !ev.target.closest('#pic [data-data]')) pickLine(l);
+      return;
+    }
+    // A box, open or closed, opens its section: what it holds, and only that; in its own section it is selected.
     const id = g.dataset.id;
-    if (g.classList.contains('closed') && IX.pictures[`box/${id}`]) go(`box/${id}`);
+    if (IX.pictures[`box/${id}`] && S.addr !== `box/${id}`) go(`box/${id}`);
     else select(id, false);
-  });
-  pic.addEventListener('dblclick', (ev) => {
-    const g = ev.target.closest('.box');
-    if (g && IX.pictures[`box/${g.dataset.id}`] && S.addr !== `box/${g.dataset.id}`) go(`box/${g.dataset.id}`);
   });
   $('#tree-list').addEventListener('click', (ev) => {
     const li = ev.target.closest('li');
@@ -834,6 +973,12 @@ function wire() {
     if (W && (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft')) goStep(W.k + (ev.key === 'ArrowRight' ? 1 : -1));
   });
   window.addEventListener('hashchange', () => show(addressOf(location.hash)));
+  // When the canvas changes size, as when the chat opens, a fitted picture fits again; else it keeps its middle and scale.
+  let box = null;
+  new ResizeObserver(([e]) => {
+    if (S.view && box?.width) S.fitted ? fit() : look(S.view.x + S.view.w / 2, S.view.y + S.view.h / 2, box.width / S.view.w);
+    box = e.contentRect;
+  }).observe($('#pic'));
 }
 
 unpack(IX.panels)

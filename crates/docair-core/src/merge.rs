@@ -102,6 +102,7 @@ fn hints_of(s: &Symbol) -> Hints {
         parent_line: s.parent_line,
         declares_file: s.declares_file.clone(),
         signature: s.signature.clone(),
+        end: s.end,
     }
 }
 

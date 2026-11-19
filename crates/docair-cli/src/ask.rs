@@ -333,6 +333,7 @@ pub fn cmd_apply(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<Exi
         graph,
         save: false,
         untrusted: false,
+        changes: None,
     };
     s.apply(&pending)?;
     std::fs::remove_file(s.out.join("pending.json")).ok();

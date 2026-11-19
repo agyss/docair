@@ -19,9 +19,12 @@ anyhow.workspace = true
 base64.workspace = true
 docair-core.workspace = true
 docair-layout = { workspace = true, features = ["serde"] }
+# The router built to WebAssembly, for moving a part by hand in the page (docair-9qv).
+docair-layout-wasm.workspace = true
 miniz_oxide.workspace = true
 pulldown-cmark = { workspace = true, features = ["html"] }
-serde_json.workspace = true
+# float_roundtrip: a layout kept on disk reads back to the very numbers it was written with (docs/LIBRARIES.md).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [dev-dependencies]
 # The e2e fixtures' graphs, for the golden pictures (tests/svg.rs).

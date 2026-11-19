@@ -62,3 +62,112 @@ mod tests {
         assert!(!is_valid_id("topic:order.created"));
     }
 }
+
+/***
+ * Give every line of the graph its id: `<from> -<kind>-> <to>`, with ` "<label>"` when two lines share that, and `#2`, `#3` only for true twins, in the graph's order (docair-svh).
+ *
+ * The id says what the line is, not where it stands, so it is the same after a scan that changed something else.
+ ***/
+pub fn edge_ids(edges: &mut [crate::model::Edge]) {
+    use std::collections::HashMap;
+    let kind = |e: &crate::model::Edge| {
+        serde_json::to_value(e.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default()
+    };
+    let base: Vec<String> = edges
+        .iter()
+        .map(|e| format!("{} -{}-> {}", e.from, kind(e), e.to))
+        .collect();
+    let mut shared: HashMap<&str, usize> = HashMap::new();
+    for b in &base {
+        *shared.entry(b.as_str()).or_default() += 1;
+    }
+    let named: Vec<String> = edges
+        .iter()
+        .zip(&base)
+        .map(|(e, b)| match (&e.label, shared[b.as_str()] > 1) {
+            (Some(l), true) => format!("{b} \"{l}\""),
+            _ => b.clone(),
+        })
+        .collect();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for (e, id) in edges.iter_mut().zip(named) {
+        let n = seen.entry(id.clone()).or_default();
+        *n += 1;
+        e.id = if *n == 1 { id } else { format!("{id} #{n}") };
+    }
+}
+
+/// What an id names on the page: a part or datum, a line, a walk's step, a diagnostic, a glossary term.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdTarget<'g> {
+    Part(&'g crate::model::Node),
+    /// A line, with its index in `Graph::edges`.
+    Line(usize, &'g crate::model::Edge),
+    /// The n-th step (1-based) of the walk a seed starts: `flow:checkout/2`, `data.order/1`.
+    Step(&'g str, usize),
+    Diagnostic(&'g crate::model::Diagnostic),
+    Term(&'g crate::model::Term),
+}
+
+/***
+ * Find what an id names, for the CLI, the server and the page alike: a node id, a line's id, `<walk seed>/<n>` for a step, `<code>@<node>` (and `#2` …) for a diagnostic, `term:<id>` for a glossary entry.
+ *
+ * @id docair-core.ids.find
+ ***/
+pub fn find<'g>(graph: &'g crate::model::Graph, id: &'g str) -> Option<IdTarget<'g>> {
+    if let Some(n) = graph.nodes.iter().find(|n| n.id == id) {
+        return Some(IdTarget::Part(n));
+    }
+    if let Some((i, e)) = graph.edges.iter().enumerate().find(|(_, e)| e.id == id) {
+        return Some(IdTarget::Line(i, e));
+    }
+    if let Some(t) = id.strip_prefix("term:") {
+        return graph
+            .glossary
+            .iter()
+            .find(|x| x.id == t)
+            .map(IdTarget::Term);
+    }
+    if let Some((code, rest)) = id.split_once('@')
+        && code.len() == 4
+        && code.starts_with(['E', 'W'])
+    {
+        let (node, nth) = match rest.rsplit_once(" #") {
+            Some((n, k)) => (n, k.parse::<usize>().ok()?),
+            None => (rest, 1),
+        };
+        return graph
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == code && d.node.as_deref() == Some(node))
+            .nth(nth - 1)
+            .map(IdTarget::Diagnostic);
+    }
+    if let Some((seed, n)) = id.rsplit_once('/')
+        && let Ok(n) = n.parse::<usize>()
+        && n >= 1
+        && crate::slice::find(graph, seed).is_some()
+    {
+        return Some(IdTarget::Step(seed, n));
+    }
+    None
+}
+
+/// A diagnostic's id: `<code>@<node>`, and `#2`, `#3` for more of the same code on that node.
+pub fn diagnostic_id(graph: &crate::model::Graph, index: usize) -> Option<String> {
+    let d = graph.diagnostics.get(index)?;
+    let node = d.node.as_deref()?;
+    let nth = graph.diagnostics[..index]
+        .iter()
+        .filter(|x| x.code == d.code && x.node.as_deref() == Some(node))
+        .count()
+        + 1;
+    Some(if nth == 1 {
+        format!("{}@{node}", d.code)
+    } else {
+        format!("{}@{node} #{nth}", d.code)
+    })
+}

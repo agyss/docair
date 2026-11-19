@@ -1,5 +1,5 @@
 {{/***
- * ConfigMap docair-server: the server's settings, handed to its pods as environment variables: upload limits, and the AI endpoint and model.
+ * ConfigMap docair-server: the server's settings, handed to its pods as environment variables: upload limits, the name that finds the other server pods, and the AI endpoint and model.
  *
  * @id      k8s.cm.docair-server
  * @kind    config
@@ -14,6 +14,7 @@ metadata:
 data:
   DOCAIR_MAX_UPLOAD_MB: {{ .Values.server.maxUploadMb | quote }}
   DOCAIR_MAX_FILES: {{ .Values.server.maxFiles | quote }}
+  DOCAIR_PEERS: "docair-server-peers:8080"
   {{- with .Values.ai.endpoint }}
   DOCAIR_AI_ENDPOINT: {{ . | quote }}
   {{- end }}

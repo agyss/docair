@@ -71,6 +71,43 @@ paths:
       responses:
         '200': {description: A ServeAnswer, or for api/apply a ServeApplied.}
         '404': {description: The upload is no longer kept.}
+  /api/explain:
+    post:
+      operationId: explain
+      summary: Explain what the served project changes since commit a (or between a and b); the findings are stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [a]
+              properties:
+                a: {type: string}
+                b: {type: string}
+      responses:
+        '200': {description: "ChangeFindings: schema docair.explained/0, a, b, links, flows, problems, left, requests."}
+        '409': {description: The project has no git history (an upload).}
+        '503': {description: AI is off.}
+  /api/tidy:
+    get:
+      operationId: tidy_list
+      summary: The tags the code repeats in the served project, and the patch that removes them.
+      responses:
+        '200': {description: "{ tags: [{ node, tag, line, code_says, code_file, code_line, reason }], patch }"}
+    post:
+      operationId: tidy_apply
+      summary: Remove the picked repeated tags (all when none are named) and write the documentation again.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: object, properties: {node: {type: string}, tag: {type: string}}}}
+      responses:
+        '200': {description: A ServeApplied.}
+        '409': {description: No tag repeats the code.}
   /api/scan:
     post:
       operationId: scan_upload
@@ -219,7 +256,12 @@ components:
         question: {type: string}
         graph: {type: [object, 'null']}
         history: {type: array, items: {type: object}}
-        context: {type: [string, 'null']}
+        context:
+          description: "What the question points at: one part's id, or typed refs: part:<id>, data:<id>, term:<word>, line:<k>@<address>, edges:<i>,<j>. Refs that name nothing are left out and named in the reply's problems."
+          oneOf:
+            - {type: string}
+            - {type: array, items: {type: string}}
+            - {type: 'null'}
     WordRequest:
       type: object
       properties:

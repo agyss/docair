@@ -1103,7 +1103,7 @@ fn data_slice<'g>(ix: &Index<'g>, id: &str) -> Option<Builder> {
     let mut b = Builder::new();
     let how = |i: usize| -> Option<CarryHow> {
         (there(i) || back(i)).then(|| {
-            if edges[i].from_code || edges[i].from_api.is_some() {
+            if edges[i].evidence.is_some() {
                 CarryHow::Typed
             } else {
                 CarryHow::Named

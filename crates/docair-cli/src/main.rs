@@ -9,7 +9,9 @@ use docair_core::model::{Graph, Severity};
 use docair_core::{Options, scan};
 
 mod ask;
+mod diff;
 mod serve;
+mod tidy;
 
 #[derive(Parser)]
 #[command(
@@ -24,8 +26,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run all stages; write docair.graph.json and docair.html.
-    Scan {
+    /// Build the documentation, on demand: run all stages, write docair.graph.json and docair.html.
+    #[command(visible_alias = "scan")]
+    Build {
         /// Project root.
         #[arg(default_value = ".")]
         root: PathBuf,
@@ -35,6 +38,53 @@ enum Command {
         /// Report unresolved refs as warnings.
         #[arg(long)]
         lenient: bool,
+        /// Add a changes section: what the working tree changes since this commit (docs/CHANGES.md).
+        #[arg(long, value_name = "A")]
+        changes: Option<String>,
+    },
+    /// What two commits change in the system's flows (docs/CHANGES.md); without B, the working tree is B.
+    Diff {
+        /// The commit to compare from.
+        a: String,
+        /// The commit to compare to [default: the working tree].
+        b: Option<String>,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        /// Output directory for changes.json [default: <root>/.docair].
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        lenient: bool,
+        /// Print the changes as JSON instead of the summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// What two commits change, explained by the AI (docs/EXPLAIN.md): kept in [explain] store, a pull request comment on stdout.
+    Explain {
+        /// The commit to compare from.
+        a: String,
+        /// The commit to compare to [default: the working tree].
+        b: Option<String>,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long)]
+        lenient: bool,
+        /// Print the findings as JSON instead of the comment.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the hand-written tags that only repeat what the code says: list them, write the patch, `--apply` to write them.
+    Tidy {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+        /// Output directory for docair.patch [default: <root>/.docair].
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        lenient: bool,
+        /// Write the edits into the files.
+        #[arg(long)]
+        apply: bool,
     },
     /// Run stages 1–6 and print diagnostics; exits non-zero on errors.
     Check {
@@ -191,6 +241,9 @@ enum Command {
         /// Serve the built web app from this folder at /app/.
         #[arg(long)]
         app: Option<PathBuf>,
+        /// Add a changes section: what the working tree changes since this commit, written again with each change.
+        #[arg(long, value_name = "A")]
+        changes: Option<String>,
     },
     /// Show the AI settings and where the key comes from.
     Ai {
@@ -210,7 +263,6 @@ enum Command {
  * @calls docair-cli.ask.cmd_ask "handles a one-shot question"
  * @calls docair-cli.ask.cmd_chat "starts a terminal conversation"
  * @calls docair-cli.ask.cmd_apply "writes the last reply's edits"
- * @calls docair-cli.ask.cmd_word
  * @calls docair-cli.ask.cmd_glossary "labels the silent lines with the model"
  * @calls docair-cli.ask.cmd_ai "shows the model settings"
  * @calls docair-cli.cmd_slice "prints a slice"
@@ -220,7 +272,33 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Scan { root, out, lenient } => cmd_scan(&root, out, lenient),
+        Command::Build {
+            root,
+            out,
+            lenient,
+            changes,
+        } => cmd_scan(&root, out, lenient, changes.as_deref()),
+        Command::Tidy {
+            root,
+            out,
+            lenient,
+            apply,
+        } => tidy::cmd_tidy(&root, out, lenient, apply),
+        Command::Diff {
+            a,
+            b,
+            root,
+            out,
+            lenient,
+            json,
+        } => diff::cmd_diff(&root, &a, b.as_deref(), out, lenient, json),
+        Command::Explain {
+            a,
+            b,
+            root,
+            lenient,
+            json,
+        } => diff::cmd_explain(&root, &a, b.as_deref(), lenient, json),
         Command::Check {
             root,
             lenient,
@@ -291,7 +369,8 @@ fn main() -> ExitCode {
             lenient,
             bind,
             app,
-        } => serve::cmd_serve(&root, out, lenient, &bind, app),
+            changes,
+        } => serve::cmd_serve(&root, out, lenient, &bind, app, changes),
         Command::Ai { root, check } => ask::cmd_ai(&root, check),
     };
     match result {
@@ -310,23 +389,56 @@ fn main() -> ExitCode {
  * @calls docair-core.scan "builds the graph of the project"
  * @calls docair-core.emit.write_json "saves the graph for other tools"
  * @calls docair-viewer.write_html "renders the viewer page"
+ * @calls docair-server.commits.compare "with --changes: compares the working tree with a commit"
+ * @calls docair-server.commits.changes_page "with --changes: the page with its changes section"
  * @calls docair-cli.print_diagnostics "reports each diagnostic with its location"
  ***/
-fn cmd_scan(root: &Path, out: Option<PathBuf>, lenient: bool) -> Result<ExitCode> {
-    let graph = scan(
-        root,
-        docair_adapters::all(),
-        &Options {
-            lenient,
-            ..Options::default()
-        },
-    )?;
+fn cmd_scan(
+    root: &Path,
+    out: Option<PathBuf>,
+    lenient: bool,
+    changes: Option<&str>,
+) -> Result<ExitCode> {
     let out = out.unwrap_or_else(|| root.join(".docair"));
     let json = out.join("docair.graph.json");
     let html = out.join("docair.html");
-    docair_core::emit::write_json(&graph, &json)?;
-    docair_viewer::write_html(&graph, &html)?;
+    let graph = match changes {
+        None => {
+            let graph = scan(
+                root,
+                docair_adapters::all(),
+                &Options {
+                    lenient,
+                    ..Options::default()
+                },
+            )?;
+            docair_core::emit::write_json(&graph, &json)?;
+            docair_viewer::write_html(&graph, &html)?;
+            graph
+        }
+        Some(a) => {
+            // The working tree compared with commit A: the page gets a changes section, with the
+            // findings `docair explain` stored for this pair, when there are any.
+            let pair = docair_server::commits::compare(root, a, None, lenient)?;
+            let page = docair_server::commits::changes_page(&pair);
+            std::fs::create_dir_all(&out)?;
+            docair_core::emit::write_json(&pair.b, &json)?;
+            std::fs::write(&html, page)?;
+            std::fs::write(
+                out.join("changes.json"),
+                serde_json::to_string_pretty(&pair.changes)? + "\n",
+            )?;
+            println!(
+                "docair: {} changed flows since {a} in the page's changes section",
+                pair.changes.flows.len()
+            );
+            pair.b
+        }
+    };
     print_diagnostics(&graph);
+    if let Some(h) = tidy::hint(&graph) {
+        println!("{h}");
+    }
     println!(
         "docair: {} nodes, {} edges, {} flows → {} and {}",
         graph.nodes.len(),
@@ -357,6 +469,9 @@ fn cmd_check(root: &Path, lenient: bool, coverage: bool) -> Result<ExitCode> {
     print_diagnostics(&graph);
     if coverage {
         print_coverage(&graph);
+    }
+    if let Some(h) = tidy::hint(&graph) {
+        println!("{h}");
     }
     let (errors, warnings) = counts(&graph);
     println!(
@@ -452,7 +567,8 @@ fn cmd_slice(
         let picture = docair_core::layer_view::slice_picture(&graph, &slice);
         let font = docair_layout::Monospace::default();
         let input = docair_viewer::layout_input::input(&graph, &picture, &font);
-        let laid = docair_layout::lay_out(&input, &docair_layout::Options::default());
+        let laid =
+            docair_layout::lay_out(&input, &docair_viewer::layout_input::options_for(&picture));
         let out = serde_json::json!({
             "slice": slice, "picture": picture, "input": input, "layout": laid.placement, "routes": laid.routes
         });
@@ -506,7 +622,8 @@ fn cmd_layer(
         if layout {
             let font = docair_layout::Monospace::default();
             let input = docair_viewer::layout_input::input(graph, &p, &font);
-            let laid = docair_layout::lay_out(&input, &docair_layout::Options::default());
+            let laid =
+                docair_layout::lay_out(&input, &docair_viewer::layout_input::options_for(&p));
             serde_json::json!({ "picture": p, "input": input, "layout": laid.placement, "routes": laid.routes })
         } else {
             serde_json::to_value(p).unwrap_or_default()
@@ -630,7 +747,7 @@ fn print_measures(graph: &Graph, keep: Option<&Path>) -> Result<()> {
                 kept += usize::from(was_kept);
                 laid
             }
-            None => docair_layout::lay_out(&input, &docair_layout::Options::default()),
+            None => docair_layout::lay_out(&input, &docair_viewer::layout_input::options_for(p)),
         };
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let placed = &laid.placement;

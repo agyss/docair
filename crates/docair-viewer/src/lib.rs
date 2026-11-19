@@ -39,6 +39,14 @@ mod page_walks;
  * The AI in the page: the panel to ask in, which the CLI writes, and each reply as HTML, written by docair serve.
  ***/
 pub mod page_ai;
+/***
+ * Tidy in the page, written by the CLI: the header's button with the count of tags the code repeats, the banner, the panel that lists them, and their marks in the Tags tab.
+ ***/
+mod page_tidy;
+/***
+ * What changed between two versions, in the page, written by the CLI: the list of changed flows, and each flow's slice before and after, side by side.
+ ***/
+mod page_changes;
 
 /// The page's stylesheet: its colours, light and dark, and its panels.
 const CSS: &str = include_str!("../assets/viewer.css");

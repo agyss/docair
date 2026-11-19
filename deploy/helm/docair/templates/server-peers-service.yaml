@@ -1,0 +1,26 @@
+{{/***
+ * Service docair-server-peers: a headless name for the server pods, so each pod finds the others.
+ *
+ * Without a cluster IP, the name resolves to every ready server pod's own
+ * IP. A pod forwards a request for an upload another pod keeps only to an
+ * address this name resolves to (docs/SLICES.md §8).
+ *
+ * @id      k8s.svc.docair-server-peers
+ * @kind    endpoint
+ * @part-of k8s.release.docair
+ * @calls   docair-server.kept_upload (HTTP from pod to pod, port 8080)
+ ***/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: docair-server-peers
+  labels:
+    {{- include "docair.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "docair.selector" "docair-server" | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

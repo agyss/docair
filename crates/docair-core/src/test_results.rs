@@ -148,6 +148,7 @@ mod tests {
             source: Some(SourceRef {
                 file: file.into(),
                 line: 1,
+                end: None,
             }),
             symbol: None,
             http: None,

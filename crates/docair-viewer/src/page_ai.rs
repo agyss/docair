@@ -32,7 +32,7 @@ pub(crate) fn panel() -> String {
         })
         .collect();
     format!(
-        r#"<aside id="chat" class="chat" data-test="chat" hidden><header class="chat-head"><span class="title">✦ Ask docair</span><span class="model" data-test="model"></span><button class="icon" type="button" data-chat-close title="Close the conversation" aria-label="Close">×</button></header><div class="log" data-test="log"><div class="intro"><p>Ask how something works, say what you don't care about, or tell docair what is wrong or missing. Follow-up questions keep the context.</p>{suggestions}</div></div><div class="msg ai typing" data-test="typing" hidden><span class="dot"></span><span class="dot"></span><span class="dot"></span> <span class="model-name"></span> is thinking</div><p class="chat-off" data-test="ai-off" hidden>The AI is off: docair serve has no model to ask (<code>docair ai</code> shows the settings).</p><p class="chat-off" data-test="no-server" hidden>The AI needs docair serve: run <code>docair serve</code> in the project and open the page it serves. Everything else works without it.</p><div class="tools"><button class="tool" type="button" data-test="word-lines" title="The model writes a few words on each line that says nothing yet; apply them to write them into the code">✦ Word the lines</button><button class="tool" type="button" data-test="explain-terms" title="The model explains the words of these docs that the glossary does not explain yet; apply them to keep them">✦ Explain the terms</button></div><form class="compose"><div class="context" data-test="context" hidden>about <b></b> <button class="icon" type="button" data-context-clear title="Ask without this context" aria-label="Clear context">×</button></div><div class="input-row"><textarea rows="2" maxlength="500" placeholder="Ask, or tell docair what to change…" aria-label="Message" data-test="question"></textarea><button class="button primary send" type="submit" data-test="send" aria-label="Send">➤</button></div></form></aside>"#
+        r#"<aside id="chat" class="chat" data-test="chat" hidden><header class="chat-head"><span class="title">✦ Ask docair</span><span class="model" data-test="model"></span><button class="icon" type="button" data-chat-close title="Close the conversation" aria-label="Close">×</button></header><div class="log" data-test="log"><div class="intro"><p>Ask how something works, say what you don't care about, or tell docair what is wrong or missing. Follow-up questions keep the context.</p>{suggestions}</div></div><div class="msg ai typing" data-test="typing" hidden><span class="dot"></span><span class="dot"></span><span class="dot"></span> <span class="model-name"></span> is thinking</div><p class="chat-off" data-test="ai-off" hidden>The AI is off: docair serve has no model to ask (<code>docair ai</code> shows the settings).</p><p class="chat-off" data-test="no-server" hidden>The AI needs docair serve: run <code>docair serve</code> in the project and open the page it serves. Everything else works without it.</p><div class="tools"><button class="tool" type="button" data-test="word-lines" title="The model writes a few words on each line that says nothing yet; apply them to write them into the code">✦ Word the lines</button><button class="tool" type="button" data-test="explain-terms" title="The model explains the words of these docs that the glossary does not explain yet; apply them to keep them">✦ Explain the terms</button></div><form class="compose"><div class="context" data-test="context" hidden>about <span class="refs"></span></div><div class="input-row"><textarea rows="2" maxlength="500" placeholder="Ask, or tell docair what to change…" aria-label="Message" data-test="question"></textarea><button class="button primary send" type="submit" data-test="send" aria-label="Send">➤</button></div></form></aside>"#
     )
 }
 
@@ -139,25 +139,25 @@ pub fn reply_html(reply: &Value, patch: &str, pending: usize) -> String {
         }
         out.push_str("</div>");
     }
+    // A view change hides and shows in the page at once, as the reader's own hiding, with Undo (docair-702.12).
     if let Some(v) = reply.get("view").filter(|v| v.is_object()) {
-        let names = |key: &str| {
+        let ids = |key: &str| {
             list(v, key)
                 .iter()
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
-                .join(", ")
         };
-        let (hide, show) = (names("hide"), names("show"));
+        let (hide, show) = (ids("hide"), ids("show"));
         let said = [
             if hide.is_empty() {
                 String::new()
             } else {
-                format!("Hide {hide}")
+                format!("hid {}", hide.join(", "))
             },
             if show.is_empty() {
                 String::new()
             } else {
-                format!("show {show}")
+                format!("showed {}", show.join(", "))
             },
         ]
         .into_iter()
@@ -165,9 +165,12 @@ pub fn reply_html(reply: &Value, patch: &str, pending: usize) -> String {
         .collect::<Vec<_>>()
         .join("; ");
         if !said.is_empty() {
+            let said = format!("{}{}.", said[..1].to_uppercase(), &said[1..]);
             let _ = write!(
                 out,
-                r#"<div class="part view" data-test="view-change"><span>{}: written into docair.toml when applied.</span></div>"#,
+                r#"<div class="part view" data-test="view-change" data-hide="{}" data-show="{}"><span>{}</span> <button class="link" type="button" data-test="undo">Undo</button><span class="muted" data-undone hidden>undone</span></div>"#,
+                escape_text(&hide.join(" ")),
+                escape_text(&show.join(" ")),
                 escape_text(&said)
             );
         }
@@ -277,6 +280,17 @@ mod tests {
         assert!(
             !reply_html(&json!({ "answer": "<b>no</b>" }), "", 0).contains("<b>"),
             "the answer is text"
+        );
+        let hid = reply_html(
+            &json!({ "answer": "Hidden.", "view": { "hide": ["infra"], "show": [] } }),
+            "",
+            0,
+        );
+        assert!(
+            hid.contains(r#"data-hide="infra""#)
+                && hid.contains("Hid infra.")
+                && hid.contains(r#"data-test="undo""#),
+            "{hid}"
         );
     }
 }

@@ -6,6 +6,7 @@
  * @http    POST /api/orders
  * @writes  orders-db (Order)
  * @flow    checkout 3 "the API stores the order"
+ * @flow    keep 2 "the API takes the order"
  ***/
 pub fn create_order() {}
 

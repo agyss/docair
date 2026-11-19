@@ -39,7 +39,7 @@ test.describe('tests in the docs', () => {
    * The details of a part list the tests that cover it, with their results.
    *
    * @part-of e2e.tests
-   * @covers  docair-viewer.page_panels.look.details "checks the details list covering tests"
+   * @covers  docair-viewer.page_panels.panel-graph.details "checks the details list covering tests"
    ***/
   test('a part lists the tests that cover it', async ({ page }) => {
     await openStatic(page, 'shop');

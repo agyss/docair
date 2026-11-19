@@ -12,7 +12,8 @@
       "part_of": "k8s.release.shop",
       "source": {
         "file": "charts/shop/templates/deployments.yaml",
-        "line": 1
+        "line": 1,
+        "end": 1
       },
       "symbol": "Deployment api",
       "docs": [],
@@ -43,7 +44,8 @@
       "part_of": "k8s.release.shop",
       "source": {
         "file": "charts/shop/templates/deployments.yaml",
-        "line": 18
+        "line": 18,
+        "end": 18
       },
       "symbol": "Deployment web",
       "docs": [],
@@ -74,7 +76,8 @@
       "part_of": "k8s.release.shop",
       "source": {
         "file": "charts/shop/templates/ingress.yaml",
-        "line": 1
+        "line": 1,
+        "end": 1
       },
       "symbol": "Ingress shop",
       "docs": [],
@@ -126,7 +129,8 @@
       "part_of": "k8s.release.shop",
       "source": {
         "file": "charts/shop/templates/services.yaml",
-        "line": 1
+        "line": 1,
+        "end": 1
       },
       "symbol": "Service api",
       "docs": [],
@@ -164,7 +168,8 @@
       "part_of": "k8s.release.shop",
       "source": {
         "file": "charts/shop/templates/services.yaml",
-        "line": 12
+        "line": 12,
+        "end": 12
       },
       "symbol": "Service web",
       "docs": [],
@@ -202,7 +207,8 @@
       "part_of": "platform",
       "source": {
         "file": "terraform/main.tf",
-        "line": 1
+        "line": 1,
+        "end": 1
       },
       "docs": [],
       "tags": [
@@ -225,7 +231,8 @@
       "part_of": "terraform",
       "source": {
         "file": "terraform/main.tf",
-        "line": 8
+        "line": 8,
+        "end": 8
       },
       "symbol": "resource kind_cluster.dev",
       "docs": [],
@@ -263,7 +270,8 @@
       "part_of": "platform",
       "source": {
         "file": "terraform/main.tf",
-        "line": 8
+        "line": 8,
+        "end": 8
       },
       "docs": [],
       "tags": [
@@ -293,7 +301,8 @@
       "part_of": "terraform",
       "source": {
         "file": "terraform/main.tf",
-        "line": 24
+        "line": 24,
+        "end": 24
       },
       "symbol": "resource helm_release.ingress",
       "docs": [],
@@ -338,7 +347,8 @@
       "part_of": "k8s.ns.traefik",
       "source": {
         "file": "terraform/main.tf",
-        "line": 24
+        "line": 24,
+        "end": 24
       },
       "docs": [],
       "tags": [
@@ -368,7 +378,8 @@
       "part_of": "k8s.cluster.dev",
       "source": {
         "file": "terraform/main.tf",
-        "line": 24
+        "line": 24,
+        "end": 24
       },
       "docs": [],
       "tags": [
@@ -398,7 +409,8 @@
       "part_of": "terraform",
       "source": {
         "file": "terraform/main.tf",
-        "line": 33
+        "line": 33,
+        "end": 33
       },
       "symbol": "resource helm_release.shop",
       "docs": [],
@@ -450,7 +462,8 @@
       "part_of": "k8s.ns.shop",
       "source": {
         "file": "terraform/main.tf",
-        "line": 33
+        "line": 33,
+        "end": 33
       },
       "docs": [],
       "tags": [
@@ -480,7 +493,8 @@
       "part_of": "k8s.cluster.dev",
       "source": {
         "file": "terraform/main.tf",
-        "line": 33
+        "line": 33,
+        "end": 33
       },
       "docs": [],
       "tags": [
@@ -510,7 +524,8 @@
       "part_of": "k8s.deploy.api",
       "source": {
         "file": "apps/README.md",
-        "line": 5
+        "line": 5,
+        "end": 11
       },
       "docs": [
         {
@@ -549,7 +564,8 @@
       "part_of": "k8s.deploy.web",
       "source": {
         "file": "apps/README.md",
-        "line": 13
+        "line": 13,
+        "end": 19
       },
       "docs": [],
       "tags": [
@@ -583,7 +599,8 @@
       "part_of": "platform",
       "source": {
         "file": "apps/README.md",
-        "line": 21
+        "line": 21,
+        "end": 28
       },
       "docs": [],
       "tags": [
@@ -627,6 +644,7 @@
   ],
   "edges": [
     {
+      "id": "k8s.release.traefik -data-> k8s.ingress.shop",
       "from": "k8s.release.traefik",
       "to": "k8s.ingress.shop",
       "kind": "data",
@@ -639,6 +657,7 @@
       "origin": "inferred"
     },
     {
+      "id": "k8s.ingress.shop -route-> k8s.svc.api",
       "from": "k8s.ingress.shop",
       "to": "k8s.svc.api",
       "kind": "route",
@@ -652,6 +671,7 @@
       "origin": "inferred"
     },
     {
+      "id": "k8s.ingress.shop -route-> k8s.svc.web",
       "from": "k8s.ingress.shop",
       "to": "k8s.svc.web",
       "kind": "route",
@@ -665,6 +685,7 @@
       "origin": "inferred"
     },
     {
+      "id": "k8s.svc.api -select-> k8s.deploy.api",
       "from": "k8s.svc.api",
       "to": "k8s.deploy.api",
       "kind": "select",
@@ -678,6 +699,7 @@
       "origin": "inferred"
     },
     {
+      "id": "k8s.svc.web -select-> k8s.deploy.web",
       "from": "k8s.svc.web",
       "to": "k8s.deploy.web",
       "kind": "select",
@@ -691,6 +713,7 @@
       "origin": "inferred"
     },
     {
+      "id": "tf.kind_cluster.dev -create-> k8s.cluster.dev",
       "from": "tf.kind_cluster.dev",
       "to": "k8s.cluster.dev",
       "kind": "create",
@@ -704,6 +727,7 @@
       "origin": "inferred"
     },
     {
+      "id": "tf.kind_cluster.dev -data-> tf.helm_release.ingress",
       "from": "tf.kind_cluster.dev",
       "to": "tf.helm_release.ingress",
       "kind": "data",
@@ -716,6 +740,7 @@
       "origin": "inferred"
     },
     {
+      "id": "tf.helm_release.ingress -create-> k8s.release.traefik",
       "from": "tf.helm_release.ingress",
       "to": "k8s.release.traefik",
       "kind": "create",
@@ -729,6 +754,7 @@
       "origin": "inferred"
     },
     {
+      "id": "tf.helm_release.ingress -data-> tf.helm_release.shop",
       "from": "tf.helm_release.ingress",
       "to": "tf.helm_release.shop",
       "kind": "data",
@@ -741,6 +767,7 @@
       "origin": "inferred"
     },
     {
+      "id": "tf.kind_cluster.dev -data-> tf.helm_release.shop",
       "from": "tf.kind_cluster.dev",
       "to": "tf.helm_release.shop",
       "kind": "data",
@@ -753,6 +780,7 @@
       "origin": "inferred"
     },
     {
+      "id": "tf.helm_release.shop -create-> k8s.release.shop",
       "from": "tf.helm_release.shop",
       "to": "k8s.release.shop",
       "kind": "create",
@@ -766,6 +794,7 @@
       "origin": "inferred"
     },
     {
+      "id": "shopper -call-> k8s.ingress.shop",
       "from": "shopper",
       "to": "k8s.ingress.shop",
       "kind": "call",

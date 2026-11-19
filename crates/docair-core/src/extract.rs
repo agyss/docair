@@ -12,7 +12,6 @@ use crate::model::{Diagnostic, Following, Hints, Origin, RawBlock, SourceFile, T
  * not an opener.
  *
  * @flow scan 5 "find doc blocks in code"
- * @in   files: SourceFile[] from docair-core.discover.discover
  * @out  blocks: RawBlock[]
  ***/
 pub fn extract(file: &SourceFile, diags: &mut Vec<Diagnostic>) -> Vec<RawBlock> {

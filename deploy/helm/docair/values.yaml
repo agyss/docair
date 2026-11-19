@@ -4,6 +4,8 @@ server:
     repository: docair-server
     tag: dev
     pullPolicy: IfNotPresent
+  # An upload is kept as a project in the pod that took it (/api/projects/<id>/); the other pods
+  # forward its requests there (docs/SLICES.md §8).
   replicas: 2
   maxUploadMb: 25
   maxFiles: 5000

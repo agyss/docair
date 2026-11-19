@@ -20,9 +20,17 @@ pub mod check;
  ***/
 pub mod config;
 /***
+ * What two commits change in the system's flows: the changed parts and the slices through them, compared (docs/CHANGES.md).
+ ***/
+pub mod changes;
+/***
  * How much of what authors wrote the code confirms: `docair check --coverage`.
  ***/
 pub mod coverage;
+/***
+ * What two graphs of a project differ in: parts, lines, and the parts that only moved (docs/CHANGES.md §3).
+ ***/
+pub mod diff;
 /***
  * What API descriptions declare, meeting the code: endpoints, merged into the handlers that serve their routes.
  ***/
@@ -104,6 +112,10 @@ pub mod slice;
  ***/
 pub mod test_results;
 /***
+ * Tidy: the hand-written tags that only repeat what the code says, and the edits that remove them (docs/ADAPTERS.md §6.1).
+ ***/
+pub mod tidy;
+/***
  * Recorded walkthroughs: read, bound to the graph, written.
  ***/
 pub mod walkthrough;
@@ -133,6 +145,7 @@ pub struct Options {
  * @calls docair-core.env.link "gives reads of environment variables lines from what sets them"
  * @calls docair-core.merge.merge "attaches the blocks to the code they document"
  * @calls docair-core.request.link "gives requests lines to what serves them"
+ * @calls docair-core.resolve.flow_paths "orders the scenario steps and links them, request lines included"
  * @calls docair-core.walkthrough.load "reads the recorded walkthroughs"
  * @calls docair-core.test_results.attach "puts the results on the test nodes"
  * @calls docair-core.glossary.parse "reads the glossary"
@@ -191,12 +204,16 @@ pub fn scan(root: &Path, adapters: &[&dyn Adapter], opts: &Options) -> Result<Gr
     let rels: Vec<String> = files.iter().map(|f| f.rel.clone()).collect();
     let mut nodes = build::build(&system, blocks, &docs, &rels, &mut diags);
     declare::settle(&mut nodes, &system, &config, &mut diags);
-    let (mut nodes, mut edges, flows) = resolve::resolve(nodes, &system, &mut diags);
+    let (mut nodes, mut edges) = resolve::resolve(nodes, &system, &mut diags);
     request::link(&nodes, &mut edges, &mut diags);
+    // After the request lines: a scenario can step along a request the code sends (docair-4wk.15).
+    let flows = resolve::flow_paths(&nodes, &edges, &mut diags);
     if config.checks.as_ref().is_some_and(|c| c.unrequested_routes) {
         request::unrequested(&nodes, &edges, &mut diags);
     }
     declare::word_and_prune(&mut nodes, &mut edges);
+    // Each line's id, now that the lines are final (docair-svh).
+    ids::edge_ids(&mut edges);
     let reports = config
         .tests
         .as_ref()

@@ -39,34 +39,6 @@ const GLYPHS: &[(&str, &str)] = &[
     ("unknown", "·"),
 ];
 
-/// Tags docair knows; any other is marked in the Tags tab.
-const KNOWN_TAGS: &[&str] = &[
-    "id",
-    "kind",
-    "part-of",
-    "doc",
-    "deployed-as",
-    "in",
-    "out",
-    "calls",
-    "reads",
-    "writes",
-    "emits",
-    "consumes",
-    "http",
-    "flow",
-    "creates",
-];
-
-/// The line styles of the kinds of lines, for the legend (viewer.js `EDGE_LINE`).
-fn line_style(kind: EdgeKind) -> &'static str {
-    match kind {
-        EdgeKind::Emit | EdgeKind::Consume | EdgeKind::Cover => "dotted",
-        EdgeKind::Route | EdgeKind::Select | EdgeKind::Create => "dashed",
-        _ => "solid",
-    }
-}
-
 fn kind_word(kind: EdgeKind) -> String {
     serde_json::to_value(kind)
         .ok()
@@ -129,19 +101,22 @@ pub(crate) struct Panels {
     pub tests: Option<(String, String, String)>,
     /// The glossary's and the data's buttons in the header.
     pub buttons: String,
+    /// Tidy's button next to the diagnostics, and its banner under the header (empty when nothing repeats).
+    pub tidy: (String, String),
     /// Packed with the pictures: each part's details and tip, each line's tip, the search words.
     pub data: Value,
 }
 
 /// The graph, looked up for the panels.
-struct Look<'g> {
+struct PanelGraph<'g> {
     graph: &'g Graph,
     g: GraphLookup<'g>,
     kids: HashMap<&'g str, Vec<&'g str>>,
     sections: &'g HashSet<String>,
+    tidy: &'g crate::page_tidy::Tidy,
 }
 
-impl<'g> Look<'g> {
+impl<'g> PanelGraph<'g> {
     fn node(&self, id: &str) -> Option<&'g Node> {
         self.g.nodes.get(id).copied()
     }
@@ -258,6 +233,11 @@ impl<'g> Look<'g> {
             );
         }
         let id = escape_text(&n.id);
+        let _ = write!(
+            out,
+            r#" <a class="link ask-about" data-ref="part:{id}" data-label="{}" data-test="ask-about">✦ Ask about this</a>"#,
+            escape_text(&n.name)
+        );
         let _ = write!(
             out,
             r#" <a class="link hide-link" data-test="hide-section" data-hide="{id}" title="Leave this part out of the picture; show it again from the chips above the picture">Hide this section</a><a class="link hide-link" data-test="show-section" data-show="{id}" hidden title="Bring this part back; if its section is hidden, the section comes back with only this in it">Show this section</a></div>"#
@@ -617,14 +597,20 @@ impl<'g> Look<'g> {
             } else {
                 String::new()
             };
-            let unknown = if KNOWN_TAGS.contains(&t.name.as_str()) {
+            // Tags docair knows are the ones `docair check` knows; any other is marked.
+            let unknown = if docair_core::check::KNOWN_TAGS.contains(&t.name.as_str()) {
                 ""
             } else {
                 r#" <span class="badge warn">⚠ unknown tag</span>"#
             };
+            // A tag the code says too is marked, for tidying (docs/ADAPTERS.md §6.1).
+            let tidy = self
+                .tidy
+                .mark(&n.id, &format!("@{} {}", t.name, t.value))
+                .unwrap_or("");
             let _ = write!(
                 out,
-                "<tr><td>@{}</td><td>{}{inferred}{unknown}</td></tr>",
+                "<tr><td>@{}</td><td>{}{inferred}{unknown}{tidy}</td></tr>",
                 escape_text(&t.name),
                 escape_text(&t.value)
             );
@@ -669,14 +655,13 @@ impl<'g> Look<'g> {
                     .map(|r| format!(" → {r}"))
                     .unwrap_or_default()
             );
-            let from = if e.from_code {
+            let from = if e.words_from_code() {
                 r#"<span class="where"> · from the code</span>"#.to_string()
             } else {
                 String::new()
             };
             let api = e
-                .from_api
-                .as_deref()
+                .words_from_api()
                 .map(|a| format!(r#"<span class="where"> · from {}</span>"#, escape_text(a)))
                 .unwrap_or_default();
             let _ = write!(
@@ -778,30 +763,85 @@ impl<'g> Look<'g> {
                 seen.push(e.kind);
             }
         }
-        let mut out = String::from(r#"<h4>Nodes</h4><div class="grid">"#);
+        // Each kind in the shape and colours the pictures draw it in (docair-pqw). A row names, as a
+        // selector, what it explains: the page shows only the rows for what the picture holds.
+        let row = |out: &mut String, shows: &str, mark: String, says: &str| {
+            let _ = write!(
+                out,
+                r#"<div class="row" data-in="{shows}">{mark}<span>{says}</span></div>"#
+            );
+        };
+        let mut out = String::from(r#"<div class="group"><h4>Parts</h4><div class="grid">"#);
         for k in kinds {
-            // Data has the data colours (docair-54p).
-            let colours = if k == "data" {
-                "background: var(--data-soft); border-color: var(--data)".to_string()
-            } else {
-                format!("background: var(--k-{k}-bg); border-color: var(--k-{k}-line)")
-            };
-            let _ = write!(
-                out,
-                r#"<span class="sw" style="{colours}"></span><span>{} {k}</span>"#,
-                glyph(k)
+            let says = format!("{} {k}", glyph(k));
+            row(
+                &mut out,
+                &format!(".k-{k}"),
+                crate::svg::kind_swatch(k, ""),
+                &says,
             );
         }
-        out.push_str(r#"</div><h4>Edges</h4><div class="grid">"#);
+        out.push_str(r#"</div></div><div class="group"><h4>Lines</h4><div class="grid">"#);
         for k in seen {
-            let w = kind_word(k);
-            let _ = write!(
-                out,
-                r#"<span class="ln" style="border-top-color: var(--e-{w}); border-top-style: {}"></span><span>{w}</span>"#,
-                line_style(k)
+            let width = if k == EdgeKind::Data { 2.0 } else { 1.4 };
+            let mark = crate::svg::line_swatch(k, "", width);
+            row(
+                &mut out,
+                &format!(".e-{}", crate::svg::edge_kind(k)),
+                mark,
+                &kind_word(k),
             );
         }
-        out.push_str("</div>");
+        out.push_str(
+            r#"</div></div><details class="group forms"><summary><h4>What the forms say</h4></summary><div class="grid">"#,
+        );
+        let forms = [
+            (
+                ".k-external, .k-unresolved",
+                crate::svg::kind_swatch("external", ""),
+                "dashed: outside the system, or a ref docair could not resolve",
+            ),
+            (
+                ".k-test",
+                crate::svg::kind_swatch("test", " t-passed"),
+                "a test that passed; one that failed is red, one without a result dashed",
+            ),
+            (
+                ".closed",
+                crate::svg::kind_swatch("service", " closed"),
+                "double: a closed box, it stands for what it holds",
+            ),
+            (
+                ".bundle",
+                crate::svg::line_swatch(EdgeKind::Call, " bundle", 3.5),
+                "thick: a bundle of lines between two boxes, thicker the more it holds",
+            ),
+            (
+                ".reach-could",
+                crate::svg::line_swatch(EdgeKind::Call, " reach-could", 1.4),
+                "dashed: a line that may reach its part",
+            ),
+            (
+                ".dangling",
+                crate::svg::line_swatch(EdgeKind::Call, " dangling", 1.4),
+                "red and dashed: a line to a ref docair could not resolve",
+            ),
+            (
+                ".chip",
+                crate::svg::chip_swatch(),
+                "a datum the line carries",
+            ),
+            (
+                ".tf-mark",
+                crate::svg::tf_swatch(),
+                "declared in Terraform (.tf)",
+            ),
+        ];
+        for (shows, mark, says) in forms {
+            row(&mut out, shows, mark, says);
+        }
+        // The forms fold away, so the legend leaves the picture in sight.
+        out.push_str("</div></details>");
         out
     }
 
@@ -927,11 +967,13 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
             kids.entry(p).or_default().push(n.id.as_str());
         }
     }
-    let look = Look {
+    let tidy = crate::page_tidy::tidy(graph);
+    let look = PanelGraph {
         graph,
         g: GraphLookup::new(graph),
         kids,
         sections,
+        tidy: &tidy,
     };
     let linker = crate::page_glossary::Linker::new(graph);
     let glossary = crate::page_glossary::glossary(graph, &linker);
@@ -973,10 +1015,17 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
             parents.insert(n.id.clone(), Value::String(p.to_string()));
         }
     }
-    let lines: Vec<Value> = graph
+    // Each line's tip, by the key the pictures name it with (svg::edge_key).
+    let lines: Map<String, Value> = graph
         .edges
         .iter()
-        .map(|e| Value::String(look.edge_tip(e)))
+        .enumerate()
+        .map(|(i, e)| {
+            (
+                crate::svg::edge_key(graph, i),
+                Value::String(look.edge_tip(e)),
+            )
+        })
         .collect();
     let (diag, drawer) = look.diagnostics();
     let mut data = json!({
@@ -990,6 +1039,7 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
     for (k, v) in glossary.data {
         data[k] = v;
     }
+    data["tidy"] = Value::String(tidy.panel.clone());
     Panels {
         tree: look.tree(),
         legend: look.legend(),
@@ -997,6 +1047,7 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
         diag,
         tests: look.tests_switch(),
         buttons: glossary.buttons,
+        tidy: (tidy.button.clone(), tidy.banner.clone()),
         data,
     }
 }

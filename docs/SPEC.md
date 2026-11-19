@@ -121,8 +121,12 @@ ignore  = ["GET /healthz"]
 unrequested_routes = true             # W118: a route nothing in the project requests
 
 [code]                                # calls between functions (docs/ADAPTERS.md §5.4)
-run_indexers = true                   # run rust-analyzer when it is installed, and read its index
+run_indexers = true                   # run rust-analyzer and scip-typescript when installed, and read their indexes
 scip = ["ci/rust.scip"]               # or read index files built elsewhere (CI), inside the root
+
+[explain]                             # docair explain (docs/EXPLAIN.md)
+store        = "docs/changes"         # where the findings about two commits are kept
+max_requests = 8                      # the most requests to the model per run
 
 [ai]                                  # the model that answers `docair ask` (§10.1)
 endpoint    = "https://api.together.xyz/v1"
@@ -146,7 +150,10 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 
 | Command          | Runs stages | Result |
 |------------------|-------------|--------|
-| `docair scan`    | 1–7         | writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway) |
+| `docair build` (also `docair scan`) | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
+| `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
+| `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
+| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | what `docair diff` finds, explained by the model (docs/EXPLAIN.md): links between parts it could not prove the same, what each changed flow now does, workflows before and after, every claim bound against both graphs; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`), so the next run asks only about new flows and never about a human's correction; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters; a pull request comment on stdout |
 | `docair check`   | 1–6         | prints diagnostics; exits non-zero on errors (CI gate) |
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
 | `docair ask "<question>" [--follow-up] [--apply]` | 1–7 + AI | asks the configured model and prints the reply: answer, walkthrough (recorded in `walkthroughs/`), view changes, proposed edits (written to `.docair/docair.patch`). `--follow-up` continues the last conversation; `--apply` writes the edits into the files and the view changes into `docair.toml` (§10) |
@@ -157,7 +164,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair ai [--check]` | none   | prints the AI settings and where the key comes from; `--check` sends one short request (§10.1) |
 | `docair slice [seed] [--all]` | 1–6 | prints a slice as JSON: one part of the system, from a seed to its ends (§3.7); without a seed it lists the seeds, `--all` prints every slice. `check --coverage` also says, for each datum, how many of its lines its slice reaches |
 | `docair layer [layer] [--open id] [--tests bool] [--all]` | 1–6 | prints what a layer draws as JSON (§3.4): each part with the box it stands in, open or closed, and each line with the lines of the graph it stands for and the parts it passes; without a layer it lists the layers the project offers |
-| `docair serve [root] [--bind addr] [--app dir]` | 1–7, watch | serves the project's documentation at `/` and writes it again when its files change, after an answer with a walkthrough, and after applied edits; `/api/ask`, `/api/word`, `/api/glossary`, `/api/apply` on the server's own graph, `/api/version` to poll, uploads as docair-server (docs/SLICES.md §8) |
+| `docair serve [root] [--bind addr] [--app dir] [--changes A]` | 1–7, watch | serves the project's documentation at `/` and writes it again when its files change; `--changes A` gives the page its changes section, as `docair build --changes A` does (the system's file events, acted on once they are quiet for 0.4 s; outputs and what a scan skips do not count), after an answer with a walkthrough, and after applied edits; `/api/ask`, `/api/word`, `/api/glossary`, `/api/apply` on the server's own graph, `/api/version` to poll, uploads as docair-server (docs/SLICES.md §8) |
 
 ---
 
@@ -179,17 +186,29 @@ frames it under a slim bar (what docair found, the diagnostics, *New upload*,
 *Open in a new tab*, *Download*); the page tells the app only when its first
 picture shows (`docair:ready`), and the frame gets `data-ready`.
 
-docair-server keeps each upload as a project (at most 8; one not asked about
-for an hour is dropped, with its folder) and serves its page at
+docair-server keeps each upload as a project and serves its page at
 `/api/projects/<id>/`, the `page` of the scan's answer. The frame shows the
-page by that address, so its AI asks the server about the upload, and an
-edit applied changes the server's copy: the frame reloads with it, and
+page from that address, so the page's AI asks the server about the upload.
+An applied edit changes the server's copy, and the frame reloads with it.
 *⤓ Patch* saves the edit for the user's own files. *Open in a new tab* opens
-the same address; *Download* saves the page as it is now. Before the upload,
-the picked files are read into memory (*Reading the folder · 286 files so
-far*), so a file that changes on disk meanwhile cannot break it; a file that
-cannot be read says *A file changed while it was read; pick the folder
-again.*
+the same address. *Download* saves the page as it is now.
+
+The server keeps at most 8 uploads. A ninth pushes out the one used longest
+ago. An upload not used for an hour is dropped, with its folder. A restart
+or a deploy drops them all. An upload lives only in the server pod that
+took it. Its id names that pod, and another pod passes the upload's
+requests on to it (docs/SLICES.md §8), so the chart runs two server pods.
+An upload no longer kept answers 404:
+
+| Who asks | What they get |
+|----------|---------------|
+| the frame, a new tab | a short page: *This upload is no longer kept. Upload the folder again to see its page and ask the AI about it.* |
+| the page's own calls | JSON: `{"error": "this upload is no longer kept; upload the folder again"}` |
+
+Before the upload, the picked files are read into memory (*Reading the
+folder · 286 files so far*), so a file that changes on disk meanwhile cannot
+break it. A file that cannot be read says *A file changed while it was
+read; pick the folder again.*
 
 ## 2. Doc blocks (stage 2: extract)
 
@@ -296,6 +315,8 @@ without breaking older versions of docair.
 | `@deployed-as` | `k8s:<kind>/<name>`   | Links a code-level node to its Kubernetes workload: where the code runs (§3.4). |
 | `@runs-in`  | `<ref>`                  | The code comes from its `@part-of` place (a container that serves it, an image) but runs in `<ref>` (the browser, a phone, a worker). The node is drawn where it runs, with its parts; its details say *runs in* and *code from* (§3.6). |
 | `@carried-as` | `word, word`           | Data nodes only: other words payloads use for this datum (`CreateOrder, Order`), besides its name (§3.6). |
+| `@path`     | `glob`                   | Stores only, repeatable: where the store is on disk, relative to the project root (`docs/walkthroughs/*.json`, `.env`, `data/**`). Code that writes a fitting path out (`fs::read_to_string(".env")`, `fs::read_dir("docs/walkthroughs")`) gets a certain `@reads`/`@writes` of the store, with no block on the function (docs/ADAPTERS.md §5.7). `*` is any part of a segment, `**` any number of segments; a path that is the folder of a glob fits it too. |
+| `@defines`  | `word, word`             | The block's part defines these words (docs/MEANINGS.md §10): the same as a decision `from = <its id>` in the decisions file, which wins where both speak. |
 
 Rules:
 * Two nodes with the same id are an **error**. The exception is Markdown, which
@@ -365,7 +386,7 @@ Node {
   id, kind, name,           // name = symbol or last id segment
   summary, description,
   part_of: id?,
-  source: { file, line }?,  // none for Markdown-only nodes
+  source: { file, line, end? }?,  // none for Markdown-only nodes; end: the part's last line, its code's or its block's (docair-zrr.2)
   symbol: string?,          // "fn create_order"
   http: { method, path }?,
   deployed_as: ref?,
@@ -576,7 +597,11 @@ move.
 * **Top-down** (after Kasperowski & von Hanxleden). Every box is laid out on
   its own (inside out), then what it holds is scaled to the box's budget of
   800 px, never below 70 % per box: a box with a lot inside does not blow the
-  picture up; the reader zooms in to read it. docair sizes the boxes, as
+  picture up; the reader zooms in to read it. A slice is not scaled
+  (docair-702.27): its words keep their size, the picture grows, and a walk
+  through it shows each step at 0.8 to 1.3 px per unit, so every word reads at
+  8.8 px or more (docair's data.graph went from words of 3.2 to 11 units).
+  docair sizes the boxes, as
   elkjs lacks ELK's size approximators and would give every box one size.
   Lines between boxes count, for each box's layout, as lines between the
   parts that hold their ends, laid out the way things happen (as above).
@@ -734,7 +759,8 @@ part goes, each line's points and where its words stand.
 * Each box is laid out on its own in layers by docair's own placement (no
   ELK): cycles broken by priority, layers that keep lines short, sweeps and
   swaps against crossings, positions that keep lines straight. The boxes are
-  sized and placed inside out as above (budget 800 px, floor 0.7).
+  sized and placed inside out as above (budget 800 px, floor 0.7; a slice
+  without a budget, `layout_input::options_for`).
 * A part with many lines is as wide as they need to meet it side by side: a
   track and a half for each pair of lines (across the layers when they run
   right).
@@ -770,9 +796,12 @@ by docair.
 * The SVG holds classes, not colours: `assets/pictures.css` gives each class
   the page's colours (`--k-*`, `--e-*`, `--t-*` in viewer.css), so one picture
   serves light and dark. A file of its own (`--svg`) carries them inside.
-* Each part is drawn in the shape and colour of its kind, as the viewer
-  draws it: a test in the colour of its result, a closed box with a double
-  outline, an open box with its name in the band at its top.
+* Each part is drawn in the shape and colour of its kind, and no two kinds
+  look alike (a cluster a heptagon, a function a rounded box, a service a box
+  with a cut corner, a datum a pill, …): a test in the colour of its result,
+  a closed box with a double outline, an open box with its name in the band at
+  its top. A part declared in Terraform (`.tf`), and a box that holds only
+  such parts, carries Terraform's mark at its top left.
 * Lines run at right angles, rounded where they turn, with an arrow; the
   line style tells the kinds of one family apart. A bundle is wider the more
   lines it stands for; a line to a ref docair could not resolve is red and
@@ -782,8 +811,10 @@ by docair.
 * A line's words stand where the layout put them. The data it carries are
   chips in them, found the way docair finds them (§3.6): a datum's name, the
   last part of its id or a `@carried-as` word, as a whole word in any case.
+  Each chip carries its datum's id (`data-data`).
 * Every part and line carries its id (`data-id`; a line also `data-from`,
-  `data-to` and the graph's lines it stands for, `data-edges`), for the page's
+  `data-to` and the ids of the graph's lines it stands for, one per line of
+  `data-edges`), for the page's
   script.
 * Golden pictures: every layer of each e2e fixture and every slice of the
   shop, in `crates/docair-viewer/tests/golden`; `DOCAIR_BLESS=1` rewrites them.
@@ -804,19 +835,33 @@ into `docair.html`:
   `#slice/<seed>` (a walk's seed is `flow:<name>` or `walkthrough:<id>`).
   `#part/<id>` shows a part where it is when the picture on screen draws it,
   else in its home: its box's section, else a layer that draws it (Apps
-  first), else its own slice. Back goes to the picture before.
+  first), else its own slice, and a note says where (`in orders-api · Apps`).
+  Back goes to the picture before.
 * The script pans (drag) and zooms (wheel; a picture is shown at most 1.25
-  times its size; F fits it). It opens a closed box's section with a click,
-  an open box's with a double-click, and a box's when the reader zooms into
-  it until it fills the canvas; zooming out far past the picture goes to the
+  times its size; F fits it). A click on a box, closed or open, opens its
+  section (what it holds, and only that) with the box's details; so does
+  zooming into a box until it fills the canvas; zooming out far past the picture goes to the
   picture above it in the crumbs. A click selects a part (`.sel`, its lines
-  `.hl`) and shows its details; the camera stays.
+  `.hl`) and shows its details; the camera stays. A click on a line or its
+  words selects the line: its two ends, and the tips of the graph's lines it
+  stands for. A click on a datum's chip opens the datum's page. The arrow keys
+  step through a walk. When the canvas changes size, as when the chat opens,
+  a fitted picture fits again; else it keeps its middle and its scale.
+* A part dragged in the page is moved by hand (above): docair's router, built
+  to WebAssembly (`docair-layout-wasm`), routes its lines again in the
+  browser, from the picture's layout input and layout that the page packs for
+  it: while the part is held, each time it has moved a whole track (8 px),
+  and once more where it is put down, when their words follow. A move lasts
+  until the page reloads.
 * The panels are the CLI's, as the viewer wrote them: each part's details
   (Overview, Docs, Tags; what a box talks to, the tests that cover a part,
   its lines in and out, the flows it is in, every other part a link
   `#part/<id>`), the tips of parts and lines (a line's: the first 8 lines of
   the graph it stands for), the tree, the legend, the diagnostics and the
   tests switch. Details, tips and search words are packed like the pictures.
+  The legend draws each kind and line as the pictures do; each row names what
+  it explains, and the page shows only the rows for what the picture on screen
+  holds. What the forms say (dashed, double, thick, …) folds away.
 * The glossary and the data are the CLI's too (§13, §3.6): in the panels the
   first mention of each term is marked (`.term`), a code span that names a
   part links to it (`.node-ref`), and the data a line's words name are chips
@@ -836,16 +881,43 @@ into `docair.html`:
 * The AI is a panel in the page (docs/SLICES.md §8; ✦ Ask). It talks to
   `docair serve`: the page's own address when the server serves it, else
   `<meta name="docair-serve">`; without a server it says so, and everything
-  else works. A question goes to `/api/ask` with the conversation and the
-  selected part as its context; Word the lines and Explain the terms go to
+  else works. A question goes to `/api/ask` with the conversation and what it
+  is about as typed refs: the selected part, and what the reader added with
+  ✦ Ask about this in a part's details, a datum's page, a term's entry or a
+  line's details (`part:<id>`, `data:<id>`, `term:<term>`, and a line's
+  `edge:<id>` for each graph line it stands for).
+  The chat shows them as chips above the question; × takes one away. On a
+  wide screen the open chat takes its own room beside the details. Word the
+  lines and Explain the terms go to
   `/api/word` and `/api/glossary`. The server writes each reply as HTML
   (`page_ai::reply_html`): the answer, a walkthrough to play at
   `#slice/walkthrough:<id>`, words, terms, a view change, edits, and the edits
-  waiting to be applied with their diff, Apply and a patch to save. A reply
+  waiting to be applied with their diff, Apply and a patch to save. A view
+  change hides and shows at once, as the reader's own hiding, with Undo. A reply
   that wrote the documentation again, and Apply, reload the page where it
   was; the conversation is kept for the tab. The page also reloads when the
   documentation is written again from elsewhere (it asks `/api/version` every
   5 s while it is shown).
+* Changes (docs/CHANGES.md, `docair build --changes <A>`): the header's
+  **Δ Changes · n** opens the list of the flows the working tree changes since
+  A, and each opens at `#changes/<seed>` as one still picture (nothing in it
+  is moved by hand) of its slice at A and at B side by side, with what it now
+  goes through marked at B and what it no longer does at A; its details say
+  so. Stored findings (docs/EXPLAIN.md) show there too: the model's
+  explanation, who recorded it, and its workflow before and after, each side
+  walked through like a walk (`#changes/<seed>/before`, `/after`); the list
+  shows the model's links and counts the flows not explained yet, with the
+  command, and served with `docair serve --changes <A>` a button that asks for
+  them (`POST /api/explain`).
+* Tidy (docs/ADAPTERS.md §6.1): the CLI counts the tags the code repeats
+  (`docair_core::tidy::repeated`) and writes the header's **✂ Tidy · n**
+  (**✂ Tidy ✓** when none), a banner under the header that a reader can
+  close until the count changes, the panel that lists them by file and block,
+  ticked, with the code that says the same, and a mark on each in the Tags
+  tab. Served by `docair serve`, the page shows the patch, and Apply (or
+  Tidy this tag) posts the ticked tags to `/api/tidy` and reloads; opened as
+  a file, it offers the command `docair tidy --apply`. The Tags tab knows the
+  tags `docair check` knows.
 * The reader's hiding is the script's: the eye in the tree or "Hide this
   section" leaves a part out, with its lines and their words, and its place
   stays empty; a chip above the picture brings it back. Showing a part inside
@@ -1077,8 +1149,14 @@ Edge {
   text: string?,            // what happens, the tag's "…": "scans the uploaded folder"
   payload: string?,         // what travels along the edge: "CreateOrder", "Order[]"
   reply: string?,           // calls only: what comes back, "Order"
-  from_code: bool,          // payload and reply come from the callee's signature, not the tag
-  from_api: string?,        // payload and reply come from this API description (§6.2): "api/openapi.yaml"
+  id: string,               // unique and stable across scans: "shop-ui.cart -call-> orders.create";
+                            // ` "<label>"` when two lines share that, `#2` only for true twins
+  evidence: {              // where payload and reply come from when the tag does not say them
+    source: "code" | "api", // the callee's signature, or an API description (§6.2)
+    file?: string,          // the callee's file, or the description: "api/openapi.yaml"
+    line?: number,          // the callee's line
+    rule?: "signature" | "described"
+  }?,
   via: string?,             // "http:POST /api/orders" when resolved through http
   tag: string,              // the tag that created it, e.g. "@calls http:POST /api/orders (CreateOrder) -> Order"
   source: { file, line },   // where that tag is
@@ -1115,9 +1193,9 @@ happens. The viewer writes, in this order:
 2. else the payload and reply: from the tag, or, for a call that names
    neither, from the callee's signature (§6): its parameter names and its
    return type without wrappers, `(root, adapters, opts) → Graph`. Such an
-   edge has `from_code: true`, and its tooltip says so. When an API
+   edge has `evidence.source` `code`, and its tooltip says so. When an API
    description declares the route or the topic, its words come first
-   (`(CreateOrder) → Order`); the edge has `from_api`, and the tooltip says
+   (`(CreateOrder) → Order`); the edge has `evidence` with `source` `api` and the description's `file`, and the tooltip says
    "from api/openapi.yaml" (§6.2);
 3. else the verb of its kind: `calls`, `reads`, `writes`, `creates`, `tests`, ….
 
@@ -1146,7 +1224,9 @@ request only confirms them. Otherwise it becomes a call line `via
 http:POST /api/scan`. Two servers give `W116`, none `W117` (§8).
 
 Resolution order for a bare ref: exact id, then the longest id prefix
-(sub-part form). A ref that doesn't resolve fails `docair check` (it is a
+(sub-part form). A sub-part of code (a system, service, module, component,
+function, job, workload or test) gives `W122`: the code part has no such
+part, so the ref is most likely stale. A ref that doesn't resolve fails `docair check` (it is a
 warning when run with `--lenient`, see §8). In the graph it becomes a
 *dangling edge* to a placeholder node, so nothing is silently dropped.
 
@@ -1293,7 +1373,7 @@ item in another file, 3.2's `query`), is a W113.
 
 **Words.** A call that reaches a described route through `http:`, and a line
 to or from a described topic, take the description's words when their tag
-says nothing of what travels; the edge has `from_api` (§4.2).
+says nothing of what travels; the edge has `evidence` from the description (§4.2).
 
 **Small pictures.** A description whose every route merged and every line
 yielded goes; one documented with a doc block stays. Inside an `external`
@@ -1508,9 +1588,10 @@ Flow {
 | `W116` | warning         | two parts serve a request the code sends: both get a line (§4.3) |
 | `W117` | warning         | nothing in the project serves a request the code sends, such as a route renamed on one side (§4.3); a request to another origin (`https://…`) is left alone |
 | `W118` | warning         | nothing in the project requests a route; off unless `[checks] unrequested_routes = true`, because public APIs and probes are requested from outside |
-| `W119` | warning         | `[code] run_indexers` ran rust-analyzer and it failed: the calls come from the syntax only (§6) |
+| `W119` | warning         | `[code] run_indexers` ran rust-analyzer or scip-typescript and it failed: the calls come from the syntax only (§6) |
 | `W120` | warning         | a word names a part (a module, a component, a data) and at least two texts use it, but nothing settles what it means: no summary that defines it, no decision (§13.5); only in a project with a glossary or a decisions file |
 | `W121` | warning         | a word's settling is out of date: a decision's `from` names no node, or the glossary entry of a word the code defines is not checked against the code's current text (§13.5) |
+| `W122` | warning         | a ref names a part of a code part by the sub-part form (`docair-core.infra.discover` when there is no such node), so it binds to the whole of `docair-core`: a stale ref after a move or rename; sub-parts are for stores, topics and other parts that hold named things (§4.3) |
 
 Each diagnostic has `{ code, severity, message, file, line, node? }`.
 `docair check` exits non-zero if any error remains.
@@ -1766,10 +1847,13 @@ question; the key stays with the server.
 | Route | Request → Answer |
 |-------|------------------|
 | `GET /api/ai` | → `{ enabled, model }`. Never the key, never the endpoint |
-| `POST /api/ask` | `{ question, history?, context? }` → `{ reply, html, regenerated, version, patch, pending }`: the reply (§10.7), written as HTML for the page too; a walkthrough in it is recorded and the documentation written again (`regenerated`); its edits wait (`patch`, `pending`). 400 for an empty question or one over 500 characters, 503 when AI is off, 429 when two questions are already with the model, 502 when the endpoint fails |
+| `POST /api/ask` | `{ question, history?, context? }` → `{ reply, html, regenerated, version, patch, pending }`; `context` is what the question points at, one part's id or typed refs (`part:<id>`, `data:<id>`, `term:<word>`, `line:<k>@<address>`, `edges:<i>,<j>`), each given to the model in words, and one that names nothing named in `problems`: the reply (§10.7), written as HTML for the page too; a walkthrough in it is recorded and the documentation written again (`regenerated`); its edits wait (`patch`, `pending`). 400 for an empty question or one over 500 characters, 503 when AI is off, 429 when two questions are already with the model, 502 when the endpoint fails |
 | `POST /api/word` | `{ scope?, limit?, all? }` → the same, with `wording` (§10.8) |
 | `POST /api/glossary` | `{ limit? }` → the same, with the terms explained (§13.4) |
 | `POST /api/apply` | → `{ edited, regenerated, version }`: the waiting edits written into the project's files, the view change into `docair.toml`, the documentation written again; 409 when nothing waits |
+| `GET /api/tidy` | → `{ tags, patch }`: the tags the code repeats (`node`, `tag`, `line`, `code_says`, `code_file`, `code_line`, `reason`) and the diff that removes them all |
+| `POST /api/tidy` | `{ tags?: [{ node, tag }] }` → `{ edited, regenerated, version }`: the picked tags removed (all when none are named), the documentation written again; 409 when no tag repeats |
+| `POST /api/explain` | `{ a, b? }` → `ChangeFindings` (docs/EXPLAIN.md): what the served project changes since commit `a` (or between `a` and `b`), the flows without stored findings explained by the model and stored as `docair explain` stores them; a page served with `--changes` is written again with them, so it reloads; 409 for a project without git history (an upload), 503 when AI is off |
 
 An uploaded page asks the same routes under `/api/projects/<id>/` (§1.3):
 the server keeps the upload as a project, and answers any origin, since the

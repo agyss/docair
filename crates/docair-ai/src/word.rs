@@ -65,7 +65,7 @@ pub fn unworded(graph: &Graph, scope: Option<&str>, all: bool) -> Vec<usize> {
             e.text.is_none()
                 && e.origin == Origin::Authored
                 && e.kind != EdgeKind::Data
-                && (all || e.from_code || (e.payload.is_none() && e.reply.is_none()))
+                && (all || e.words_from_code() || (e.payload.is_none() && e.reply.is_none()))
                 && scope.is_none_or(|g| inside(&e.from, g) || inside(&e.to, g))
         })
         .map(|(i, _)| i)
@@ -307,6 +307,7 @@ mod tests {
             source: Some(SourceRef {
                 file: "a.rs".into(),
                 line: 1,
+                end: None,
             }),
             symbol: None,
             http: None,
@@ -323,6 +324,7 @@ mod tests {
 
     fn edge(from: &str, to: &str, kind: EdgeKind, tag: &str) -> Edge {
         Edge {
+            id: String::new(),
             from: from.into(),
             to: to.into(),
             kind,
@@ -333,13 +335,13 @@ mod tests {
             text: None,
             carries: vec![],
             carries_back: vec![],
-            from_code: false,
-            from_api: None,
+            evidence: None,
             reach: None,
             tag: tag.into(),
             source: SourceRef {
                 file: "a.rs".into(),
                 line: 2,
+                end: None,
             },
             origin: Origin::Authored,
         }

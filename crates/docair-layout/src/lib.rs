@@ -7,13 +7,16 @@
 //! input and options: no clock, no chance, so the same input gives the same
 //! picture every time.
 
+pub mod draw;
 pub mod text;
 
+mod hand_move;
 mod layered;
 mod router;
 mod topdown;
 mod word_spots;
 
+pub use hand_move::{MoveOutcome, PartMove, ReroutedLine, ShiftedPart, move_part};
 pub use layered::Direction;
 pub use router::Routes;
 pub use text::Monospace;
@@ -150,6 +153,8 @@ const SOURCES: &[&str] = &[
     include_str!("router.rs"),
     include_str!("word_spots.rs"),
     include_str!("text.rs"),
+    include_str!("draw.rs"),
+    include_str!("hand_move.rs"),
 ];
 
 fn fnv(h: &mut u64, bytes: &[u8]) {

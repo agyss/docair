@@ -12,7 +12,8 @@
       "part_of": "orders",
       "source": {
         "file": "api/Cargo.toml",
-        "line": 1
+        "line": 1,
+        "end": 6
       },
       "symbol": "[package]",
       "docs": [],
@@ -41,7 +42,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 1
+        "line": 1,
+        "end": 9
       },
       "symbol": "fn create_order",
       "http": {
@@ -116,7 +118,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 11
+        "line": 11,
+        "end": 18
       },
       "symbol": "fn get_order",
       "http": {
@@ -185,7 +188,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 20
+        "line": 20,
+        "end": 27
       },
       "symbol": "fn update_order",
       "http": {
@@ -261,7 +265,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 29
+        "line": 29,
+        "end": 36
       },
       "symbol": "fn list_orders",
       "http": {
@@ -310,7 +315,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 38
+        "line": 38,
+        "end": 45
       },
       "symbol": "fn health",
       "http": {
@@ -359,7 +365,8 @@
       "part_of": "orders",
       "source": {
         "file": "mailer/Cargo.toml",
-        "line": 1
+        "line": 1,
+        "end": 6
       },
       "symbol": "[package]",
       "docs": [],
@@ -388,7 +395,8 @@
       "part_of": "mailer",
       "source": {
         "file": "mailer/src/lib.rs",
-        "line": 1
+        "line": 1,
+        "end": 8
       },
       "symbol": "fn send_confirmation",
       "docs": [],
@@ -433,7 +441,8 @@
       "part_of": "shop-ui",
       "source": {
         "file": "ui/src/cart.ts",
-        "line": 1
+        "line": 1,
+        "end": 12
       },
       "symbol": "class Cart",
       "docs": [],
@@ -487,7 +496,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/openapi.yaml",
-        "line": 1
+        "line": 1,
+        "end": 1
       },
       "symbol": "OpenAPI 3.1.0 api/openapi.yaml",
       "docs": [],
@@ -511,7 +521,8 @@
       "part_of": "mailer",
       "source": {
         "file": "mailer/asyncapi.yaml",
-        "line": 1
+        "line": 1,
+        "end": 1
       },
       "symbol": "AsyncAPI 2.6.0 mailer/asyncapi.yaml",
       "docs": [],
@@ -549,7 +560,8 @@
       "part_of": "payments",
       "source": {
         "file": "vendor/payments-openapi.json",
-        "line": 2
+        "line": 2,
+        "end": 2
       },
       "symbol": "OpenAPI 2.0 vendor/payments-openapi.json",
       "docs": [],
@@ -580,7 +592,8 @@
       "part_of": "orders",
       "source": {
         "file": "api/asyncapi.yaml",
-        "line": 17
+        "line": 17,
+        "end": 17
       },
       "docs": [],
       "tags": [
@@ -617,7 +630,8 @@
       "part_of": "api.openapi",
       "source": {
         "file": "api/openapi.yaml",
-        "line": 58
+        "line": 58,
+        "end": 58
       },
       "symbol": "DELETE /api/orders/{id} (cancelOrder)",
       "http": {
@@ -673,7 +687,8 @@
       "part_of": "orders",
       "source": {
         "file": "mailer/asyncapi.yaml",
-        "line": 19
+        "line": 19,
+        "end": 19
       },
       "docs": [],
       "tags": [
@@ -710,7 +725,8 @@
       "part_of": "vendor.payments-openapi",
       "source": {
         "file": "vendor/payments-openapi.json",
-        "line": 12
+        "line": 12,
+        "end": 12
       },
       "symbol": "POST /v1/charges (createCharge)",
       "http": {
@@ -766,7 +782,8 @@
       "part_of": "orders",
       "source": {
         "file": "docs/payments.md",
-        "line": 6
+        "line": 6,
+        "end": 11
       },
       "docs": [],
       "tags": [
@@ -794,7 +811,8 @@
       "part_of": "orders",
       "source": {
         "file": "ui/README.md",
-        "line": 3
+        "line": 3,
+        "end": 8
       },
       "docs": [
         {
@@ -836,12 +854,17 @@
   ],
   "edges": [
     {
+      "id": "orders.create -emit-> topic:order.created",
       "from": "orders.create",
       "to": "topic:order.created",
       "kind": "emit",
       "label": "OrderCreated",
       "payload": "OrderCreated",
-      "from_api": "api/asyncapi.yaml",
+      "evidence": {
+        "source": "api",
+        "file": "api/asyncapi.yaml",
+        "rule": "described"
+      },
       "tag": "@emits topic:order.created",
       "source": {
         "file": "api/src/lib.rs",
@@ -850,12 +873,17 @@
       "origin": "authored"
     },
     {
+      "id": "topic:order.created -consume-> mailer.confirm",
       "from": "topic:order.created",
       "to": "mailer.confirm",
       "kind": "consume",
       "label": "OrderCreated",
       "payload": "OrderCreated",
-      "from_api": "api/asyncapi.yaml",
+      "evidence": {
+        "source": "api",
+        "file": "api/asyncapi.yaml",
+        "rule": "described"
+      },
       "tag": "@consumes topic:order.created",
       "source": {
         "file": "mailer/src/lib.rs",
@@ -864,6 +892,7 @@
       "origin": "authored"
     },
     {
+      "id": "shop-ui.cart -call-> orders.create",
       "from": "shop-ui.cart",
       "to": "orders.create",
       "kind": "call",
@@ -871,7 +900,11 @@
       "via": "http:POST /api/orders",
       "payload": "CreateOrder",
       "reply": "Order",
-      "from_api": "api/openapi.yaml",
+      "evidence": {
+        "source": "api",
+        "file": "api/openapi.yaml",
+        "rule": "described"
+      },
       "tag": "@calls http:POST /api/orders",
       "source": {
         "file": "ui/src/cart.ts",
@@ -880,6 +913,7 @@
       "origin": "authored"
     },
     {
+      "id": "shop-ui.cart -call-> vendor.payments-openapi.create-charge",
       "from": "shop-ui.cart",
       "to": "vendor.payments-openapi.create-charge",
       "kind": "call",
@@ -888,7 +922,11 @@
       "payload": "ChargeRequest",
       "reply": "Charge",
       "text": "pays for the order",
-      "from_api": "vendor/payments-openapi.json",
+      "evidence": {
+        "source": "api",
+        "file": "vendor/payments-openapi.json",
+        "rule": "described"
+      },
       "tag": "@calls http:POST /v1/charges \"pays for the order\"",
       "source": {
         "file": "ui/src/cart.ts",
@@ -897,13 +935,18 @@
       "origin": "authored"
     },
     {
+      "id": "topic:order.cancelled -consume-> mailer.asyncapi",
       "from": "topic:order.cancelled",
       "to": "mailer.asyncapi",
       "kind": "consume",
       "label": "OrderCancelled",
       "payload": "OrderCancelled",
       "reply": "OrderCancelled",
-      "from_api": "mailer/asyncapi.yaml",
+      "evidence": {
+        "source": "api",
+        "file": "mailer/asyncapi.yaml",
+        "rule": "described"
+      },
       "tag": "@consumes topic:order.cancelled (OrderCancelled)",
       "source": {
         "file": "mailer/asyncapi.yaml",

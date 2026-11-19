@@ -639,6 +639,7 @@ mod tests {
             source: Some(SourceRef {
                 file: file.into(),
                 line,
+                end: None,
             }),
             symbol: None,
             http: None,

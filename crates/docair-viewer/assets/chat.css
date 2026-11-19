@@ -9,7 +9,6 @@
 #chat {
   display: flex;
   flex-direction: column;
-  width: 100%;
   min-height: 0;
   background: var(--panel);
   border-left: 1px solid var(--line);

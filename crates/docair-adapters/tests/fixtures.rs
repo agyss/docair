@@ -417,7 +417,7 @@ fn declared_topics_meet_their_code() {
         g.edges
             .iter()
             .find(|e| e.from == from && e.to == to)
-            .map(|e| (e.label.clone(), e.from_api.clone()))
+            .map(|e| (e.label.clone(), e.words_from_api().map(str::to_string)))
     };
     // One line each way, from the code, carrying the message the description names.
     assert_eq!(
@@ -565,5 +565,359 @@ fn a_call_stays_open_while_its_callee_works_in_later_steps() {
                 "return shop-ui.cart>orders.create"
             ],
         ]
+    );
+}
+
+/// A ref into code by the sub-part form is a stale ref: W122, and the line still goes to the part (docair-6u3).
+#[test]
+fn a_sub_part_of_code_is_a_stale_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("docair.toml"), "system = \"s\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("README.md"),
+        "# s\n\n```docair\nThe app.\n\n@id      app\n@kind    module\n@part-of s\n```\n\n```docair\nThe store.\n\n@id      db\n@kind    store\n@part-of s\n```\n\n```docair\nA test.\n\n@id      t\n@kind    test\n@part-of s\n@covers  app.gone\n@writes  db.orders\n```\n",
+    )
+    .unwrap();
+    let g = docair_core::scan(
+        dir.path(),
+        docair_adapters::all(),
+        &docair_core::Options {
+            lenient: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let w: Vec<&str> = g
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "W122")
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].contains("`app.gone`") && w[0].contains("no part `gone`"),
+        "{w:?}"
+    );
+    assert!(
+        g.edges.iter().any(|e| e.from == "t" && e.to == "app"),
+        "the line still goes to the part"
+    );
+}
+
+/// A scenario steps along a request line the code sends, not only along hand-written lines (docair-4wk.15).
+#[test]
+fn a_walk_steps_along_a_request() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("docair.toml"), "system = \"s\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("README.md"),
+        "# s\n\n```docair\nThe page.\n\n@id       page\n@kind     component\n@part-of  s\n@requests POST /api/orders\n@flow     buy 1 \"the page sends the order\"\n```\n\n```docair\nThe handler.\n\n@id      api\n@kind    function\n@part-of s\n@http    POST /api/orders\n@flow    buy 2 \"the API takes it\"\n```\n",
+    )
+    .unwrap();
+    let g = docair_core::scan(
+        dir.path(),
+        docair_adapters::all(),
+        &docair_core::Options {
+            lenient: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let w104: Vec<&str> = g
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "W104")
+        .map(|d| d.message.as_str())
+        .collect();
+    assert!(w104.is_empty(), "{w104:?}");
+    let buy = g.flows.iter().find(|f| f.name == "buy").unwrap();
+    let step2 = &buy.steps[1];
+    assert_eq!(step2.path.len(), 1, "{buy:?}");
+    let e = &g.edges[step2.path[0]];
+    assert_eq!((e.from.as_str(), e.to.as_str()), ("page", "api"));
+}
+
+/// A store that says where it is gets a certain line from code that writes the path out, with no block on the function (docair-4wk.25).
+#[test]
+fn a_store_with_a_path_is_read_by_the_code_that_names_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("docair.toml"), "system = \"s\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("README.md"),
+        "# s\n\n```docair\nThe prices, one file per shop.\n\n@id      prices\n@kind    store\n@part-of s\n@path    data/*.json\n```\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"s\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("src").join("lib.rs"),
+        "pub fn prices() -> String {\n    std::fs::read_to_string(\"data/shop.json\").unwrap_or_default()\n}\n",
+    )
+    .unwrap();
+    let g = docair_core::scan(
+        dir.path(),
+        docair_adapters::all(),
+        &docair_core::Options {
+            lenient: true,
+            untrusted: true,
+        },
+    )
+    .unwrap();
+    let read = g
+        .edges
+        .iter()
+        .find(|e| e.from == "prices" && e.kind == docair_core::model::EdgeKind::Read)
+        .unwrap_or_else(|| panic!("{:#?}", g.edges));
+    assert!(read.to.ends_with("prices"), "{}", read.to);
+    assert!(read.reach.is_none(), "certain");
+}
+
+/// A Service reaches the program its pods run: the Deployment's image, the Dockerfile Terraform builds it from, the crate that Dockerfile builds (docair-4wk.26).
+#[test]
+fn a_service_reaches_the_program_its_pods_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = |rel: &str, text: &str| {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    w("docair.toml", "system = \"s\"\n");
+    w(
+        "app/Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    w("app/src/main.rs", "fn main() {}\n");
+    w(
+        "docker/app.Dockerfile",
+        "FROM rust:1 AS build\nCOPY app ./app\nRUN cargo build --release -p app\nFROM debian\nCOPY --from=build /x /y\n",
+    );
+    w(
+        "infra/images.tf",
+        "locals {\n  app_image = \"app:${var.tag}\"\n}\n\nresource \"terraform_data\" \"images\" {\n  provisioner \"local-exec\" {\n    command = \"docker build -f docker/app.Dockerfile -t ${local.app_image} .\"\n  }\n}\n",
+    );
+    w("chart/Chart.yaml", "name: app\n");
+    w(
+        "chart/values.yaml",
+        "image:\n  repository: app\n  tag: dev\n",
+    );
+    w(
+        "chart/templates/deploy.yaml",
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app\n  labels:\n    app: app\nspec:\n  template:\n    spec:\n      containers:\n        - name: app\n          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\"\n",
+    );
+    w(
+        "chart/templates/svc.yaml",
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: app\nspec:\n  selector:\n    app: app\n  ports:\n    - port: 80\n      targetPort: 8080\n",
+    );
+    let g = docair_core::scan(
+        dir.path(),
+        docair_adapters::all(),
+        &docair_core::Options {
+            lenient: true,
+            untrusted: true,
+        },
+    )
+    .unwrap();
+    let to: Vec<&str> = g
+        .edges
+        .iter()
+        .filter(|e| e.from.ends_with("svc.app") && e.kind == docair_core::model::EdgeKind::Call)
+        .map(|e| e.to.as_str())
+        .collect();
+    assert_eq!(
+        to,
+        ["app.main"],
+        "{:#?}",
+        g.edges.iter().map(|e| (&e.from, &e.to)).collect::<Vec<_>>()
+    );
+}
+
+/// With scip-typescript installed, a TypeScript call only the compiler can resolve is a certain line (docair-4wk.14). Skipped where web/node_modules is not installed.
+#[test]
+fn a_typescript_call_comes_from_scip_typescript() {
+    let modules = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/node_modules");
+    if !modules.join(".bin/scip-typescript").is_file() {
+        eprintln!("skipped: no scip-typescript in web/node_modules");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let w = |rel: &str, text: &str| {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    w(
+        "docair.toml",
+        "system = \"s\"\n\n[code]\nrun_indexers = true\n",
+    );
+    w(
+        "app/package.json",
+        "{ \"name\": \"app\", \"version\": \"0.0.0\" }\n",
+    );
+    w(
+        "app/tsconfig.json",
+        "{ \"compilerOptions\": { \"strict\": true }, \"include\": [\"src\"] }\n",
+    );
+    w(
+        "app/src/a.ts",
+        "export function helper(): number {\n  return 1;\n}\n",
+    );
+    w(
+        "app/src/b.ts",
+        "import * as m from './a';\n\nexport function run(): number {\n  return m.helper();\n}\n",
+    );
+    std::os::unix::fs::symlink(
+        modules.canonicalize().unwrap(),
+        dir.path().join("app/node_modules"),
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    // SAFETY: tests in this file set no other environment; the cache is this test's own.
+    unsafe { std::env::set_var("DOCAIR_CACHE", cache.path()) };
+    let g = docair_core::scan(
+        dir.path(),
+        docair_adapters::all(),
+        &docair_core::Options::default(),
+    )
+    .unwrap();
+    let call = g
+        .edges
+        .iter()
+        .find(|e| e.from.ends_with("run") && e.to.ends_with("helper"))
+        .unwrap_or_else(|| {
+            panic!(
+                "{:#?}",
+                g.edges.iter().map(|e| (&e.from, &e.to)).collect::<Vec<_>>()
+            )
+        });
+    assert!(call.reach.is_none(), "certain");
+}
+
+/// Every line has an id, unique in its graph, and the same after a scan that changed something else (docair-svh).
+#[test]
+fn every_line_has_a_unique_stable_id() {
+    for name in ["shop", "platform", "apis", "fold", "answer", "words"] {
+        let g = graph(name);
+        let mut ids: Vec<&str> = g.edges.iter().map(|e| e.id.as_str()).collect();
+        assert!(
+            ids.iter().all(|i| !i.is_empty()),
+            "{name}: a line without an id"
+        );
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "{name}: two lines share an id");
+        for (i, e) in g.edges.iter().enumerate() {
+            assert_eq!(
+                docair_core::ids::find(&g, &e.id),
+                Some(docair_core::ids::IdTarget::Line(i, e)),
+                "{name}: {} finds its line",
+                e.id
+            );
+        }
+    }
+    // Stable: an unrelated part added to the shop keeps every line's id.
+    let before = graph("shop");
+    let dir = tempfile::tempdir().unwrap();
+    let shop = dir.path().join("shop");
+    copy_dir(&fixture_dir("shop"), &shop);
+    let readme = shop.join("README.md");
+    let text = std::fs::read_to_string(&readme).unwrap();
+    std::fs::write(&readme, format!("```docair\nA new part.\n\n@id      extra\n@kind    external\n@part-of shop\n@calls   shopper\n```\n\n{text}")).unwrap();
+    let after = docair_core::scan(
+        &shop,
+        docair_adapters::all(),
+        &docair_core::Options {
+            lenient: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for e in &before.edges {
+        assert!(
+            after.edges.iter().any(|x| x.id == e.id),
+            "{} kept its id",
+            e.id
+        );
+    }
+}
+
+fn fixture_dir(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../e2e/fixtures")
+        .join(name)
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            copy_dir(&p, &to.join(e.file_name()));
+        } else {
+            std::fs::copy(&p, to.join(e.file_name())).unwrap();
+        }
+    }
+}
+
+/// Two scans compared: a renamed part with the same body is a move (its caller's line too), a changed body is a change, a new part and its line are added (docair-zrr.4).
+#[test]
+fn two_graphs_differ_in_moves_changes_and_new_parts() {
+    let scan_of = |lib: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("docair.toml"), "system = \"s\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"s\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), lib).unwrap();
+        let g = docair_core::scan(
+            dir.path(),
+            docair_adapters::all(),
+            &docair_core::Options {
+                lenient: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let root = dir.path().to_path_buf();
+        let fp =
+            docair_core::diff::fingerprints(&g, &|p| std::fs::read_to_string(root.join(p)).ok());
+        (g, fp, dir)
+    };
+    let (a, fa, _da) = scan_of(
+        "pub fn load() -> u8 {\n    1\n}\n\npub fn run() -> u8 {\n    load() + 1\n}\n\npub fn save(x: u8) {\n    let _ = x;\n}\n",
+    );
+    let (b, fb, _db) = scan_of(
+        "pub fn read() -> u8 {\n    1\n}\n\npub fn run() -> u8 {\n    read() + 1\n}\n\npub fn save(x: u8) {\n    let _ = x + 1;\n}\n\npub fn extra() {\n    save(2);\n}\n",
+    );
+    let d = docair_core::diff::diff(&a, &b, &fa, &fb);
+    let moved: Vec<(&str, &str)> = d
+        .moved
+        .iter()
+        .map(|m| (m.from.as_str(), m.to.as_str()))
+        .collect();
+    assert_eq!(moved, [("s.load", "s.read")], "{d:#?}");
+    assert_eq!(d.added, ["s.extra"], "{d:#?}");
+    assert!(d.removed.is_empty(), "{d:#?}");
+    let changed: Vec<(&str, Vec<&str>)> = d
+        .changed
+        .iter()
+        .map(|c| (c.id.as_str(), c.what.iter().map(String::as_str).collect()))
+        .collect();
+    assert_eq!(
+        changed,
+        [("s.save", vec!["body"])],
+        "the caller of the renamed part is no change: {d:#?}"
+    );
+    assert_eq!(d.lines_added, ["s.extra -call-> s.save"], "{d:#?}");
+    assert!(
+        d.lines_removed.is_empty(),
+        "run -> load is run -> read: {d:#?}"
     );
 }

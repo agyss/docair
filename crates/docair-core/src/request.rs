@@ -167,6 +167,7 @@ pub fn link(nodes: &[Node], edges: &mut Vec<Edge>, diags: &mut Vec<Diagnostic>) 
                     continue;
                 }
                 new_edges.push(Edge {
+                    id: String::new(),
                     from: r.from.id.clone(),
                     to: server.id.clone(),
                     kind: EdgeKind::Call,
@@ -177,13 +178,13 @@ pub fn link(nodes: &[Node], edges: &mut Vec<Edge>, diags: &mut Vec<Diagnostic>) 
                     text: None,
                     carries: vec![],
                     carries_back: vec![],
-                    from_code: false,
-                    from_api: None,
+                    evidence: None,
                     reach: None,
                     tag: format!("@{REQUESTS} {}", r.tag.value),
                     source: SourceRef {
                         file: file.to_string(),
                         line: r.tag.line,
+                        end: None,
                     },
                     origin: Origin::Inferred,
                 });
@@ -255,6 +256,7 @@ mod tests {
             source: Some(SourceRef {
                 file: format!("{id}.ts"),
                 line: 1,
+                end: None,
             }),
             symbol: None,
             http: http.map(|(m, p)| Http {
@@ -277,6 +279,7 @@ mod tests {
 
     fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
         Edge {
+            id: String::new(),
             from: from.into(),
             to: to.into(),
             kind,
@@ -287,13 +290,13 @@ mod tests {
             text: None,
             carries: vec![],
             carries_back: vec![],
-            from_code: false,
-            from_api: None,
+            evidence: None,
             reach: None,
             tag: String::new(),
             source: SourceRef {
                 file: String::new(),
                 line: 0,
+                end: None,
             },
             origin: Origin::Authored,
         }

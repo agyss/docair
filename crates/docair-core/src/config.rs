@@ -36,6 +36,18 @@ pub struct Config {
     pub checks: Option<CheckSettings>,
     /// Calls between functions from code indexes (docs/ADAPTERS.md §5.4).
     pub code: Option<CodeSettings>,
+    /// Explaining changes between commits (docs/EXPLAIN.md).
+    pub explain: Option<ExplainSettings>,
+}
+
+/// `[explain]` in `docair.toml`: where the findings about changes go, and what a run may cost.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainSettings {
+    /// The folder for the findings, relative to the root; default `docs/changes`.
+    pub store: Option<String>,
+    /// The most requests to the model one run makes; default 8.
+    pub max_requests: Option<usize>,
 }
 
 /// `[code]` in `docair.toml`: where the calls between functions come from.

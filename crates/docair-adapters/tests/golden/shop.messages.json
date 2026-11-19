@@ -95,5 +95,53 @@
         }
       ]
     ]
+  ],
+  [
+    {
+      "kind": "flow",
+      "id": "keep"
+    },
+    [
+      [],
+      [
+        {
+          "kind": "call",
+          "edge": 2,
+          "who": [
+            "Cart",
+            "calls",
+            "create_order"
+          ],
+          "carry": "sends CreateOrder · gets Order back",
+          "token": "CreateOrder"
+        }
+      ],
+      [
+        {
+          "kind": "write",
+          "edge": 0,
+          "who": [
+            "create_order",
+            "writes to",
+            "orders-db"
+          ],
+          "carry": "stores Order",
+          "token": "Order",
+          "has": "Order stored in orders-db"
+        },
+        {
+          "kind": "return",
+          "edge": 2,
+          "who": [
+            "create_order",
+            "answers",
+            "Cart"
+          ],
+          "why": "with Order",
+          "token": "Order",
+          "has": "Order from create_order"
+        }
+      ]
+    ]
   ]
 ]

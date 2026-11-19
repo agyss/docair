@@ -12,7 +12,8 @@ use crate::config::Config;
 use crate::facts::{Declare, Facts, Meet, Role};
 use crate::ids::slug;
 use crate::model::{
-    Diagnostic, Doc, Edge, EdgeKind, Following, Hints, Http, Node, Origin, RawBlock, Tag,
+    Diagnostic, Doc, Edge, EdgeKind, Following, Hints, Http, LineEvidence, Node, Origin, RawBlock,
+    Tag,
 };
 use crate::resolve::split_payload;
 use crate::route::Route;
@@ -728,14 +729,14 @@ pub fn word_and_prune(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
             {
                 e.label = e.label.take().or_else(|| Some(message.clone()));
                 e.payload = Some(message);
-                e.from_api = description_file(tag);
+                e.evidence = description_file(tag).map(LineEvidence::api);
             }
             continue;
         }
         if e.kind != EdgeKind::Call || !e.via.as_deref().is_some_and(|v| v.starts_with("http:")) {
             continue;
         }
-        if (e.payload.is_some() || e.reply.is_some()) && !e.from_code && e.from_api.is_none() {
+        if (e.payload.is_some() || e.reply.is_some()) && e.evidence.is_none() {
             continue;
         }
         let Some(tag) = index
@@ -754,10 +755,10 @@ pub fn word_and_prune(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
             (None, Some(r)) => format!("→ {r}"),
             (None, None) => unreachable!(),
         };
-        if e.from_code {
+        if e.words_from_code() {
             // The code signature's words make way for the description's.
             e.label = None;
-            e.from_code = false;
+            e.evidence = None;
         }
         e.label = Some(match e.label.take() {
             Some(base) => format!("{base} {words}"),
@@ -765,7 +766,7 @@ pub fn word_and_prune(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
         });
         e.payload = v.sends;
         e.reply = v.receives;
-        e.from_api = description_file(tag);
+        e.evidence = description_file(tag).map(LineEvidence::api);
     }
 
     let touched: HashSet<&str> = edges
@@ -1073,7 +1074,7 @@ mod tests {
         word_and_prune(&mut nodes, &mut edges);
         assert_eq!(edges[0].payload.as_deref(), Some("A"));
         assert_eq!(edges[0].label.as_deref(), Some("A"));
-        assert_eq!(edges[0].from_api.as_deref(), Some("svc/asyncapi.yaml"));
+        assert_eq!(edges[0].words_from_api(), Some("svc/asyncapi.yaml"));
     }
 
     #[test]

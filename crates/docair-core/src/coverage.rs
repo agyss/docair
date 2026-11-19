@@ -273,6 +273,7 @@ mod tests {
         e.source = SourceRef {
             file: String::new(),
             line: 0,
+            end: None,
         };
         e
     }

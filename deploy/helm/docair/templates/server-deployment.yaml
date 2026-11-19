@@ -1,6 +1,12 @@
 {{/***
  * Deployment docair-server: keeps the server pods running (two by default).
  *
+ * Each upload is kept as a project in the pod that took it, and its id
+ * names that pod (DOCAIR_POD_IP, from the downward API); a pod asked about
+ * an upload it does not keep forwards the request to the pod that does,
+ * found through the headless Service docair-server-peers (DOCAIR_PEERS). A
+ * restart or deploy drops the kept uploads.
+ *
  * Each pod runs the docair-server container as a non-root user with a
  * read-only root filesystem; only /tmp is writable. The kubelet probes
  * /healthz. Settings come from the ConfigMap, the AI key from the Secret
@@ -58,8 +64,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: docair-server
-          {{- if or .Values.ai.apiKey .Values.ai.existingSecret }}
           env:
+            # The pod's own address names its uploads; the other pods reach it there.
+            - name: DOCAIR_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          {{- if or .Values.ai.apiKey .Values.ai.existingSecret }}
             - name: DOCAIR_AI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -87,7 +98,7 @@ spec:
             - name: scratch
               mountPath: /tmp
 {{/***
- * The scratch folder of a server pod, an emptyDir at /tmp: each upload is written here, scanned and deleted.
+ * The scratch folder of a server pod, an emptyDir at /tmp: each upload is written here, scanned and kept as a project (at most 8, dropped after an hour unused).
  *
  * @id      upload-dir
  * @kind    store

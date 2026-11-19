@@ -84,9 +84,11 @@ pub fn build(
             summary: b.summary.clone(),
             description: b.description.clone(),
             part_of: None,
+            // The part runs to its code's end, or its block's when it has no code (docair-zrr.2).
             source: Some(SourceRef {
                 file: b.file.clone(),
                 line: b.line,
+                end: b.hints.end.or((b.end_line >= b.line).then_some(b.end_line)),
             }),
             symbol: b.hints.symbol.clone(),
             http,
@@ -134,6 +136,7 @@ pub fn build(
                 Some(SourceRef {
                     file: doc.file.clone(),
                     line: 1,
+                    end: None,
                 }),
             );
             group.origin = Origin::Authored;

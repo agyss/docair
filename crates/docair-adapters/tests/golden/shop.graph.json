@@ -12,7 +12,8 @@
       "part_of": "cluster",
       "source": {
         "file": "api/Cargo.toml",
-        "line": 1
+        "line": 1,
+        "end": 7
       },
       "symbol": "[package]",
       "docs": [],
@@ -47,7 +48,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 1
+        "line": 1,
+        "end": 11
       },
       "symbol": "fn create_order",
       "http": {
@@ -87,9 +89,15 @@
           "origin": "authored"
         },
         {
+          "name": "flow",
+          "value": "keep 2 \"the API takes the order\"",
+          "line": 9,
+          "origin": "authored"
+        },
+        {
           "name": "kind",
           "value": "function",
-          "line": 10,
+          "line": 11,
           "origin": "inferred",
           "reason": "tree-sitter: function_item"
         }
@@ -108,7 +116,8 @@
       "part_of": "orders-api",
       "source": {
         "file": "api/src/lib.rs",
-        "line": 12
+        "line": 13,
+        "end": 20
       },
       "symbol": "fn list_orders",
       "http": {
@@ -120,25 +129,25 @@
         {
           "name": "id",
           "value": "orders.list",
-          "line": 15,
+          "line": 16,
           "origin": "authored"
         },
         {
           "name": "part-of",
           "value": "orders-api",
-          "line": 16,
+          "line": 17,
           "origin": "authored"
         },
         {
           "name": "http",
           "value": "GET /api/orders",
-          "line": 17,
+          "line": 18,
           "origin": "authored"
         },
         {
           "name": "kind",
           "value": "function",
-          "line": 19,
+          "line": 20,
           "origin": "inferred",
           "reason": "tree-sitter: function_item"
         }
@@ -157,7 +166,8 @@
       "part_of": "shop",
       "source": {
         "file": "infra/main.tf",
-        "line": 1
+        "line": 1,
+        "end": 7
       },
       "symbol": "terraform {",
       "docs": [],
@@ -192,7 +202,8 @@
       "part_of": "infra",
       "source": {
         "file": "infra/main.tf",
-        "line": 12
+        "line": 12,
+        "end": 19
       },
       "symbol": "resource kind_cluster.shop",
       "docs": [],
@@ -233,7 +244,8 @@
       "part_of": "infra",
       "source": {
         "file": "infra/main.tf",
-        "line": 21
+        "line": 21,
+        "end": 27
       },
       "symbol": "shop",
       "docs": [],
@@ -268,7 +280,8 @@
       "part_of": "shop-ui",
       "source": {
         "file": "ui/src/cart.ts",
-        "line": 1
+        "line": 1,
+        "end": 24
       },
       "symbol": "class Cart",
       "docs": [],
@@ -310,9 +323,15 @@
           "origin": "authored"
         },
         {
+          "name": "flow",
+          "value": "keep 1 \"the cart sends the order\"",
+          "line": 10,
+          "origin": "authored"
+        },
+        {
           "name": "kind",
           "value": "component",
-          "line": 11,
+          "line": 12,
           "origin": "inferred",
           "reason": "tree-sitter: class_declaration"
         }
@@ -328,7 +347,8 @@
       "part_of": "shop-ui.cart",
       "source": {
         "file": "ui/src/cart.ts",
-        "line": 14
+        "line": 15,
+        "end": 23
       },
       "symbol": "total",
       "docs": [],
@@ -336,19 +356,19 @@
         {
           "name": "id",
           "value": "shop-ui.cart.total",
-          "line": 17,
+          "line": 18,
           "origin": "authored"
         },
         {
           "name": "part-of",
           "value": "shop-ui.cart",
-          "line": 18,
+          "line": 19,
           "origin": "authored"
         },
         {
           "name": "kind",
           "value": "function",
-          "line": 20,
+          "line": 21,
           "origin": "inferred",
           "reason": "tree-sitter: method_definition"
         }
@@ -368,7 +388,8 @@
       "part_of": "shop",
       "source": {
         "file": "ui/tests/cart.spec.ts",
-        "line": 3
+        "line": 3,
+        "end": 31
       },
       "symbol": "cart",
       "docs": [],
@@ -410,7 +431,8 @@
       "part_of": "shop-tests",
       "source": {
         "file": "ui/tests/cart.spec.ts",
-        "line": 11
+        "line": 11,
+        "end": 20
       },
       "symbol": "buying stores the order",
       "docs": [],
@@ -457,7 +479,8 @@
       "part_of": "shop-tests",
       "source": {
         "file": "ui/tests/cart.spec.ts",
-        "line": 22
+        "line": 22,
+        "end": 30
       },
       "symbol": "the total adds up",
       "docs": [],
@@ -498,7 +521,8 @@
       "part_of": "shop",
       "source": {
         "file": "README.md",
-        "line": 5
+        "line": 5,
+        "end": 13
       },
       "docs": [],
       "tags": [
@@ -544,7 +568,8 @@
       "part_of": "shop",
       "source": {
         "file": "README.md",
-        "line": 15
+        "line": 15,
+        "end": 21
       },
       "docs": [],
       "tags": [
@@ -578,7 +603,8 @@
       "part_of": "shop",
       "source": {
         "file": "README.md",
-        "line": 23
+        "line": 23,
+        "end": 30
       },
       "docs": [],
       "tags": [
@@ -618,7 +644,8 @@
       "part_of": "cluster",
       "source": {
         "file": "README.md",
-        "line": 32
+        "line": 32,
+        "end": 39
       },
       "docs": [],
       "tags": [
@@ -639,6 +666,12 @@
           "value": "cluster",
           "line": 37,
           "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "keep 3 \"the order is written\"",
+          "line": 38,
+          "origin": "authored"
         }
       ],
       "origin": "authored"
@@ -652,7 +685,8 @@
       "part_of": "browser",
       "source": {
         "file": "ui/README.md",
-        "line": 3
+        "line": 3,
+        "end": 10
       },
       "docs": [
         {
@@ -699,7 +733,7 @@
       "docs": [
         {
           "file": "README.md",
-          "markdown": "# shop\n\nA shop: the shopper puts things in a cart, the API stores the order.\n\n```docair\nThe shopper, in a browser.\n\n@id      shopper\n@kind    external\n@part-of shop\n@calls   shop-ui.cart (clicks Buy)\n@flow    checkout 1 \"the shopper clicks Buy\"\n```\n\n```docair\nThe shopper's browser: the shop's web front end runs here.\n\n@id      browser\n@kind    external\n@part-of shop\n```\n\n```docair\nThe order the shopper places: the items of the cart, as the cart sends them and the API stores them.\n\n@id         data.order\n@kind       data\n@part-of    shop\n@carried-as CreateOrder, Order\n```\n\n```docair\nThe orders table in Postgres.\n\n@id      orders-db\n@kind    store\n@part-of cluster\n```"
+          "markdown": "# shop\n\nA shop: the shopper puts things in a cart, the API stores the order.\n\n```docair\nThe shopper, in a browser.\n\n@id      shopper\n@kind    external\n@part-of shop\n@calls   shop-ui.cart (clicks Buy)\n@flow    checkout 1 \"the shopper clicks Buy\"\n```\n\n```docair\nThe shopper's browser: the shop's web front end runs here.\n\n@id      browser\n@kind    external\n@part-of shop\n```\n\n```docair\nThe order the shopper places: the items of the cart, as the cart sends them and the API stores them.\n\n@id         data.order\n@kind       data\n@part-of    shop\n@carried-as CreateOrder, Order\n```\n\n```docair\nThe orders table in Postgres.\n\n@id      orders-db\n@kind    store\n@part-of cluster\n@flow    keep 3 \"the order is written\"\n```"
         }
       ],
       "tags": [],
@@ -708,6 +742,7 @@
   ],
   "edges": [
     {
+      "id": "orders.create -write-> orders-db",
       "from": "orders.create",
       "to": "orders-db",
       "kind": "write",
@@ -724,6 +759,7 @@
       "origin": "authored"
     },
     {
+      "id": "tf.cluster -create-> cluster",
       "from": "tf.cluster",
       "to": "cluster",
       "kind": "create",
@@ -737,6 +773,7 @@
       "origin": "authored"
     },
     {
+      "id": "shop-ui.cart -call-> orders.create",
       "from": "shop-ui.cart",
       "to": "orders.create",
       "kind": "call",
@@ -758,6 +795,7 @@
       "origin": "authored"
     },
     {
+      "id": "shop-ui.cart -create-> data.order",
       "from": "shop-ui.cart",
       "to": "data.order",
       "kind": "create",
@@ -770,6 +808,7 @@
       "origin": "authored"
     },
     {
+      "id": "cart-spec.buying-stores-the-order -cover-> shop-ui.cart",
       "from": "cart-spec.buying-stores-the-order",
       "to": "shop-ui.cart",
       "kind": "cover",
@@ -781,6 +820,7 @@
       "origin": "authored"
     },
     {
+      "id": "cart-spec.buying-stores-the-order -cover-> orders.create",
       "from": "cart-spec.buying-stores-the-order",
       "to": "orders.create",
       "kind": "cover",
@@ -792,6 +832,7 @@
       "origin": "authored"
     },
     {
+      "id": "cart-spec.the-total-adds-up -cover-> shop-ui.cart.total",
       "from": "cart-spec.the-total-adds-up",
       "to": "shop-ui.cart.total",
       "kind": "cover",
@@ -803,6 +844,7 @@
       "origin": "authored"
     },
     {
+      "id": "shopper -call-> shop-ui.cart",
       "from": "shopper",
       "to": "shop-ui.cart",
       "kind": "call",
@@ -846,6 +888,39 @@
           "label": "the API stores the order",
           "path": [
             2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "keep",
+      "steps": [
+        {
+          "step": 1,
+          "nodes": [
+            "shop-ui.cart"
+          ],
+          "label": "the cart sends the order",
+          "path": []
+        },
+        {
+          "step": 2,
+          "nodes": [
+            "orders.create"
+          ],
+          "label": "the API takes the order",
+          "path": [
+            2
+          ]
+        },
+        {
+          "step": 3,
+          "nodes": [
+            "orders-db"
+          ],
+          "label": "the order is written",
+          "path": [
+            0
           ]
         }
       ]
@@ -907,7 +982,10 @@
         "checked": "ada35fb2",
         "why": "the data the shopper places; the glossary entry agrees with it"
       }
-    }
+    },
+    "unnamed": [
+      "API"
+    ]
   },
   "diagnostics": []
 }

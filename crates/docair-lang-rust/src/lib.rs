@@ -168,6 +168,8 @@ enum Callee {
     Path(Vec<String>),
     /// `self.save(…)`
     SelfMethod(String),
+    /// `x.save(…)` on a value whose type the syntax does not say.
+    Method(String),
 }
 
 /// One Rust file, read: its facts so far, its items, what the rules found, and the calls it writes.
@@ -179,6 +181,27 @@ pub struct FileRead {
     found: Vec<Found>,
     calls: Vec<(usize, Callee, String)>,
     flows: Vec<Flow>,
+    /// axum `.nest("/prefix", …)` in this file (docair-4wk.9).
+    nests: Vec<Nest>,
+}
+
+/// An axum router nested under a prefix: `.nest("/api", api())` or `.nest("/admin", admin)`.
+#[derive(Debug, Clone)]
+struct Nest {
+    /// The line of the `nest` call.
+    line: usize,
+    prefix: String,
+    /// What is nested: a function that builds the router, or a router in a variable of the same function.
+    nested: NestTarget,
+}
+
+/// What a `nest` puts under its prefix.
+#[derive(Debug, Clone)]
+enum NestTarget {
+    /// A function's name: every route it builds gets the prefix.
+    Built(String),
+    /// The lines of the `let` that builds the router in a variable: the routes on them get the prefix.
+    Lines(usize, usize),
 }
 
 /// A call as written: where its name is (line, byte column), what it names, and its code.
@@ -219,6 +242,7 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
         found: Vec::new(),
         calls: Vec::new(),
         flows: Vec::new(),
+        nests: Vec::new(),
     };
     let mut parser = Parser::new();
     parser
@@ -233,6 +257,11 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
     let src = file.text.as_bytes();
     let mut items: Vec<(usize, Node)> = items_by_row(tree.root_node()).into_iter().collect();
     items.sort_by_key(|(row, _)| *row);
+    // Items inside an item that starts on the same line (`impl A { fn f() {} }`), after it (docair-4wk.16).
+    let firsts: Vec<Node> = items.iter().map(|(_, n)| *n).collect();
+    let mut inner = items_within_rows(&firsts);
+    items.append(&mut inner);
+    items.sort_by_key(|(row, n)| (*row, n.start_byte()));
     let krate = crate_of(&file.path);
     let file_mods = file_modules(&file.rel, &file.path, krate.as_ref());
     let test_file = is_test_file(&file.rel);
@@ -243,7 +272,16 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             continue;
         };
         let line = row + 1;
-        let key = format!("rust:{}:{line}", file.rel);
+        // The first item on a line has the line's key; one inside it on that line, its column too.
+        let key = if firsts.iter().any(|f| f.id() == item.id()) {
+            format!("rust:{}:{line}", file.rel)
+        } else {
+            format!(
+                "rust:{}:{line}:{}",
+                file.rel,
+                item.start_position().column + 1
+            )
+        };
 
         // Module path: the file's modules + inline `mod x { }` ancestors.
         let mut inline = Vec::new();
@@ -292,6 +330,12 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             .then(|| module_file(&file.rel, &file.path, &it.name))
             .flatten();
         let hidden = it.keyword == "impl" || in_function(item) || test_file || is_test(item, src);
+        // A `mod x;` without docs of its own: the module file's `//!` docs (docair-c6y).
+        let module_docs = docs_of(item, src).or_else(|| {
+            let module = declares_file.as_deref()?;
+            let root = file.path.ancestors().nth(file.rel.split('/').count())?;
+            inner_docs(&std::fs::read_to_string(root.join(module)).ok()?)
+        });
 
         read.items.push(Site {
             key: key.clone(),
@@ -319,13 +363,16 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             parent_line,
             declares_file,
             signature: signature_of(item, src),
-            docs: docs_of(item, src),
+            // A `mod x;` without docs of its own: the module file's `//!` docs (docair-c6y).
+            docs: module_docs,
+            end: Some(item.end_position().row + 1),
             ..Symbol::at(key, &file.rel, line)
         });
     }
     read.found = rules.apply(&file.text);
     read.found.extend(env_through(tree.root_node(), src));
     read.calls = syntax_calls(tree.root_node(), src);
+    read.nests = nests_of(tree.root_node(), src);
     read.flows = data_flows(tree.root_node(), src);
     read
 }
@@ -1003,6 +1050,130 @@ fn data_flows(root: Node, src: &[u8]) -> Vec<Flow> {
 }
 
 /// The calls a file writes, with their line and the code: `config::load(root)`, `self.save(…)`.
+/***
+ * The axum routers nested under a prefix: `.nest("/api", api())` names the function that builds the nested router; `.nest("/admin", admin)` a variable whose `let` builds it in the same function.
+ ***/
+fn nests_of(root: Node, src: &[u8]) -> Vec<Nest> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "call_expression"
+            && let Some(f) = n.child_by_field_name("function")
+            && f.kind() == "field_expression"
+            && text_of(f.child_by_field_name("field"), src) == "nest"
+            && let Some(args) = n.child_by_field_name("arguments")
+        {
+            let mut c = args.walk();
+            let list: Vec<Node> = args.named_children(&mut c).collect();
+            if let [path, what] = list.as_slice()
+                && path.kind() == "string_literal"
+            {
+                let prefix = text_of(Some(*path), src).trim_matches('"').to_string();
+                let nested = match what.kind() {
+                    "call_expression" => {
+                        let name = text_of(what.child_by_field_name("function"), src);
+                        Some(NestTarget::Built(
+                            name.rsplit("::").next().unwrap_or(&name).to_string(),
+                        ))
+                    }
+                    "identifier" => {
+                        let name = text_of(Some(*what), src);
+                        let_lines(n, &name, src).map(|(a, b)| NestTarget::Lines(a, b))
+                    }
+                    _ => None,
+                };
+                if let Some(nested) = nested {
+                    out.push(Nest {
+                        line: n.start_position().row + 1,
+                        prefix,
+                        nested,
+                    });
+                }
+            }
+        }
+        let mut cursor = n.walk();
+        let children: Vec<Node> = n.named_children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+    }
+    out
+}
+
+/// The lines of the `let NAME = …;` in the function around `at`, before it.
+fn let_lines(at: Node, name: &str, src: &[u8]) -> Option<(usize, usize)> {
+    let mut f = at.parent();
+    while let Some(n) = f {
+        if n.kind() == "function_item" {
+            break;
+        }
+        f = n.parent();
+    }
+    let mut stack = vec![f?];
+    let mut found = None;
+    while let Some(n) = stack.pop() {
+        if n.kind() == "let_declaration"
+            && n.start_byte() < at.start_byte()
+            && text_of(n.child_by_field_name("pattern"), src) == name
+        {
+            found = Some((n.start_position().row + 1, n.end_position().row + 1));
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    found
+}
+
+/// Route prefixes: by the key of the function that builds the routes, and by (file, first line, last line) of a nested router's `let`.
+type RoutePrefixes = (HashMap<String, String>, Vec<(usize, usize, usize, String)>);
+
+/// The prefix each route of the crate gets from the routers nested around it: by the function
+/// that builds the routes, and by the lines of a `let` that builds a nested router.
+fn route_prefixes(files: &[FileRead]) -> RoutePrefixes {
+    // Who nests what: the nested function's key, under (the nesting function's key, prefix).
+    let mut under: HashMap<String, (String, String)> = HashMap::new();
+    let mut lines: Vec<(usize, usize, usize, String, String)> = Vec::new();
+    for (at, file) in files.iter().enumerate() {
+        for nest in &file.nests {
+            let Some(outer) = file.at(&About::Within(nest.line)) else {
+                continue;
+            };
+            match &nest.nested {
+                NestTarget::Built(name) => {
+                    if let Some(inner) = named(files, at, name) {
+                        under
+                            .entry(inner.key.clone())
+                            .or_insert((outer.key.clone(), nest.prefix.clone()));
+                    }
+                }
+                NestTarget::Lines(a, b) => {
+                    lines.push((at, *a, *b, outer.key.clone(), nest.prefix.clone()))
+                }
+            }
+        }
+    }
+    // A prefix is the nesting function's prefix and the nest's own: `/api` then `/v1` is `/api/v1`.
+    let full = |key: &str| {
+        let mut parts = Vec::new();
+        let mut cur = key.to_string();
+        for _ in 0..16 {
+            let Some((outer, p)) = under.get(&cur) else {
+                break;
+            };
+            parts.push(p.clone());
+            cur = outer.clone();
+        }
+        parts
+            .iter()
+            .rev()
+            .fold(String::new(), |acc, p| docair_core::route::join(&acc, p))
+    };
+    let by_fn: HashMap<String, String> = under.keys().map(|k| (k.clone(), full(k))).collect();
+    let by_lines = lines
+        .into_iter()
+        .map(|(at, a, b, outer, p)| (at, a, b, docair_core::route::join(&full(&outer), &p)))
+        .collect();
+    (by_fn, by_lines)
+}
+
 fn syntax_calls(root: Node, src: &[u8]) -> Vec<(usize, Callee, String)> {
     let mut out = Vec::new();
     let mut stack = vec![root];
@@ -1028,6 +1199,9 @@ fn syntax_calls(root: Node, src: &[u8]) -> Vec<(usize, Callee, String)> {
                         src,
                     )))
                 }
+                "field_expression" => {
+                    Some(Callee::Method(text_of(f.child_by_field_name("field"), src)))
+                }
                 _ => None,
             };
             if let Some(c) = callee {
@@ -1051,9 +1225,11 @@ impl FileRead {
     fn at(&self, about: &About) -> Option<&Site> {
         match about {
             About::Line(line) => self.items.iter().find(|i| i.start == *line),
+            // The smallest item around the line; of items on the same lines, the innermost (listed last).
             About::Within(line) => self
                 .items
                 .iter()
+                .rev()
                 .filter(|i| i.start <= *line && *line <= i.end)
                 .min_by_key(|i| i.end - i.start),
             About::Name(_) => None,
@@ -1089,6 +1265,151 @@ fn only<'a>(mut it: impl Iterator<Item = &'a Site>) -> Option<&'a Site> {
 }
 
 /// The function a call the syntax writes reaches, when the syntax makes it certain.
+/// More candidates than this for a call by name: no could lines, the call is left to blocks.
+const MAX_CANDIDATES: usize = 5;
+
+/// Method names the standard library's types have too: a call by such a name is far more often
+/// theirs (docair: 166 of 167 `.is_empty()` calls), so it gets no could line.
+const STD_METHODS: &[&str] = &[
+    "as_bytes",
+    "as_deref",
+    "as_mut",
+    "as_path",
+    "as_ref",
+    "as_slice",
+    "as_str",
+    "and_then",
+    "borrow",
+    "borrow_mut",
+    "bytes",
+    "chars",
+    "clear",
+    "clone",
+    "cloned",
+    "cmp",
+    "collect",
+    "contains",
+    "contains_key",
+    "copied",
+    "count",
+    "dedup",
+    "default",
+    "display",
+    "drain",
+    "ends_with",
+    "entry",
+    "eq",
+    "err",
+    "exists",
+    "expect",
+    "extend",
+    "extension",
+    "file_name",
+    "filter",
+    "filter_map",
+    "find",
+    "first",
+    "flat_map",
+    "flatten",
+    "flush",
+    "fmt",
+    "fold",
+    "from",
+    "get",
+    "get_mut",
+    "hash",
+    "insert",
+    "into",
+    "into_iter",
+    "is_dir",
+    "is_empty",
+    "is_err",
+    "is_file",
+    "is_none",
+    "is_ok",
+    "is_some",
+    "iter",
+    "iter_mut",
+    "join",
+    "keys",
+    "last",
+    "len",
+    "lines",
+    "lock",
+    "map",
+    "map_err",
+    "map_or",
+    "max",
+    "min",
+    "next",
+    "ok",
+    "ok_or",
+    "ok_or_else",
+    "or_default",
+    "or_else",
+    "or_insert",
+    "or_insert_with",
+    "parent",
+    "parse",
+    "partial_cmp",
+    "pop",
+    "position",
+    "push",
+    "push_str",
+    "read",
+    "read_to_string",
+    "recv",
+    "remove",
+    "replace",
+    "retain",
+    "rev",
+    "send",
+    "sort",
+    "sort_by",
+    "sort_by_key",
+    "split",
+    "split_once",
+    "starts_with",
+    "strip_prefix",
+    "strip_suffix",
+    "sum",
+    "take",
+    "to_lowercase",
+    "to_owned",
+    "to_string",
+    "to_uppercase",
+    "to_vec",
+    "trim",
+    "trim_end",
+    "trim_start",
+    "try_into",
+    "unwrap",
+    "unwrap_or",
+    "unwrap_or_default",
+    "unwrap_or_else",
+    "values",
+    "windows",
+    "with_capacity",
+    "write",
+    "write_all",
+    "zip",
+];
+
+/// The methods a call `x.m(…)` could reach when the type of `x` is unknown: methods (never free
+/// functions) of that name in the same crate, unless standard types have a method of that name.
+fn could_methods<'a>(files: &'a [FileRead], at: usize, m: &str) -> Vec<&'a Site> {
+    if STD_METHODS.contains(&m) {
+        return Vec::new();
+    }
+    let krate = &files[at].krate;
+    files
+        .iter()
+        .filter(|f| &f.krate == krate)
+        .flat_map(|f| f.items.iter())
+        .filter(|i| i.is_fn && i.owner.is_some() && i.name == m)
+        .collect()
+}
+
 fn called<'a>(
     files: &'a [FileRead],
     at: usize,
@@ -1101,6 +1422,8 @@ fn called<'a>(
             .flat_map(|f| f.items.iter().filter(|i| i.is_fn).map(move |i| (f, i)))
     };
     match callee {
+        // `x.save(…)`: the type is unknown, so no one function; could lines come from `could_methods`.
+        Callee::Method(_) => None,
         // `load(…)`: the free function of that name in the same file.
         Callee::Name(n) => only(
             files[at]
@@ -1228,6 +1551,20 @@ fn calls_of(
                         *line,
                         format!("tree-sitter: {text}(…)"),
                     );
+                } else if let Callee::Method(m) = callee {
+                    // The type is unknown: each method of that name could be the one (docs/ADAPTERS.md §5.5).
+                    let could = could_methods(files, at, m);
+                    if (1..=MAX_CANDIDATES).contains(&could.len()) {
+                        for to in could {
+                            push(
+                                &caller.key,
+                                &to.key,
+                                Reach::Could,
+                                *line,
+                                format!("tree-sitter: {text}(…), by its name"),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1373,7 +1710,19 @@ pub fn link_with(files: Vec<FileRead>, index: Option<&Index>) -> Facts {
     for at in 0..files.len() {
         out.relations.extend(data_of(&files, at, index, &keys));
     }
+    let (prefix_by_fn, prefix_by_lines) = route_prefixes(&files);
     for (at, file) in files.iter().enumerate() {
+        // The prefix of a route found on this line: a nested router's `let`, else the function building it.
+        let prefix_at = |line: usize| -> Option<&str> {
+            prefix_by_lines
+                .iter()
+                .find(|(f, a, b, _)| *f == at && *a <= line && line <= *b)
+                .map(|(_, _, _, p)| p.as_str())
+                .or_else(|| {
+                    let builder = file.at(&About::Within(line))?;
+                    prefix_by_fn.get(&builder.key).map(String::as_str)
+                })
+        };
         for found in &file.found {
             let item = match &found.about {
                 About::Name(n) => named(&files, at, n),
@@ -1385,7 +1734,13 @@ pub fn link_with(files: Vec<FileRead>, index: Option<&Index>) -> Facts {
             match &found.fact {
                 Fact::Serves(meet) => out.serves.push(Serve {
                     by: item.key.clone(),
-                    at: meet.clone(),
+                    at: match (meet, prefix_at(found.line)) {
+                        (Meet::Http(h), Some(p)) => Meet::Http(docair_core::model::Http {
+                            method: h.method.clone(),
+                            path: docair_core::route::join(p, &h.path),
+                        }),
+                        _ => meet.clone(),
+                    },
                     evidence: Evidence::new(item.start, found.why.clone()),
                 }),
                 // `std::env::var("X")`: the variable meets what sets it (env::link).
@@ -1415,6 +1770,16 @@ pub fn link_with(files: Vec<FileRead>, index: Option<&Index>) -> Facts {
                 Fact::Calls { to, payload } => {
                     let Some(callee) = named(&files, at, to) else {
                         continue;
+                    };
+                    // `GET /orders` under a nest is `GET /api/orders`.
+                    let payload = match (payload, prefix_at(found.line)) {
+                        (Some(pl), Some(p)) => Some(match pl.split_once(' ') {
+                            Some((m, path)) if path.starts_with('/') => {
+                                format!("{m} {}", docair_core::route::join(p, path))
+                            }
+                            _ => pl.clone(),
+                        }),
+                        (pl, _) => pl.clone(),
                     };
                     out.relations.push(Relation {
                         from: item.key.clone(),
@@ -1514,6 +1879,81 @@ fn docs_of(item: Node, src: &[u8]) -> Option<String> {
     let docs = lines.join("\n").trim().to_string();
     (!docs.is_empty()).then_some(docs)
 }
+
+/// A module file's inner docs: its first `//!` lines (or a `/*! */` comment), before any item;
+/// `#![…]` attributes and blank lines in between are skipped.
+fn inner_docs(text: &str) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut rest = text.lines();
+    while let Some(l) = rest.next() {
+        let t = l.trim_start();
+        if let Some(d) = t.strip_prefix("//!") {
+            lines.push(d.strip_prefix(' ').unwrap_or(d).trim_end().to_string());
+        } else if let Some(open) = t.strip_prefix("/*!") {
+            let mut body = open.to_string();
+            while !body.contains("*/") {
+                let Some(next) = rest.next() else { break };
+                body.push('\n');
+                body.push_str(next);
+            }
+            let body = body.split("*/").next().unwrap_or("");
+            for b in body.lines() {
+                let b = b.trim();
+                let b = b.strip_prefix('*').unwrap_or(b);
+                lines.push(b.strip_prefix(' ').unwrap_or(b).to_string());
+            }
+        } else if t.is_empty() || t.starts_with("#![") {
+            if !lines.is_empty() && t.is_empty() {
+                lines.push(String::new());
+            }
+        } else {
+            break;
+        }
+    }
+    let docs = lines.join("\n").trim().to_string();
+    (!docs.is_empty()).then_some(docs)
+}
+
+/// Items that start on the same line as an item around them, which `items_by_row` leaves out:
+/// `fn file` in `impl Adapter for A { fn file(&self) {} }`, by the row they start on.
+fn items_within_rows<'t>(firsts: &[Node<'t>]) -> Vec<(usize, Node<'t>)> {
+    let mut out = Vec::new();
+    for top in firsts {
+        let row = top.start_position().row;
+        let mut stack: Vec<Node> = {
+            let mut c = top.walk();
+            top.named_children(&mut c).collect()
+        };
+        while let Some(n) = stack.pop() {
+            // Only what starts on the item's own line can be left out; what starts later has its own row.
+            if n.start_position().row > row {
+                continue;
+            }
+            if ITEM_KINDS.contains(&n.kind()) {
+                out.push((row, n));
+            }
+            let mut c = n.walk();
+            stack.extend(n.named_children(&mut c));
+        }
+    }
+    out
+}
+
+/// The syntax kinds docair takes as items.
+const ITEM_KINDS: &[&str] = &[
+    "function_item",
+    "function_signature_item",
+    "struct_item",
+    "enum_item",
+    "union_item",
+    "trait_item",
+    "impl_item",
+    "mod_item",
+    "const_item",
+    "static_item",
+    "type_item",
+    "macro_definition",
+];
 
 /***
  * Index the items of a syntax tree by the row they start on, outermost first.
@@ -1724,6 +2164,20 @@ mod tests {
     use docair_core::facts::Meet;
     use docair_core::lang::{Family, language_for};
     use docair_core::model::{Origin, RawBlock, Tag};
+
+    #[test]
+    fn a_module_files_inner_docs_are_read() {
+        let text = "#![allow(dead_code)]\n//! Facts: what adapters learn.\n//!\n//! More.\n\nuse x;\n//! not this\n";
+        assert_eq!(
+            inner_docs(text).as_deref(),
+            Some("Facts: what adapters learn.\n\nMore.")
+        );
+        assert_eq!(
+            inner_docs("/*! Block docs.\n * second\n */\nfn a() {}").as_deref(),
+            Some("Block docs.\nsecond")
+        );
+        assert_eq!(inner_docs("use x;\n//! late"), None);
+    }
 
     fn rules_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("rules")
@@ -2008,6 +2462,7 @@ mod tests {
     #[test]
     fn every_item_is_drawn_except_impls_tests_and_nested_ones() {
         let src = "/// Orders.\n///\n/// More about them.\n#[derive(Debug)]\npub struct Order;\n\nimpl Order {\n    /// Save it.\n    pub fn save(&self) {\n        fn inner() {}\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn saves() {}\n}\n\n/+++ Documented by a block. +++/\nfn helper() {}\n";
+
         let blocks = enrich("src/orders.rs", src);
         let drawn: Vec<_> = blocks
             .iter()
@@ -2037,6 +2492,170 @@ mod tests {
                 ),
                 ("save".into(), Origin::Discovered, "Save it.", ""),
             ]
+        );
+    }
+
+    /// Items inside an item on the same line get parts of their own, and calls from them start there (docair-4wk.16).
+    #[test]
+    fn items_on_one_line_are_parts_of_their_own() {
+        let src = "mod config { pub fn load() { parse(); } }\n\npub fn parse() {}\n\npub struct A;\nimpl A { pub fn file(&self) { parse(); } }\n";
+        let blocks = enrich("src/lib.rs", src);
+        let names: Vec<String> = blocks.iter().filter_map(|b| b.hints.name.clone()).collect();
+        for want in ["config", "load", "parse", "A", "file"] {
+            assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
+        }
+        let file = SourceFile {
+            path: PathBuf::from("/nonexistent/src/lib.rs"),
+            rel: "src/lib.rs".to_string(),
+            lang: language_for("rs").unwrap(),
+            text: src.to_string(),
+        };
+        let facts = facts_with(&file, rules());
+        let key_of = |name: &str| {
+            facts
+                .symbols
+                .iter()
+                .find(|s| s.name.as_deref() == Some(name))
+                .map(|s| s.key.clone())
+                .unwrap()
+        };
+        assert_eq!(key_of("config"), "rust:src/lib.rs:1");
+        assert_eq!(key_of("load"), "rust:src/lib.rs:1:14");
+        let calls: Vec<(String, String)> = facts
+            .relations
+            .iter()
+            .filter(|r| r.verb == Verb::Calls)
+            .map(|r| (r.from.clone(), format!("{:?}", r.to)))
+            .collect();
+        let from_load = calls
+            .iter()
+            .any(|(f, t)| *f == key_of("load") && t.contains(&key_of("parse")));
+        let from_file = calls
+            .iter()
+            .any(|(f, t)| *f == key_of("file") && t.contains(&key_of("parse")));
+        assert!(from_load && from_file, "{calls:?}");
+    }
+
+    /// A router nested under a prefix serves its routes there: by a function, a nest in a nest, a variable (docair-4wk.9).
+    #[test]
+    fn nested_routers_put_their_prefix_in_front() {
+        let src = r#"use axum::Router;
+use axum::routing::get;
+
+pub fn app() -> Router {
+    let admin = Router::new().route("/users", get(users));
+    Router::new()
+        .route("/healthz", get(health))
+        .nest("/api", api())
+        .nest("/admin", admin)
+}
+
+pub fn api() -> Router {
+    Router::new().route("/orders", get(list)).nest("/v1", v1())
+}
+
+pub fn v1() -> Router {
+    Router::new().route("/items/{id}", get(items))
+}
+
+async fn health() {}
+async fn list() {}
+async fn items() {}
+async fn users() {}
+"#;
+        let file = SourceFile {
+            path: PathBuf::from("/nonexistent/src/lib.rs"),
+            rel: "src/lib.rs".to_string(),
+            lang: language_for("rs").unwrap(),
+            text: src.to_string(),
+        };
+        let facts = facts_with(&file, rules());
+        let name_of = |key: &str| {
+            facts
+                .symbols
+                .iter()
+                .find(|s| s.key == key)
+                .and_then(|s| s.name.clone())
+                .unwrap_or_default()
+        };
+        let mut served: Vec<String> = facts
+            .serves
+            .iter()
+            .map(|s| format!("{} {}", s.at, name_of(&s.by)))
+            .collect();
+        served.sort();
+        assert_eq!(
+            served,
+            [
+                "GET /admin/users users",
+                "GET /api/orders list",
+                "GET /api/v1/items/{id} items",
+                "GET /healthz health",
+            ]
+        );
+        let payloads: Vec<String> = facts
+            .relations
+            .iter()
+            .filter(|r| r.verb == Verb::Calls)
+            .filter_map(|r| r.payload.clone())
+            .collect();
+        assert!(
+            payloads.contains(&"GET /api/v1/items/{id}".to_string()),
+            "{payloads:?}"
+        );
+    }
+
+    /// A method called on a value of unknown type could be each method of that name; std names and too many give none (docair-4wk.13).
+    #[test]
+    fn a_method_of_unknown_type_could_be_each_of_that_name() {
+        let mut src = String::from(
+            "pub struct A;\nimpl A { pub fn save(&self) {} }\npub struct B;\nimpl B { pub fn save(&self) {} }\n\npub fn run(x: Box<dyn Any>) {\n    x.save();\n    x.is_empty();\n    x.tick();\n}\n",
+        );
+        for t in ["C", "D", "E", "F", "G", "H"] {
+            src.push_str(&format!(
+                "pub struct {t};\nimpl {t} {{ pub fn tick(&self) {{}} }}\n"
+            ));
+        }
+        let file = SourceFile {
+            path: PathBuf::from("/nonexistent/src/lib.rs"),
+            rel: "src/lib.rs".to_string(),
+            lang: language_for("rs").unwrap(),
+            text: src,
+        };
+        let facts = facts_with(&file, rules());
+        let name_of = |key: &str| {
+            facts
+                .symbols
+                .iter()
+                .find(|s| s.key == key)
+                .map(|s| {
+                    format!(
+                        "{}.{}",
+                        s.id.clone().unwrap_or_default(),
+                        s.name.clone().unwrap_or_default()
+                    )
+                })
+                .unwrap_or_default()
+        };
+        let from_run: Vec<(String, Reach)> = facts
+            .relations
+            .iter()
+            .filter(|r| r.verb == Verb::Calls && name_of(&r.from).ends_with(".run"))
+            .map(|r| match &r.to {
+                Target::Symbol(k) => (name_of(k), r.reach),
+                t => (format!("{t:?}"), r.reach),
+            })
+            .collect();
+        assert_eq!(
+            from_run.len(),
+            2,
+            "save of A and B, not is_empty, not tick with 6: {from_run:?}"
+        );
+        assert!(
+            from_run
+                .iter()
+                .all(|(n, reach)| n.ends_with(".save") && *reach == Reach::Could),
+            "{from_run:?}"
         );
     }
 

@@ -283,8 +283,15 @@ fn line_words(g: &GraphLookup, l: &LayerLine) -> String {
     } else {
         0
     };
-    let what = if tests > 0 {
-        format!("{tests} {}", if tests == 1 { "test" } else { "tests" })
+    // A line that stands for one test says what that test checks ("checks Cart"), or "1 test"
+    // when its tag has no words; one for several tests counts them (docair-702.14).
+    let what = if tests == 1 {
+        edges
+            .iter()
+            .find_map(|e| e.text.clone().filter(|t| !t.trim().is_empty()))
+            .unwrap_or_else(|| "1 test".to_string())
+    } else if tests > 1 {
+        format!("{tests} tests")
     } else if l.bundled {
         let items: Vec<String> = says
             .iter()
@@ -328,6 +335,13 @@ fn part_size(font: &Monospace, kind: &str, label: &str) -> (f64, f64) {
         "gateway" => 30.0,
         "network" => 22.0,
         "api" => 14.0,
+        // Room for the words inside the outlines that cut or point in (svg.rs shape_of).
+        "cluster" => 26.0,
+        "release" => 18.0,
+        "service" => 14.0,
+        "data" => 14.0,
+        "container" => 10.0,
+        "module" => 6.0,
         _ => 0.0,
     };
     let w = (font.width(label, PART_FONT).ceil() + 26.0 + extra).max(56.0);
@@ -495,7 +509,22 @@ pub fn lay_out(graph: &Graph, pic: &LayerPicture) -> Layout {
 /// As `lay_out`, with how much some of the picture's lines point ahead given.
 pub fn lay_out_with(graph: &Graph, pic: &LayerPicture, ahead: &HashMap<usize, u32>) -> Layout {
     let font = Monospace::default();
-    docair_layout::lay_out(&input_with(graph, pic, &font, ahead), &Options::default())
+    docair_layout::lay_out(&input_with(graph, pic, &font, ahead), &options_for(pic))
+}
+
+/***
+ * The options a picture is laid out with. A layer or a section shrinks what each box holds to its size budget (top-down). A slice does not: every word keeps its size, the picture grows and the reader pans, so a walk through it stays readable (docair-702.27).
+ ***/
+pub fn options_for(pic: &LayerPicture) -> Options {
+    if pic.slice.is_some() {
+        Options {
+            budget: f64::INFINITY,
+            floor: 1.0,
+            ..Options::default()
+        }
+    } else {
+        Options::default()
+    }
 }
 
 /// How often the picture's lines cross when drawn straight from part to part.

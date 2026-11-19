@@ -31,8 +31,6 @@ const BOX_NAME_AT: f64 = 12.0;
 const WORDS_FONT: f64 = 11.0;
 const WORDS_LINE: f64 = 14.0;
 const WORDS_WRAP: usize = 28;
-/// How round a line's corners are, in px.
-const CORNER: f64 = 6.0;
 /// Room around the picture, in px.
 const MARGIN: f64 = 16.0;
 
@@ -65,10 +63,22 @@ const KINDS: &[&str] = &[
 ];
 
 /// The outline of a part (the node shapes viewer.js gives Cytoscape).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PartShape {
     Rect,
     RoundRect,
+    /// Round ends: a datum, like the chips in a line's words.
+    Pill,
+    /// All four corners cut: a service.
+    Cut,
+    /// The top corners cut: a container.
+    CutTop,
+    /// A folder with its tab: a module.
+    Folder,
+    /// Only the top corners round: a host.
+    TopRound,
+    /// Only the bottom corners round: a test.
+    BottomRound,
     Ellipse,
     Barrel,
     /// Corners in a square from -1 to 1, scaled to the part.
@@ -86,6 +96,15 @@ const OCTAGON: &[f64] = &[
     -0.414, -1.0, -1.0, -0.414, -1.0, 0.414, -0.414, 1.0, 0.414, 1.0, 1.0, 0.414, 1.0, -0.414,
     0.414, -1.0,
 ];
+/// The wheel of Kubernetes: a cluster.
+const HEPTAGON: &[f64] = &[
+    0.0, -1.0, -0.8019, -0.6039, -1.0, 0.2862, -0.4451, 1.0, 0.4451, 1.0, 1.0, 0.2862, 0.8019,
+    -0.6039,
+];
+/// Wider at the bottom: a config.
+const TRAPEZOID: &[f64] = &[-0.82, -1.0, 0.82, -1.0, 1.0, 1.0, -1.0, 1.0];
+/// A pennant, its point to the left: a release.
+const PENNANT: &[f64] = &[-1.0, 0.0, -0.72, -1.0, 1.0, -1.0, 1.0, 1.0, -0.72, 1.0];
 const CONCAVE_HEXAGON: &[f64] = &[
     -1.0, -0.95, -0.75, 0.0, -1.0, 0.95, 1.0, 0.95, 0.75, 0.0, 1.0, -0.95,
 ];
@@ -98,22 +117,42 @@ fn kind_of(kind: &str) -> &str {
     }
 }
 
+/// Each kind its own outline, so no two read alike (the user's ask, 2026-11-18); kinds that share
+/// one differ by their dashes: a component is solid, outside parts and unresolved refs dashed.
 fn shape_of(kind: &str) -> PartShape {
     match kind {
         "api" => PartShape::Polygon(API),
-        "endpoint" | "config" => PartShape::Polygon(TAG),
+        "endpoint" => PartShape::Polygon(TAG),
+        "config" => PartShape::Polygon(TRAPEZOID),
+        "release" => PartShape::Polygon(PENNANT),
+        "cluster" => PartShape::Polygon(HEPTAGON),
         "topic" => PartShape::Polygon(RHOMBOID),
         "workload" => PartShape::Polygon(HEXAGON),
         "job" => PartShape::Polygon(OCTAGON),
         "gateway" => PartShape::Polygon(CONCAVE_HEXAGON),
         "store" => PartShape::Barrel,
         "network" => PartShape::Ellipse,
-        "component" | "external" | "host" | "unresolved" | "unknown" => PartShape::Rect,
+        "service" => PartShape::Cut,
+        "container" => PartShape::CutTop,
+        "module" => PartShape::Folder,
+        "data" => PartShape::Pill,
+        "host" => PartShape::TopRound,
+        "test" => PartShape::BottomRound,
+        "component" | "external" | "unresolved" | "unknown" => PartShape::Rect,
         _ => PartShape::RoundRect,
     }
 }
 
-fn edge_kind(kind: EdgeKind) -> &'static str {
+/// What a line of the graph goes by in the page: its id (docair-svh), or its place in the graph's
+/// lines when the graph was made without ids.
+pub(crate) fn edge_key(graph: &Graph, i: usize) -> String {
+    match graph.edges.get(i) {
+        Some(e) if !e.id.is_empty() => e.id.clone(),
+        _ => i.to_string(),
+    }
+}
+
+pub(crate) fn edge_kind(kind: EdgeKind) -> &'static str {
     match kind {
         EdgeKind::Data => "data",
         EdgeKind::Call => "call",
@@ -182,6 +221,89 @@ fn outline(out: &mut String, shape: PartShape, r: &Rect, class: &str) {
             num(r.h),
             num(round_radius(r.w, r.h))
         ),
+        PartShape::Pill => write!(
+            out,
+            r#"<rect class="{class}" x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
+            num(x0),
+            num(y0),
+            num(r.w),
+            num(r.h),
+            num(r.h.min(r.w) / 2.0)
+        ),
+        PartShape::Cut | PartShape::CutTop | PartShape::Folder => {
+            let c = (r.h * 0.3).min(r.w * 0.25);
+            let pts: Vec<(f64, f64)> = match shape {
+                PartShape::Cut => vec![
+                    (x0 + c, y0),
+                    (x1 - c, y0),
+                    (x1, y0 + c),
+                    (x1, y1 - c),
+                    (x1 - c, y1),
+                    (x0 + c, y1),
+                    (x0, y1 - c),
+                    (x0, y0 + c),
+                ],
+                PartShape::CutTop => vec![
+                    (x0 + c, y0),
+                    (x1 - c, y0),
+                    (x1, y0 + c),
+                    (x1, y1),
+                    (x0, y1),
+                    (x0, y0 + c),
+                ],
+                _ => {
+                    // The tab on the left of the top, as wide as two fifths of the folder.
+                    let (t, tab) = ((r.h * 0.22).min(6.0), (r.w * 0.4).min(30.0));
+                    vec![
+                        (x0, y0),
+                        (x0 + tab - 3.0, y0),
+                        (x0 + tab, y0 + t),
+                        (x1, y0 + t),
+                        (x1, y1),
+                        (x0, y1),
+                    ]
+                }
+            };
+            let points: Vec<String> = pts
+                .iter()
+                .map(|(x, y)| format!("{},{}", num(*x), num(*y)))
+                .collect();
+            write!(
+                out,
+                r#"<polygon class="{class}" points="{}"/>"#,
+                points.join(" ")
+            )
+        }
+        PartShape::TopRound | PartShape::BottomRound => {
+            let k = round_radius(r.w, r.h);
+            let p = |x: f64, y: f64| format!("{},{}", num(x), num(y));
+            let d = if shape == PartShape::TopRound {
+                format!(
+                    "M{} L{} Q{} {} L{} Q{} {} L{} Z",
+                    p(x0, y1),
+                    p(x0, y0 + k),
+                    p(x0, y0),
+                    p(x0 + k, y0),
+                    p(x1 - k, y0),
+                    p(x1, y0),
+                    p(x1, y0 + k),
+                    p(x1, y1)
+                )
+            } else {
+                format!(
+                    "M{} L{} L{} Q{} {} L{} Q{} {} Z",
+                    p(x0, y0),
+                    p(x1, y0),
+                    p(x1, y1 - k),
+                    p(x1, y1),
+                    p(x1 - k, y1),
+                    p(x0 + k, y1),
+                    p(x0, y1),
+                    p(x0, y1 - k)
+                )
+            };
+            write!(out, r#"<path class="{class}" d="{d}"/>"#)
+        }
         PartShape::Ellipse => write!(
             out,
             r#"<ellipse class="{class}" cx="{}" cy="{}" rx="{}" ry="{}"/>"#,
@@ -233,6 +355,94 @@ fn outline(out: &mut String, shape: PartShape, r: &Rect, class: &str) {
     };
 }
 
+/// A kind's mark for the legend: its shape and colours as the pictures draw them; `class` adds
+/// a state (` closed`, ` t-passed`).
+pub(crate) fn kind_swatch(kind: &str, class: &str) -> String {
+    let kind = kind_of(kind);
+    let r = Rect {
+        x: 18.0,
+        y: 10.0,
+        w: 32.0,
+        h: 16.0,
+    };
+    let mut out = format!(
+        r#"<svg class="docair-pic sw-shape" viewBox="0 0 36 20" width="36" height="20" aria-hidden="true"><g class="part k-{kind}{class}">"#
+    );
+    outline(&mut out, shape_of(kind), &r, "sh");
+    if class.contains("closed") {
+        outline(&mut out, shape_of(kind), &r, "gap");
+    }
+    out.push_str("</g></svg>");
+    out
+}
+
+/// A line's mark for the legend: the line style of its kind, `class` for a state (` bundle`, ` dangling`, ` reach-could`).
+pub(crate) fn line_swatch(kind: EdgeKind, class: &str, width: f64) -> String {
+    format!(
+        r#"<svg class="docair-pic sw-line" viewBox="0 0 36 10" width="36" height="10" aria-hidden="true"><g class="line e-{}{class}"><path class="ln" d="M2,5 L34,5" stroke-width="{}"/></g></svg>"#,
+        edge_kind(kind),
+        num(width)
+    )
+}
+
+/// A datum marked in a line's words, for the legend.
+pub(crate) fn chip_swatch() -> String {
+    r#"<svg class="docair-pic sw-chip" viewBox="0 0 36 14" width="36" height="14" aria-hidden="true"><g class="words"><rect class="chip" x="2" y="1" width="32" height="12" rx="3"/><text font-size="9"><tspan class="d" x="18" y="7">data</tspan></text></g></svg>"#.to_string()
+}
+
+/// Terraform's mark (its four slanted bars), in a 10.4 × 11.6 box.
+const TF_MARK: &str = "M0 0L3.2 1.8V5.4L0 3.6Z M3.6 2L6.8 3.8V7.4L3.6 5.6Z M3.6 6.2L6.8 8V11.6L3.6 9.8Z M7.2 3.8L10.4 2V5.6L7.2 7.4Z";
+
+/// The parts Terraform declares, by the file they come from (.tf), and every box that holds only such parts.
+pub(crate) fn terraform_parts(graph: &Graph) -> std::collections::HashSet<&str> {
+    let mut out: std::collections::HashSet<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.source.as_ref().is_some_and(|s| s.file.ends_with(".tf")))
+        .map(|n| n.id.as_str())
+        .collect();
+    // A box whose parts are all Terraform's is Terraform's too: one level at a time, a few levels up.
+    for _ in 0..3 {
+        let mut kids: HashMap<&str, Vec<&str>> = HashMap::new();
+        for n in graph.nodes.iter().filter(|n| n.kind != "data") {
+            if let Some(p) = n.part_of.as_deref() {
+                kids.entry(p).or_default().push(n.id.as_str());
+            }
+        }
+        let more: Vec<&str> = kids
+            .iter()
+            .filter(|(p, ks)| {
+                **p != graph.system && !out.contains(*p) && ks.iter().all(|k| out.contains(k))
+            })
+            .map(|(p, _)| *p)
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        out.extend(more);
+    }
+    out
+}
+
+/// Terraform's mark on a part's corner, as a badge.
+fn tf_mark(out: &mut String, r: &Rect, sc: f64) {
+    let (x, y) = (r.x - r.w / 2.0 - 4.0 * sc, r.y - r.h / 2.0 - 6.0 * sc);
+    let _ = write!(
+        out,
+        r#"<g class="tf-mark" transform="translate({} {}) scale({})"><rect x="-1.8" y="-1.8" width="14" height="15.2" rx="3"/><path d="{TF_MARK}"/></g>"#,
+        num(x),
+        num(y),
+        num((sc * 10.0).round() / 10.0)
+    );
+}
+
+/// Terraform's mark for the legend.
+pub(crate) fn tf_swatch() -> String {
+    format!(
+        r#"<svg class="docair-pic sw-mark" viewBox="-2 -2 15 16" width="18" height="19" aria-hidden="true"><g class="tf-mark"><rect x="-1.8" y="-1.8" width="14" height="15.2" rx="3"/><path d="{TF_MARK}"/></g></svg>"#
+    )
+}
+
 /// How wide a line is drawn: a bundle by how many lines it stands for, data a little wider.
 fn line_width(l: &LayerLine) -> f64 {
     if l.bundled {
@@ -243,47 +453,6 @@ fn line_width(l: &LayerLine) -> f64 {
     } else {
         1.4
     }
-}
-
-/// How long a line's arrow is, for its width (Cytoscape's triangle, at `arrow-scale` 0.9).
-fn arrow_length(width: f64) -> f64 {
-    0.3 * 0.9 * (width * 13.37).powf(0.9).max(29.0)
-}
-
-fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
-    ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
-}
-
-/// A line's points as a path: straight pieces, rounded where they turn.
-fn rounded(pts: &[(f64, f64)]) -> String {
-    let mut d = format!("M{},{}", num(pts[0].0), num(pts[0].1));
-    for i in 1..pts.len() {
-        let b = pts[i];
-        if i + 1 == pts.len() {
-            let _ = write!(d, " L{},{}", num(b.0), num(b.1));
-            break;
-        }
-        let (a, c) = (pts[i - 1], pts[i + 1]);
-        let (l1, l2) = (dist(a, b), dist(b, c));
-        let u1 = ((b.0 - a.0) / l1, (b.1 - a.1) / l1);
-        let u2 = ((c.0 - b.0) / l2, (c.1 - b.1) / l2);
-        let r = CORNER.min(l1 / 2.0).min(l2 / 2.0);
-        if (u1.0 * u2.1 - u1.1 * u2.0).abs() < 1e-6 || r < 0.5 {
-            let _ = write!(d, " L{},{}", num(b.0), num(b.1));
-        } else {
-            let _ = write!(
-                d,
-                " L{},{} Q{},{} {},{}",
-                num(b.0 - u1.0 * r),
-                num(b.1 - u1.1 * r),
-                num(b.0),
-                num(b.1),
-                num(b.0 + u2.0 * r),
-                num(b.1 + u2.1 * r)
-            );
-        }
-    }
-    d
 }
 
 /// Which way a line reaches its part, when the code is not sure (docs/ADAPTERS.md §5.5).
@@ -307,9 +476,9 @@ fn reach_class(graph: &Graph, l: &LayerLine) -> &'static str {
 
 /// The words docair finds the data a line carries by, there and back (as core's
 /// `find_carried_data`): each datum's name, the last part of its id and its `@carried-as` words,
-/// in lower case; the longest first.
-fn carried(graph: &Graph, nodes: &HashMap<&str, &Node>, l: &LayerLine) -> Vec<String> {
-    let mut words: Vec<String> = Vec::new();
+/// in lower case, with the datum each names; the longest first.
+fn carried(graph: &Graph, nodes: &HashMap<&str, &Node>, l: &LayerLine) -> Vec<(String, String)> {
+    let mut words: Vec<(String, String)> = Vec::new();
     for &i in l.members.iter().chain(l.says.iter().flatten()) {
         let Some(e) = graph.edges.get(i) else {
             continue;
@@ -326,19 +495,24 @@ fn carried(graph: &Graph, nodes: &HashMap<&str, &Node>, l: &LayerLine) -> Vec<St
                 of.extend(t.value.split(',').map(|w| w.trim().to_lowercase()));
             }
             for w in of {
-                if !w.is_empty() && !words.contains(&w) {
-                    words.push(w);
+                if !w.is_empty() && !words.iter().any(|(x, _)| *x == w) {
+                    words.push((w, n.id.clone()));
                 }
             }
         }
     }
-    words.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()).then(a.cmp(b)));
+    words.sort_by(|a, b| {
+        b.0.chars()
+            .count()
+            .cmp(&a.0.chars().count())
+            .then(a.0.cmp(&b.0))
+    });
     words
 }
 
 /// Where data stand in one line of words, as docair finds them (glossary::occurs_word): one of a
-/// datum's words, or its plural, as a whole word, in any case. Byte ranges, in order.
-fn chips_in(line: &str, words: &[String]) -> Vec<(usize, usize)> {
+/// datum's words, or its plural, as a whole word, in any case. Byte ranges and the datum, in order.
+fn chips_in<'w>(line: &str, words: &'w [(String, String)]) -> Vec<(usize, usize, &'w str)> {
     let chars: Vec<(usize, char)> = line.char_indices().collect();
     let lower: Vec<char> = chars
         .iter()
@@ -347,8 +521,8 @@ fn chips_in(line: &str, words: &[String]) -> Vec<(usize, usize)> {
     let byte = |i: usize| chars.get(i).map_or(line.len(), |&(b, _)| b);
     let is_word =
         |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '-');
-    let mut taken: Vec<(usize, usize)> = Vec::new();
-    for w in words {
+    let mut taken: Vec<(usize, usize, &str)> = Vec::new();
+    for (w, id) in words {
         let w: Vec<char> = w.chars().collect();
         if w.is_empty() {
             continue;
@@ -366,9 +540,9 @@ fn chips_in(line: &str, words: &[String]) -> Vec<(usize, usize)> {
                 let before = s.checked_sub(1).and_then(|b| lower.get(b));
                 if !is_word(before)
                     && !is_word(lower.get(e))
-                    && taken.iter().all(|&(a, b)| e <= a || s >= b)
+                    && taken.iter().all(|&(a, b, _)| e <= a || s >= b)
                 {
-                    taken.push((s, e));
+                    taken.push((s, e, id.as_str()));
                     s = e;
                     continue;
                 }
@@ -377,7 +551,10 @@ fn chips_in(line: &str, words: &[String]) -> Vec<(usize, usize)> {
         }
     }
     taken.sort_unstable();
-    taken.into_iter().map(|(s, e)| (byte(s), byte(e))).collect()
+    taken
+        .into_iter()
+        .map(|(s, e, id)| (byte(s), byte(e), id))
+        .collect()
 }
 
 /// What a picture is drawn from: its layout, and the words the layout made room for.
@@ -390,6 +567,20 @@ struct SvgPicture<'a> {
     line_words: Vec<String>,
     nodes: HashMap<&'a str, &'a Node>,
     is_box: Vec<bool>,
+    /// The parts Terraform declares (a .tf file), and the boxes that hold only such parts.
+    terraform: std::collections::HashSet<&'a str>,
+    /// What this picture marks, as a change between two versions does.
+    marks: Option<&'a ChangeMarks<'a>>,
+}
+
+/// Parts and lines a picture marks: those a change added or removed (docair-zrr.7).
+pub struct ChangeMarks<'a> {
+    /// The class the marked ones get: `ch-added`, `ch-removed`.
+    pub class: &'a str,
+    /// The parts, by id.
+    pub parts: &'a std::collections::HashSet<String>,
+    /// The graph's lines, by id: a picture's line is marked when it stands for one of them.
+    pub lines: &'a std::collections::HashSet<String>,
 }
 
 impl SvgPicture<'_> {
@@ -478,19 +669,28 @@ impl SvgPicture<'_> {
         let r = &self.layout.placement.parts[i];
         let kind = self.kind(i);
         let sc = self.scale(i);
-        let _ = write!(out, r#"<g class="box k-{kind}" data-id="{}">"#, esc(&p.id));
+        let _ = write!(
+            out,
+            r#"<g class="box k-{kind}{}" data-id="{}">"#,
+            self.mark(&p.id),
+            esc(&p.id)
+        );
         outline(out, PartShape::RoundRect, r, "sh");
         if kind == "container" {
             outline(out, PartShape::RoundRect, r, "gap");
         }
         let _ = write!(
             out,
-            r#"<text class="bn" x="{}" y="{}" font-size="{}">{}</text></g>"#,
+            r#"<text class="bn" x="{}" y="{}" font-size="{}">{}</text>"#,
             num(r.x),
             num(r.y - r.h / 2.0 + BOX_NAME_AT * sc),
             num(BOX_FONT * sc),
             esc(&self.part_words[i])
         );
+        if self.terraform.contains(p.id.as_str()) {
+            tf_mark(out, r, sc);
+        }
+        out.push_str("</g>");
     }
 
     /// A part: its outline in the shape of its kind, and its words.
@@ -509,6 +709,7 @@ impl SvgPicture<'_> {
                 .map_or("none", |t| t.status.as_str());
             let _ = write!(class, " t-{}", esc(status));
         }
+        class.push_str(&self.mark(&p.id));
         let _ = write!(out, r#"<g class="{class}" data-id="{}">"#, esc(&p.id));
         outline(out, shape_of(kind), r, "sh");
         if p.closed {
@@ -516,39 +717,26 @@ impl SvgPicture<'_> {
         }
         let _ = write!(
             out,
-            r#"<text x="{}" y="{}" font-size="{}">{}</text></g>"#,
+            r#"<text x="{}" y="{}" font-size="{}">{}</text>"#,
             num(r.x),
             num(r.y),
             num(PART_FONT * self.scale(i)),
             esc(&self.part_words[i])
         );
+        if self.terraform.contains(p.id.as_str()) {
+            tf_mark(out, r, self.scale(i));
+        }
+        out.push_str("</g>");
     }
 
     /// A line: its path at right angles, rounded where it turns, and its arrow.
     fn draw_line(&self, out: &mut String, j: usize, k: usize) {
         let l = &self.pic.lines[k];
-        let mut pts: Vec<(f64, f64)> = Vec::new();
-        for &q in &self.layout.routes.lines[j] {
-            if pts.last().is_none_or(|p| dist(*p, q) > 0.01) {
-                pts.push(q);
-            }
-        }
-        if pts.len() < 2 {
-            return;
-        }
         let width = line_width(l);
-        let a = arrow_length(width);
-        let tip = pts[pts.len() - 1];
-        let prev = pts[pts.len() - 2];
-        let len = dist(prev, tip);
-        let u = ((tip.0 - prev.0) / len, (tip.1 - prev.1) / len);
-        let base = (tip.0 - u.0 * a, tip.1 - u.1 * a);
-        if len > a {
-            // The line stops where its arrow starts.
-            let last = pts.len() - 1;
-            pts[last] = base;
-        }
-        let (vx, vy) = (-u.1 * a / 2.0, u.0 * a / 2.0);
+        // Drawn as the page's move of a part draws it (docair-layout's draw, also in the WASM).
+        let Some(drawn) = docair_layout::draw::line(&self.layout.routes.lines[j], width) else {
+            return;
+        };
         let mut class = format!("line e-{}", edge_kind(l.kind));
         if l.bundled {
             class.push_str(" bundle");
@@ -557,21 +745,28 @@ impl SvgPicture<'_> {
             class.push_str(" dangling");
         }
         class.push_str(reach_class(self.graph, l));
-        let members: Vec<String> = l.members.iter().map(|m| m.to_string()).collect();
+        if let Some(m) = self.marks.filter(|m| {
+            l.members
+                .iter()
+                .any(|&e| m.lines.contains(&edge_key(self.graph, e)))
+        }) {
+            let _ = write!(class, " {}", m.class);
+        }
+        // The graph's lines it stands for, by their ids (docair-svh); ids hold spaces, never a newline.
+        let members: Vec<String> = l
+            .members
+            .iter()
+            .map(|&m| esc(&edge_key(self.graph, m)))
+            .collect();
         let _ = write!(
             out,
-            r#"<g class="{class}" data-id="{k}" data-from="{}" data-to="{}" data-edges="{}"><path class="ln" d="{}" stroke-width="{}"/><path class="ah" d="M{},{} L{},{} L{},{} Z"/></g>"#,
+            r#"<g class="{class}" data-id="{k}" data-from="{}" data-to="{}" data-edges="{}"><path class="ln" d="{}" stroke-width="{}"/><path class="ah" d="{}"/></g>"#,
             esc(&l.from),
             esc(&l.to),
-            members.join(" "),
-            rounded(&pts),
+            members.join("&#10;"),
+            drawn.d,
             num(width),
-            num(tip.0),
-            num(tip.1),
-            num(base.0 + vx),
-            num(base.1 + vy),
-            num(base.0 - vx),
-            num(base.1 - vy)
+            drawn.arrow
         );
     }
 
@@ -599,12 +794,13 @@ impl SvgPicture<'_> {
             let cy = top + (1.5 + WORDS_LINE / 2.0 + WORDS_LINE * i as f64) * f;
             let chips = chips_in(words, &names);
             let left = at.x - columns(words) as f64 * advance / 2.0;
-            for &(s, e) in &chips {
+            for &(s, e, id) in &chips {
                 let x = left + columns(&words[..s]) as f64 * advance;
                 let w = columns(&words[s..e]) as f64 * advance;
                 let _ = write!(
                     out,
-                    r#"<rect class="chip" x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
+                    r#"<rect class="chip" data-data="{}" x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
+                    esc(id),
                     num(x - 2.0 * f),
                     num(cy - 0.65 * fs),
                     num(w + 4.0 * f),
@@ -614,9 +810,14 @@ impl SvgPicture<'_> {
             }
             let _ = write!(text, r#"<tspan x="{}" y="{}">"#, num(at.x), num(cy));
             let mut pos = 0;
-            for &(s, e) in &chips {
+            for &(s, e, id) in &chips {
                 text.push_str(&esc(&words[pos..s]));
-                let _ = write!(text, r#"<tspan class="d">{}</tspan>"#, esc(&words[s..e]));
+                let _ = write!(
+                    text,
+                    r#"<tspan class="d" data-data="{}">{}</tspan>"#,
+                    esc(id),
+                    esc(&words[s..e])
+                );
                 pos = e;
             }
             text.push_str(&esc(&words[pos..]));
@@ -710,7 +911,17 @@ impl<'a> SvgPicture<'a> {
             line_words,
             nodes: graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect(),
             is_box,
+            terraform: terraform_parts(graph),
+            marks: None,
         }
+    }
+
+    /// The class a marked part gets: ` ch-added`, or nothing.
+    fn mark(&self, id: &str) -> String {
+        self.marks
+            .filter(|m| m.parts.contains(id))
+            .map(|m| format!(" {}", m.class))
+            .unwrap_or_default()
     }
 }
 
@@ -724,6 +935,18 @@ impl<'a> SvgPicture<'a> {
  ***/
 pub fn draw(graph: &Graph, pic: &LayerPicture, layout: &Layout) -> String {
     SvgPicture::new(graph, pic, layout).draw(false)
+}
+
+/// As `draw`, with some parts and lines marked: those a change added or removed (docair-zrr.7).
+pub fn draw_marked(
+    graph: &Graph,
+    pic: &LayerPicture,
+    layout: &Layout,
+    marks: &ChangeMarks,
+) -> String {
+    let mut p = SvgPicture::new(graph, pic, layout);
+    p.marks = Some(marks);
+    p.draw(false)
 }
 
 /***
@@ -740,6 +963,45 @@ pub fn standalone(graph: &Graph, pic: &LayerPicture, layout: &Layout) -> String 
 mod tests {
     use super::*;
 
+    /// No two kinds look alike: their outlines differ, or their dashes (pictures.css) do.
+    #[test]
+    fn no_two_kinds_look_alike() {
+        let dashes = |k: &str| match k {
+            "external" | "namespace" => " dashed",
+            "unresolved" => " dashed red",
+            "unknown" => " dotted",
+            _ => "",
+        };
+        let mut seen: HashMap<String, &str> = HashMap::new();
+        for k in KINDS.iter().filter(|k| **k != "system") {
+            let look = format!("{:?}{}", shape_of(k), dashes(k));
+            if let Some(other) = seen.insert(look.clone(), k) {
+                panic!("{k} and {other} look alike: {look}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_legend_draws_each_kind_in_its_shape() {
+        for k in KINDS {
+            let sw = kind_swatch(k, "");
+            let mark = match shape_of(k) {
+                PartShape::Rect | PartShape::RoundRect | PartShape::Pill => r#"<rect class="sh""#,
+                PartShape::Ellipse => r#"<ellipse class="sh""#,
+                PartShape::Barrel | PartShape::TopRound | PartShape::BottomRound => {
+                    r#"<path class="sh""#
+                }
+                PartShape::Polygon(_) | PartShape::Cut | PartShape::CutTop | PartShape::Folder => {
+                    r#"<polygon class="sh""#
+                }
+            };
+            assert!(
+                sw.contains(mark) && sw.contains(&format!("k-{k}")),
+                "{k}: {sw}"
+            );
+        }
+    }
+
     #[test]
     fn numbers_are_written_to_a_tenth() {
         assert_eq!(num(12.0), "12");
@@ -750,21 +1012,23 @@ mod tests {
 
     #[test]
     fn data_are_found_as_docair_finds_them() {
-        let words = vec!["orderline".to_string(), "order".to_string()];
+        let words = vec![
+            ("orderline".to_string(), "data.line".to_string()),
+            ("order".to_string(), "data.order".to_string()),
+        ];
         let line = "POST /api/orders (CreateOrder, OrderLine) → Order · order-id";
-        let found: Vec<&str> = chips_in(line, &words)
+        let found: Vec<String> = chips_in(line, &words)
             .iter()
-            .map(|&(s, e)| &line[s..e])
+            .map(|&(s, e, id)| format!("{}={id}", &line[s..e]))
             .collect();
-        assert_eq!(found, ["orders", "OrderLine", "Order"]);
-    }
-
-    #[test]
-    fn a_turn_is_rounded_and_a_straight_point_is_not() {
-        let d = rounded(&[(0.0, 0.0), (0.0, 50.0), (40.0, 50.0)]);
-        assert_eq!(d, "M0,0 L0,44 Q0,50 6,50 L40,50");
-        let d = rounded(&[(0.0, 0.0), (0.0, 20.0), (0.0, 50.0)]);
-        assert_eq!(d, "M0,0 L0,20 L0,50");
+        assert_eq!(
+            found,
+            [
+                "orders=data.order",
+                "OrderLine=data.line",
+                "Order=data.order"
+            ]
+        );
     }
 
     #[test]

@@ -74,8 +74,10 @@ export class ResultView {
     // The page as it is now, with the edits applied since the upload.
     const at = this.result().page;
     const html = at ? await fetch(at).then((r) => (r.ok ? r.text() : this.result().html)).catch(() => this.result().html) : this.result().html;
+    // Saved as a file, a kept upload's page still asks the server that keeps it (its AI, tidy).
+    const served = at ? html.replace('<head>', `<head>\n<meta name="docair-serve" content="${new URL(at, location.href).href}">`) : html;
     const link = document.createElement('a');
-    link.href = this.blobUrl(html);
+    link.href = this.blobUrl(served);
     link.download = `${this.result().system}.docair.html`;
     link.click();
   }

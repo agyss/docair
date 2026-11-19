@@ -137,9 +137,10 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
   display: grid;
   height: 100vh;
   grid-template-columns: 250px minmax(0, 1fr) 360px;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   grid-template-areas:
     "header header header"
+    "banner banner banner"
     "tree   graph  details"
     "flow   flow   flow";
 }
@@ -431,8 +432,8 @@ h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color
 @media (max-width: 900px) {
   #app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto 45vh auto auto auto;
-    grid-template-areas: "header" "graph" "flow" "details" "tree";
+    grid-template-rows: auto auto 45vh auto auto auto;
+    grid-template-areas: "header" "banner" "graph" "flow" "details" "tree";
     height: auto;
   }
   #details, #tree { border: 0; border-top: 1px solid var(--line); }

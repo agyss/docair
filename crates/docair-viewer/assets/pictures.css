@@ -82,3 +82,11 @@
 .docair-pic .words.bundle > text { fill: var(--text); font-weight: 600; }
 .docair-pic .words > .chip { fill: var(--data-soft); fill-opacity: 1; stroke: var(--data); stroke-width: 0.8; }
 .docair-pic .words .d { fill: var(--data); font-weight: 600; }
+
+/* Parts Terraform declares carry its mark on their corner. */
+.docair-pic .tf-mark rect { fill: var(--panel); stroke: var(--line); stroke-width: 0.8; }
+.docair-pic .tf-mark path { fill: #7b42bc; }
+@media (prefers-color-scheme: dark) { .docair-pic .tf-mark path { fill: #a77bf3; } }
+/* Kinds that share an outline differ by their dashes (svg.rs shape_of). */
+.docair-pic .k-unknown > .sh { stroke-dasharray: 1.5 3; }
+.docair-pic .k-namespace > .sh { stroke-dasharray: 6 4; }

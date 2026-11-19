@@ -68,6 +68,29 @@ test.describe('look at it layer by layer', () => {
   });
 
   /***
+   * One call stack for the whole walk: in the keep scenario the API's answer to the cart comes in the step after, once the API has written the order.
+   *
+   * @part-of e2e.levels
+   * @covers  docair-core.slice.messages "checks an answer waits for the work of a later step"
+   * @covers  docair-viewer.doc-page.walk "checks the step cards show the answer after the work"
+   ***/
+  test('an answer comes back after the work it waits for', async ({ page }) => {
+    await openStatic(page, 'shop', '#slice/flow:keep');
+    const card = page.getByTestId('step-card');
+    const hops = page.getByTestId('hops').locator('li');
+    await expect(card).toContainText('step 1 of 3');
+    await card.locator('[data-step="1"]').click();
+    await expect(hops).toHaveCount(1);
+    await expect(hops.nth(0)).toContainText('Cart calls create_order');
+    await expect(card.locator('.hop.return')).toHaveCount(0);
+    await card.locator('[data-step="1"]').click();
+    await expect(hops).toHaveCount(2);
+    await expect(hops.nth(0)).toContainText('create_order writes to orders-db');
+    await expect(hops.nth(1)).toContainText('create_order answers Cart');
+    await expect(hops.nth(1)).toHaveClass(/\breturn\b/);
+  });
+
+  /***
    * In a small window, a walk never zooms out below a readable size: each step comes to rest on its parts; Whole step shows everything.
    *
    * @part-of e2e.levels
@@ -217,6 +240,88 @@ test.describe('look at it layer by layer', () => {
     await openStatic(page, 'shop');
     await expect(page.locator('#details .tour', { hasText: 'checkout' })).toBeVisible();
     await expect(page.locator('#details')).not.toContainText('null');
+  });
+
+  /***
+   * A part dragged on the canvas stands where it is put down, and its lines follow, already while it is held: docair's router, built to WebAssembly, routes them again in the page, at right angles, ending on the part's border and crossing no part. A click still selects and moves nothing.
+   *
+   * @part-of e2e.levels
+   * @covers  docair-viewer.doc-page.move-part "checks a part moved by hand takes its lines along"
+   * @covers  docair-layout.hand_move.move_part "checks the lines of a moved part end on it and cross no part"
+   ***/
+  test('lines follow a part that is moved', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await openStatic(page, 'shop', '#layer/apps');
+    const id = 'orders-db';
+    // In screen pixels: each part's outline (without its stroke, which selecting thickens) and the lines that touch the part.
+    const around = () =>
+      page.evaluate((id) => {
+        const svg = document.querySelector('#pic svg.docair-pic')!;
+        const px = (e: Element, x: number, y: number): [number, number] => {
+          const p = new DOMPoint(x, y).matrixTransform((e as SVGGraphicsElement).getScreenCTM()!);
+          return [p.x, p.y];
+        };
+        const nums = (s: string) => (s.match(/-?\d+(\.\d+)?/g) || []).map(Number);
+        const parts: Record<string, { x: number; y: number; w: number; h: number }> = {};
+        for (const g of svg.querySelectorAll('g.part')) {
+          const sh = g.querySelector('.sh') as SVGGraphicsElement;
+          const b = sh.getBBox();
+          const [[x, y], [r, t]] = [px(sh, b.x, b.y), px(sh, b.x + b.width, b.y + b.height)];
+          parts[(g as HTMLElement).dataset.id!] = { x, y, w: r - x, h: t - y };
+        }
+        const lines = [...svg.querySelectorAll('g.line')]
+          .filter((g) => (g as HTMLElement).dataset.from === id || (g as HTMLElement).dataset.to === id)
+          .map((g) => {
+            const d = (g as HTMLElement).dataset;
+            const [ln, ah] = [g.querySelector('path.ln')!, g.querySelector('path.ah')!];
+            const points = [...(ln.getAttribute('d') || '').matchAll(/([MLQ])([^MLQ]*)/g)].map(([, , a]) => px(ln, nums(a)[0], nums(a)[1]));
+            const tip = px(ah, nums(ah.getAttribute('d') || '')[0], nums(ah.getAttribute('d') || '')[1]);
+            return { id: d.id!, d: ln.getAttribute('d'), points, end: d.from === id ? points[0] : tip };
+          });
+        return { parts, lines };
+      }, id);
+    const before = await around();
+    const was = before.parts[id];
+    expect(before.lines.length, 'orders-db has lines').toBeGreaterThan(0);
+    // A click selects, and moves nothing.
+    const part = page.locator(`#pic svg.docair-pic g.part[data-id="${id}"]`);
+    await part.click();
+    await expect(page.locator('#details .meta')).toContainText(id);
+    expect((await around()).parts[id]).toEqual(was);
+    // Dragged 80 px to the right and 60 down, into the empty space below.
+    const c = { x: was.x + was.w / 2, y: was.y + was.h / 2 };
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.down();
+    await page.mouse.move(c.x + 40, c.y + 30, { steps: 4 });
+    await page.mouse.move(c.x + 80, c.y + 60, { steps: 4 });
+    // While it is still held, its lines follow already.
+    await expect.poll(async () => (await around()).lines[0].d).not.toBe(before.lines[0].d);
+    await page.mouse.up();
+    const after = await around();
+    const now = after.parts[id];
+    expect(Math.abs(now.x - was.x - 80), 'it stands where it was put down').toBeLessThan(1.5);
+    expect(Math.abs(now.y - was.y - 60)).toBeLessThan(1.5);
+    for (const l of after.lines) {
+      const right = l.points.every((p, i) => i === 0 || Math.abs(p[0] - l.points[i - 1][0]) < 0.6 || Math.abs(p[1] - l.points[i - 1][1]) < 0.6);
+      expect(right, `line ${l.id} runs at right angles`).toBe(true);
+      const [x, y] = l.end;
+      const t = 2;
+      const inside = x > now.x - t && x < now.x + now.w + t && y > now.y - t && y < now.y + now.h + t;
+      const edge = Math.min(Math.abs(x - now.x), Math.abs(x - now.x - now.w), Math.abs(y - now.y), Math.abs(y - now.y - now.h));
+      expect(inside && edge < t, `line ${l.id} ends on the moved part's border`).toBe(true);
+      const crossed = Object.entries(after.parts)
+        .filter(([, b]) =>
+          l.points.some((p, i) => {
+            if (i === 0) return false;
+            const q = l.points[i - 1];
+            return Math.min(p[0], q[0]) < b.x + b.w - 3 && Math.max(p[0], q[0]) > b.x + 3 && Math.min(p[1], q[1]) < b.y + b.h - 3 && Math.max(p[1], q[1]) > b.y + 3;
+          }),
+        )
+        .map(([pid]) => pid);
+      expect(crossed, `line ${l.id} crosses no part`).toEqual([]);
+    }
+    expect(errors).toEqual([]);
   });
 
   /***

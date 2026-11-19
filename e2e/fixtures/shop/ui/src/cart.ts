@@ -7,6 +7,7 @@
  * @calls   http:POST /api/orders (CreateOrder) -> Order
  * @creates data.order "the shopper clicks Buy"
  * @flow    checkout 2 "the cart posts the order"
+ * @flow    keep 1 "the cart sends the order"
  ***/
 export class Cart {
   items: string[] = [];
