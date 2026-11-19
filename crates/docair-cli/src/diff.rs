@@ -38,11 +38,11 @@ pub fn cmd_diff(
 }
 
 /***
- * `docair explain <A> [<B>]`: the changes of `docair diff`, explained by the AI: links, what each changed flow now does, and words on each of its change steps; kept in `[explain] store` (`docs/changes/<A>..<B>.json`), so the next run asks only about what is new and never about what a human wrote; a pull request comment on stdout (`--json`: the findings).
+ * `docair explain <A> [<B>]`: the review of the change (docs/EXPLAIN.md §9): the AI groups docair's pieces into changes, one difference in what the app does each, from the pieces, the commit messages and the changed docs, and says what, how, why and what to check; kept in `[explain] store` (`docs/changes/<A>..<B>.json`), so the next run asks only when the pieces changed and never about what a human wrote; a pull request comment on stdout (`--json`: the store).
  *
  * @calls docair-server.commits.compare "compares the commits"
- * @calls docair-ai.explain.explain_with "explains the changed flows, at most 3 requests at once"
- * @calls docair-ai.explain.comment "writes the comment"
+ * @calls docair-ai.explain.explain_with "reviews the change, at most 3 requests at once"
+ * @calls docair-ai.explain.comment "writes the review as a comment"
  ***/
 pub fn cmd_explain(
     root: &Path,
@@ -71,9 +71,9 @@ pub fn cmd_explain(
     let said = std::sync::atomic::AtomicUsize::new(0);
     let explained = docair_ai::explain::explain_with(
         &ai,
-        &compared.a,
-        &compared.b,
+        (&compared.a, &compared.b),
         &compared.changes,
+        &compared.intent,
         kept.as_ref(),
         max,
         &|p| {
@@ -92,7 +92,7 @@ pub fn cmd_explain(
     } else {
         print!(
             "{}",
-            docair_ai::explain::comment(&compared.changes, &explained, &compared.b)
+            docair_ai::explain::comment(&compared.changes, &explained, (&compared.a, &compared.b))
         );
         for p in &explained.problems {
             eprintln!("left out: {p}");

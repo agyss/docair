@@ -50,7 +50,11 @@ pub fn fingerprint(
         }
     }
     let name = node.name.as_str();
+    // Two hashes: `loose` leaves out the names of the graph's parts, so a part that moved or was
+    // renamed, or calls one that was, keeps it; `exact` keeps every word. A part that kept its id
+    // changed its body only when both differ (docair-zrr.29).
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut e: u64 = 0xcbf2_9ce4_8422_2325;
     let mut words = 0usize;
     for l in body {
         let t = l.trim();
@@ -66,6 +70,10 @@ pub fn fingerprint(
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .filter(|w| !w.is_empty())
         {
+            for b in w.bytes().chain([0]) {
+                e ^= b as u64;
+                e = e.wrapping_mul(0x0100_0000_01b3);
+            }
             let w = if (!name.is_empty() && w == name) || names.contains(w) {
                 "\u{1}"
             } else {
@@ -85,10 +93,22 @@ pub fn fingerprint(
             for b in c.to_string().bytes() {
                 h ^= b as u64;
                 h = h.wrapping_mul(0x0100_0000_01b3);
+                e ^= b as u64;
+                e = e.wrapping_mul(0x0100_0000_01b3);
             }
         }
     }
-    (words > 0).then(|| format!("{h:016x}"))
+    (words > 0).then(|| format!("{h:016x}/{e:016x}"))
+}
+
+/// A fingerprint's hash for finding moves: the names of the graph's parts left out.
+pub fn loose(fp: &str) -> &str {
+    fp.split('/').next().unwrap_or(fp)
+}
+
+/// A fingerprint's hash of every word: the same text is the same body, whatever the graph's names.
+pub fn exact(fp: &str) -> &str {
+    fp.rsplit('/').next().unwrap_or(fp)
 }
 
 /***
@@ -180,7 +200,10 @@ fn written_tags(n: &Node) -> BTreeSet<(String, String)> {
 /// What differs in a part between A and B.
 fn part_changes(a: &Node, b: &Node, fa: Option<&String>, fb: Option<&String>) -> Vec<String> {
     let mut what = Vec::new();
-    if fa != fb {
+    // Its body changed when its text did and more than the names of parts in it (docair-zrr.29):
+    // the same text is no change, nor is a caller of a part that was renamed.
+    let differ = |h: fn(&str) -> &str| fa.map(|f| h(f)) != fb.map(|f| h(f));
+    if differ(exact) && differ(loose) {
         what.push("body".to_string());
     }
     if a.kind != b.kind {
@@ -255,11 +278,13 @@ pub fn diff(
     // Moves: the same body, gone at A and new at B; each fingerprint matched once.
     let mut moved: HashMap<String, String> = HashMap::new();
     for r in removed.clone() {
-        let Some(fp) = fa.get(r) else { continue };
+        let Some(fp) = fa.get(r).map(|f| loose(f)) else {
+            continue;
+        };
         let candidates: Vec<&str> = added
             .iter()
             .copied()
-            .filter(|x| fb.get(*x) == Some(fp))
+            .filter(|x| fb.get(*x).map(|f| loose(f)) == Some(fp))
             .collect();
         if let [one] = candidates.as_slice() {
             moved.insert(r.to_string(), one.to_string());
@@ -353,7 +378,8 @@ mod tests {
         let fa = fingerprint(a, &node("x.load", "load", 1, 8), &none).unwrap();
         let fb = fingerprint(b, &node("x.read", "read", 3, 9), &none).unwrap();
         assert_eq!(
-            fa, fb,
+            loose(&fa),
+            loose(&fb),
             "the same body, renamed, moved down, comments and spacing aside"
         );
         let c = "pub fn load(p: &str) -> u8 {\n    p.len() as u8 + 1\n}\n";
@@ -369,5 +395,27 @@ mod tests {
             end: None,
         });
         assert_eq!(fingerprint(c, &no_end, &none), None);
+    }
+
+    /// docair-zrr.29: a body that did not change keeps its exact hash when the other graph has a
+    /// new part named like one of its words (`routes`); only the loose hash, for moves, leaves names out.
+    #[test]
+    fn an_unchanged_body_does_not_change_when_a_part_of_its_words_name_is_added() {
+        let text = "pub fn plan(routes: u8) -> u8 {\n    routes + 1\n}\n";
+        let n = node("x.plan", "plan", 1, 3);
+        let before = std::collections::HashSet::new();
+        let after: std::collections::HashSet<String> = ["routes".to_string()].into_iter().collect();
+        let (fa, fb) = (
+            fingerprint(text, &n, &before).unwrap(),
+            fingerprint(text, &n, &after).unwrap(),
+        );
+        assert_eq!(exact(&fa), exact(&fb), "the text is the same");
+        assert_ne!(
+            loose(&fa),
+            loose(&fb),
+            "the loose hash leaves the new name out"
+        );
+        let (pa, pb) = (n.clone(), n);
+        assert!(!part_changes(&pa, &pb, Some(&fa), Some(&fb)).contains(&"body".to_string()));
     }
 }

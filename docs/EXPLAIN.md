@@ -93,6 +93,14 @@ command, and a button when docair serve shows the page; e2e
 | 7 | docair-8l6.7 | tests with the fake AI, and the cost limit |
 | 8 | docair-8l6.11 | explain as a job: progress while it runs, batches in parallel (§8) |
 | 9 | docair-8l6.12 | the AI's words on each change's step, by a stable step id (§8) |
+| 10 | docair-8l6.17 | the review's design (§9) |
+| 11 | docair-8l6.18 | the pieces of the whole change, across every flow (§9.2) |
+| 12 | docair-8l6.19 | the intent: commit messages and the changed prose (§9.2) |
+| 13 | docair-8l6.20 | the review request: the AI groups the pieces into changes (§9.3) |
+| 14 | docair-8l6.21 | bind and cover (§9.4) |
+| 15 | docair-8l6.22 | the page: the review, each change on its own picture (§9.5) |
+| 16 | docair-8l6.23 | `docair explain` and the pull request comment (§9.6) |
+| 17 | docair-8l6.24 | tests (§9.7) |
 
 Step 1 needs `docair diff`'s changed slices (docair-zrr.6), step 6 needs
 `docair serve` (docair-702.6).
@@ -179,3 +187,148 @@ flows, and only when none answers is it an error. The server keeps the jobs
 explain` uses the same and says each answered request on stderr. Tests:
 `explaining_runs_as_a_job_and_says_how_far_it_is` (a fake model in the
 test), the e2e `docair explain` test follows two jobs to their findings.
+
+## 9. The review: changes as the reader understands them (docair-8l6.17 to 8l6.24)
+
+**Why.** A reviewer reviews *changes*, not flows. On docair's own work of
+2026-11-19 (`e3d27b7` to the working tree), the changes section listed 31
+flows: the new peers Service showed up in 16 of them, and a flow like
+*Datum page* held 28 steps cut by structure, not by what they mean. 699
+parts changed (305 new, 18 gone, 376 edited in their code); joined by their
+lines they make one blob of 247 parts and 391 single parts. docair finds the
+pieces reliably, but not where one intent ends and the next begins.
+
+### 9.1 What a change is
+
+A **change** is one difference in what the app does: added, removed or
+adjusted behaviour, with every piece that works together for it
+(docair-8l6.25). The AI makes each change understandable; docair finds the
+pieces and checks every claim. Version 0 needs the AI: without a model the
+review says it needs one and how to set it (docair-8l6.26). The number of
+changes is not capped (docair-8l6.27).
+
+| A change says | Example |
+|---------------|---------|
+| *what* the app does differently, one sentence from the user's side | An uploaded page keeps working when the cluster runs two server pods. |
+| *how*: its pieces in the order they work together, each in a sentence | `upload_id` names the pod that took the upload; `forward` sends a request for it there, through the new Service `docair-server-peers`. |
+| *why*, from the commits and the docs, the sources named | commit `b0e4541`; docs/SLICES.md |
+| *what to check*: the risky part | The NetworkPolicy must let the server pods reach each other. |
+| where a commit message or a doc and the pieces disagree (docair-8l6.30) | The commit says the uploads are shared, but each pod still keeps its own. |
+
+### 9.2 What the AI gets
+
+**The pieces** (docair-core `review::pieces`). The change steps of every
+changed flow (CHANGES.md §8), merged across flows by a key that does not
+name the flow (`path:<first new or gone part>`, `line:<from>-><to>`,
+`code:<box>`, `box:<id>`): a piece that shows up in 16 flows is one piece,
+and says which flows it touches. A changed part no flow goes through
+becomes a piece of its box, so nothing changed is missing. Each piece goes
+in a few words: its id, its kind, its new, gone and edited parts and its
+ends (id, kind, name, summary, signature), its new and gone lines, the
+flows it touches.
+
+**The intent** (docair-server `commits::intent`). The commit messages from A
+to B (subject and body; for the working tree as B, the commits up to `HEAD`
+and a note that the rest is not committed); the changed Markdown files, as
+their added and removed lines; the doc blocks whose words alone changed,
+their summary before and after. Each source has an id the AI cites:
+`commit:<short sha>`, `doc:<path>`, the part's id. Code goes as signatures
+and summaries, never as bodies (docair-8l6.29).
+
+| Input | Cut at |
+|-------|--------|
+| a commit message's body | 2,000 characters |
+| a Markdown file's changed lines | 2,000 characters |
+| all Markdown files together | 12,000 characters |
+| a request, everything together | 60,000 characters (docair-8l6.8) |
+
+A review too big for one request is asked in parts, the pieces in their
+order, the intent with each part (docair-8l6.31).
+
+### 9.3 What the AI gives back
+
+```json
+{"changes": [{"title": "…", "how": [{"piece": "<piece id>", "words": "…"}],
+              "why": "…", "sources": ["commit:b0e4541", "doc:docs/SLICES.md"],
+              "check": "…", "disagrees": ["…"]}],
+ "links": [{"a": "<id at A>", "b": "<id at B>", "why": "…"}]}
+```
+
+As many changes as there are; a piece belongs to one change at most; parts
+are named by their ids in backticks. `links` stay as before (§3): a part
+removed at A that is the same as one added at B.
+
+### 9.4 Bind and cover
+
+| Rule | How |
+|------|-----|
+| a change has a title and a piece | else it is left out, and said |
+| a `how` entry names a piece docair made | a part's id, or a piece id guessed from it (`path:<part>`), binds to the piece that holds that part (docair-8l6.37); else that entry is left out; a piece already in an earlier change stays there (docair-8l6.32) |
+| words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `disagrees` that does not is left out alone |
+| a source is a commit in the range or a doc docair sent | else it is left out |
+| every piece belongs somewhere | a piece in no change is an *other edit*; the review lists them (docair-8l6.28) |
+
+The findings go to the store as before (§4): `docs/changes/<A>..<B>.json`,
+schema `docair.explained/1`, with `changes`, the pieces the model left as
+`other`, and `links`. A store of an older schema, or one whose changes and
+`other` do not cover today's pieces, is asked again; a change a human wrote
+(`recorded.by: human`) is kept, and its pieces are not asked about.
+
+### 9.5 The page
+
+**Δ Changes** opens the review: the changes, in the model's order (what
+matters to the user first), then *Other edits*, then the flows they touch,
+as before (CHANGES.md §8). A change opens at `#review/<n>` on its own
+picture: its pieces' parts at A and at B as one picture, nothing else
+(docair-8l6.33), marked as in CHANGES.md §8. Its details lead with what,
+how, why and what to check, then where it disagrees, the flows it touches,
+and who wrote it. Its walk goes through its pieces in the order of *how*:
+each step's card has the model's words for that piece over docair's own
+(Before and After). Without findings the review says the AI makes it, with
+the command, and, served, a button.
+
+### 9.6 `docair explain` and the comment
+
+`docair explain <A> [<B>]` asks, stores and prints the review: each change
+with what, how, why and what to check, *Other edits*, links; `--json` the
+store. The pull request comment is the same in Markdown, *how* and the other
+edits folded.
+
+### 9.7 Tests
+
+Rust: the pieces of two flows that share one change are one piece; the
+intent of a two-commit repository (messages, a README section, a doc
+block's words); bind (unknown piece, unknown id, unknown source, a piece in
+two changes) and cover (other edits); the store asked again when it does not
+cover. The fake AI groups the path pieces into one change and leaves the
+code edits as other edits. e2e: a shop with two commits whose messages say
+what they do and a README section that changes; the review lists the
+change, opens it on its picture with Before and After and its explanation,
+lists other edits; no findings gives the notice.
+
+### 9.8 Built (docair-8l6.18 to 8l6.24)
+
+| Piece of the review | Where |
+|---------------------|-------|
+| the pieces, on one picture of the whole change, marked by the graph diff | `docair_core::review::pieces` |
+| the intent: commit messages, changed Markdown, changed doc-block words | `docair_server::commits::intent`, `docair_core::review::words_changed`; `CommitPair.intent` |
+| the request, compact (docair-8l6.34), without reasoning first (docair-8l6.36) | `docair_ai::explain::{digest, explain_with}`, `REVIEW_PROMPT`; `client::chat_with` |
+| bind and cover, the store `docair.explained/1` | `docair_ai::explain::bind`; `ChangeFindings { changes, other, links }` |
+| the page: the review list, `#review/<n>`, other edits, the notice | `docair_viewer::page_changes::review_view`, `docair_core::review::change_picture` |
+| `docair explain` and the comment | `docair-cli` `cmd_explain`, `docair_ai::explain::comment` |
+
+With the configured model (`zai-org/GLM-5.3-Flash`): docair's commit
+`02ffe98` (21 pieces, 7,000 characters in) gives two changes that match the
+commit, each with its why from the commit and CHANGES.md and a check; this
+step's own work (45 pieces, 40,000 characters) gives three changes in 11 s:
+the review, big flows drawn change by change, and the two fingerprint hashes,
+with 28 other edits. Running it found four faults, now fixed: the model
+reasoned until `max_tokens` ran out (`reasoning_effort: low`,
+docair-8l6.36); the diff called 16 untouched bodies edited, because the
+fingerprint left out the names of the graph's parts and the two graphs had
+different names (docair-zrr.29); the model named parts where pieces belong
+(docair-8l6.37); and it copied whole lines as the ids of links. Tests: the Rust tests named in §9.7; e2e
+`cli.spec.ts` (*docair explain reviews the change and keeps the review*)
+and `changes.spec.ts` (*a reviewed change opens on its own picture, with why
+and other edits*), with the fake AI.
+

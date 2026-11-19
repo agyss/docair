@@ -71,6 +71,15 @@ const TIMEOUT: Duration = Duration::from_secs(240);
  * @calls   ai-endpoint (POST /chat/completions: model, messages) -> answer text
  ***/
 pub fn chat(cfg: &AiConfig, messages: &[Message], json: bool) -> Result<Reply> {
+    chat_with(cfg, messages, json, true)
+}
+
+/***
+ * As `chat`, and with `think` false asks the model to reason little first (`reasoning_effort: low`; Together's GLM-5.3-Flash ignores `reasoning: {enabled: false}`): for answers a reasoning model would otherwise deliberate over until `max_tokens` runs out (the review, docair-8l6.36). An endpoint that rejects `reasoning_effort` gets the same request without it.
+ *
+ * @id docair-ai.client.chat_with
+ ***/
+pub fn chat_with(cfg: &AiConfig, messages: &[Message], json: bool, think: bool) -> Result<Reply> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .http_status_as_error(false)
@@ -86,14 +95,18 @@ pub fn chat(cfg: &AiConfig, messages: &[Message], json: bool) -> Result<Reply> {
     if json {
         body["response_format"] = json!({ "type": "json_object" });
     }
+    if !think {
+        body["reasoning_effort"] = json!("low");
+    }
     let started = Instant::now();
-    let (status, text) = post(&agent, &url, cfg, &body)?;
-    let (status, text) = if json && status == 400 && text.contains("response_format") {
-        body.as_object_mut().unwrap().remove("response_format");
-        post(&agent, &url, cfg, &body)?
-    } else {
-        (status, text)
-    };
+    let (mut status, mut text) = post(&agent, &url, cfg, &body)?;
+    // What an endpoint does not take is left out, and the same request sent again.
+    for field in ["reasoning_effort", "response_format"] {
+        if status == 400 && text.contains(field) && body.get(field).is_some() {
+            body.as_object_mut().unwrap().remove(field);
+            (status, text) = post(&agent, &url, cfg, &body)?;
+        }
+    }
     if !(200..300).contains(&status) {
         bail!(
             "the AI endpoint {} answered {status}: {}",

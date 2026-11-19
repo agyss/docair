@@ -804,7 +804,7 @@ pub struct ExplainJob {
     pub seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// What the page shows, as it is: *The AI explains 30 flows in 5 requests · 2 answered · 1:12*.
+    /// What the page shows, as it is: *The AI reviews 30 pieces in 2 requests · 1 answered · 1:12*.
     pub text: String,
     /// The documentation's version once it was written again with the findings.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -850,30 +850,29 @@ fn job_text(j: &ExplainJob) -> String {
             "The AI could not explain the changes: {}",
             j.error.as_deref().unwrap_or("it failed")
         ),
-        _ if p.flows == 0 => "Every changed flow is explained already".to_string(),
+        _ if p.pieces == 0 => "Every change is reviewed already".to_string(),
         "done" => {
-            let left = j
-                .findings
-                .as_ref()
-                .map_or(0, |f| f["left"].as_array().map_or(0, Vec::len));
+            let found = j.findings.as_ref();
+            let n = found.map_or(0, |f| f["changes"].as_array().map_or(0, Vec::len));
+            let other = found.map_or(0, |f| f["other"].as_array().map_or(0, Vec::len));
             format!(
-                "Explained {} of {} in {} · {time}",
-                p.flows.saturating_sub(left),
-                count(p.flows, "flow", "flows"),
+                "Reviewed: {} and {} in {} · {time}",
+                count(n, "change", "changes"),
+                count(other, "other edit", "other edits"),
                 count(p.requests, "request", "requests")
             )
         }
         _ => {
             let mut t = format!(
-                "The AI explains {} in {} · {} answered · {time}",
-                count(p.flows - p.left, "flow", "flows"),
+                "The AI reviews {} in {} · {} answered · {time}",
+                count(p.pieces - p.left, "piece", "pieces"),
                 count(p.requests, "request", "requests"),
                 p.answered
             );
             if p.left > 0 {
                 t.push_str(&format!(
                     " · {} left for later",
-                    count(p.left, "flow", "flows")
+                    count(p.left, "piece", "pieces")
                 ));
             }
             t
@@ -997,10 +996,10 @@ pub(crate) async fn explain_job(
 }
 
 /***
- * An explain job: compare the commits (the working tree as B is the graph the server already has), send the flows with no stored findings to the model, store the findings as `docair explain` does, and write the page again when it shows the changes; each step goes into the job.
+ * An explain job: compare the commits (the working tree as B is the graph the server already has), send the pieces no stored change holds to the model with the intent (docs/EXPLAIN.md §9), store the review as `docair explain` does, and write the page again when it shows the changes; each step goes into the job.
  *
  * @calls docair-server.commits.compare "compares the commits"
- * @calls docair-ai.explain.explain_with "explains the changed flows, saying how far it is"
+ * @calls docair-ai.explain.explain_with "reviews the change, saying how far it is"
  ***/
 fn run_job(
     job: &std::sync::Arc<Mutex<JobState>>,
@@ -1035,9 +1034,9 @@ fn run_job(
             .unwrap_or(docair_ai::explain::MAX_REQUESTS);
         let found = docair_ai::explain::explain_with(
             ai,
-            &pair.a,
-            &pair.b,
+            (&pair.a, &pair.b),
             &pair.changes,
+            &pair.intent,
             kept.as_ref(),
             max,
             &|p| set(&|j| j.progress = p.clone()),
@@ -1414,14 +1413,14 @@ mod tests {
     }
 
     /// docair-8l6.11: POST /api/explain answers a job at once; the job compares, asks a model
-    /// (a fake one here) and says how far it is; at the end it holds the findings, the store has
-    /// them, and the page shown with --changes is written again. A second POST while it runs
+    /// (a fake one here) and says how far it is; at the end it holds the review, the store has
+    /// it, and the page shown with --changes is written again. A second POST while it runs
     /// answers the same job.
     #[tokio::test(flavor = "multi_thread")]
     async fn explaining_runs_as_a_job_and_says_how_far_it_is() {
         use axum::body::Body;
         use axum::http::Request;
-        // A fake model: every flow it is asked about "goes another way".
+        // A fake model: every piece it is asked about makes one change, "the app keeps the order".
         let model = axum::Router::new().route(
             "/chat/completions",
             axum::routing::post(|Json(req): Json<serde_json::Value>| async move {
@@ -1429,13 +1428,13 @@ mod tests {
                 let user = req["messages"][1]["content"].as_str().unwrap_or("").to_string();
                 let input: serde_json::Value =
                     serde_json::from_str(&user[user.find('{').unwrap_or(0)..]).unwrap_or_default();
-                let flows: Vec<serde_json::Value> = input["flows"]
+                let how: Vec<serde_json::Value> = input["pieces"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|f| serde_json::json!({ "seed": f["seed"], "explanation": "This flow goes another way." }))
+                    .map(|p| serde_json::json!({ "piece": p["id"], "words": "This piece keeps the order." }))
                     .collect();
-                let content = serde_json::json!({ "links": [], "flows": flows }).to_string();
+                let content = serde_json::json!({ "links": [], "changes": [{ "title": "The app now keeps the order.", "how": how }] }).to_string();
                 Json(serde_json::json!({
                     "choices": [{ "message": { "content": content } }],
                     "usage": { "prompt_tokens": 1, "completion_tokens": 1 }
@@ -1536,7 +1535,7 @@ mod tests {
                     job["text"]
                         .as_str()
                         .unwrap()
-                        .starts_with("The AI explains 1 flow in 1 request"),
+                        .starts_with("The AI reviews 1 piece in 1 request"),
                     "{job}"
                 );
             }
@@ -1551,12 +1550,12 @@ mod tests {
             job["text"]
                 .as_str()
                 .unwrap()
-                .starts_with("Explained 1 of 1 flow in 1 request"),
+                .starts_with("Reviewed: 1 change and 0 other edits in 1 request"),
             "{job}"
         );
         assert_eq!(
-            job["findings"]["flows"][0]["explanation"],
-            "This flow goes another way."
+            job["findings"]["changes"][0]["title"],
+            "The app now keeps the order."
         );
         assert!(
             job["version"].as_u64().unwrap() >= 2,
@@ -1566,7 +1565,7 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(stored, 1, "the findings are stored");
-        // Asked again, nothing is new: the store explains every flow.
+        // Asked again, nothing is new: the store covers every piece.
         let (_, body) = call(router.clone(), post()).await;
         let next: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_ne!(

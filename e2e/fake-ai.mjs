@@ -42,23 +42,30 @@ function reply(messages) {
       checks,
     };
   }
-  // Explaining changes (docair explain): one explanation per flow, naming a part it was given; a link when parts were removed and added.
-  if ((messages[0]?.content || '').startsWith('You explain changes')) {
+  // The review (docair explain, docs/EXPLAIN.md §9): the path's pieces make one change, titled from the
+  // first commit's subject, citing it and the first changed doc; code edits are left as other edits.
+  if ((messages[0]?.content || '').startsWith('You help a reviewer understand')) {
     const user = messages[1]?.content || '';
     const input = JSON.parse(user.slice(user.indexOf('{')));
-    const flows = (input.flows || []).map((f) => {
-      const part = (f.changed || [])[0] || (f.parts_added || [])[0];
-      return {
-        seed: f.seed,
-        explanation: part ? `\`${part.id}\` changed, so this flow ${f.how === 'new' ? 'is new' : 'goes another way'}.` : 'This flow changed.',
-        // Words on each change step, by docair's step id (docair-8l6.12).
-        steps: Object.fromEntries((f.steps || []).map((s) => [s.id, `Here the flow ${s.added?.length ? 'now reaches ' + s.added.map((p) => '`' + p.id + '`').join(', ') : 'changed'}.`])),
-      };
-    });
+    const idOf = (line) => String(line || '').split(' ')[0];
+    const path = (input.pieces || []).filter((p) => p.kind !== 'code');
+    const commit = (input.commits || [])[0];
+    const doc = (input.docs || [])[0];
+    const first = idOf((path[0]?.new || [])[0]);
+    const changes = path.length
+      ? [{
+          title: `${commit ? commit.subject + ': ' : ''}the flow now reaches ${first ? '`' + first + '`' : 'a new step'}.`,
+          how: path.map((p) => ({ piece: p.id, words: `Here the flow ${p.new?.length ? 'now reaches `' + idOf(p.new[0]) + '`' : 'changes'}.` })),
+          why: commit ? `The commit says: ${commit.subject}.` : 'No commit says why.',
+          sources: [commit?.id, doc?.id].filter(Boolean),
+          check: 'Check that the new step has a test.',
+          disagrees: [],
+        }]
+      : [];
     const removed = input['removed at A'] || [];
     const addedB = input['added at B'] || [];
-    const links = removed.length && addedB.length ? [{ a: removed[0].id, b: addedB[0].id, why: 'the same part, renamed and changed' }] : [];
-    return { links, flows };
+    const links = removed.length && addedB.length ? [{ a: idOf(removed[0]), b: idOf(addedB[0]), why: 'the same part, renamed and changed' }] : [];
+    return { changes, links };
   }
   const users = messages.filter((m) => m.role === 'user');
   const q = (users.at(-1)?.content || '').toLowerCase();

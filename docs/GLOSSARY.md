@@ -429,3 +429,40 @@ What the page shows when it opens: which of its sections are hidden or shown.
 See: docair-ai.ask.view-change
 
 The change an AI reply asks for in the view: which sections of the page to hide and show.
+
+## review
+
+Also: reviews
+See: docair-core.review, docair-ai.explain.explain
+
+What `docair explain` writes and the changes section shows first: the
+changes between two versions, one difference in what the app does each,
+made understandable by the AI from docair's pieces, the commit messages and
+the changed docs. See [EXPLAIN §9](EXPLAIN.md#9-the-review-changes-as-the-reader-understands-them-docair-8l6.17-to-8l6.24).
+
+## piece
+
+Also: pieces
+See: docair-core.review.piece
+
+One bit of a change that docair found: a stretch of new and gone parts and
+lines, a line alone, or the parts of one box whose code changed. A piece
+that shows up in many flows is one piece; the AI groups pieces into
+changes.
+
+## intent
+
+See: docair-core.review.intent
+
+What was meant, beside what changed: the commit messages between two
+versions, the changed Markdown docs, and the doc blocks whose words
+changed. The AI reads it to say why a change was made.
+
+## other edit
+
+Also: other edits
+See: docair-ai.explain.bind
+
+A piece the AI put into no change. The review lists the other edits, so
+nothing that changed is hidden.
+

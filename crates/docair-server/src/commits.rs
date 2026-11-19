@@ -40,9 +40,10 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
 fn graph_key(top: &Path, sha: &str, prefix: &str) -> String {
     let toml = git(top, &["show", &format!("{sha}:{prefix}docair.toml")]).unwrap_or_default();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    // The fingerprints' format (`loose/exact`, docair-zrr.29) is part of what a kept graph holds.
     for b in env!("CARGO_PKG_VERSION")
         .bytes()
-        .chain([0])
+        .chain(*b"\0fp2\0")
         .chain(toml.bytes())
     {
         h ^= b as u64;
@@ -106,6 +107,8 @@ pub struct CommitPair {
     pub changes: docair_core::changes::Changes,
     /// `<sha of A>..<sha of B or "work">`, short, for the store's file name.
     pub key: String,
+    /// What was meant (docs/EXPLAIN.md §9.2): the commit messages, the changed docs, the doc blocks whose words changed.
+    pub intent: docair_core::review::Intent,
 }
 
 /***
@@ -222,12 +225,97 @@ fn compare_inner(
         short(&sha_a),
         range.get(1).map_or("work".to_string(), |s| short(s))
     );
+    let mut intent = intent(&top, &range, &prefix)?;
+    intent.words = docair_core::review::words_changed(&at_a.graph, &at_b.graph, &changes);
     Ok(CommitPair {
         root,
         a: at_a.graph,
         b: at_b.graph,
         changes,
         key,
+        intent,
+    })
+}
+
+/***
+ * What was meant between two commits, or a commit and the working tree (docs/EXPLAIN.md §9.2): the messages of the commits in the range that touch the project, and the project's changed Markdown files as their added and removed lines, cut so they fit a request (`docair_core::review::MAX_BODY`, `MAX_DOC`, `MAX_DOCS`). With the working tree as B, the commits up to `HEAD`, and `uncommitted` set.
+ ***/
+pub fn intent(top: &Path, range: &[String], prefix: &str) -> Result<docair_core::review::Intent> {
+    use docair_core::review::{CommitNote, DocChange, Intent, MAX_BODY, MAX_DOC, MAX_DOCS, cut};
+    let scope = if prefix.is_empty() {
+        ".".to_string()
+    } else {
+        prefix.to_string()
+    };
+    let span = match range {
+        [a, b] => format!("{a}..{b}"),
+        [a] => format!("{a}..HEAD"),
+        _ => return Ok(Intent::default()),
+    };
+    let log = git(
+        top,
+        &["log", "--format=%h%x1f%s%x1f%b%x1e", &span, "--", &scope],
+    )?;
+    let commits = log
+        .split('\x1e')
+        .filter_map(|r| {
+            let mut f = r.trim_start_matches('\n').splitn(3, '\x1f');
+            let (id, subject) = (f.next()?.trim(), f.next()?.trim());
+            (!id.is_empty()).then(|| CommitNote {
+                id: format!("commit:{id}"),
+                subject: subject.to_string(),
+                body: cut(f.next().unwrap_or("").trim(), MAX_BODY),
+            })
+        })
+        .collect();
+    // The project's Markdown that changed, its lines with + or - in front.
+    let docs_spec = format!(":(glob){prefix}**/*.md");
+    let mut args: Vec<&str> = vec!["diff", "-U0", "--no-color", "--no-ext-diff"];
+    args.extend(range.iter().map(String::as_str));
+    args.extend(["--", docs_spec.as_str()]);
+    let unified = git(top, &args)?;
+    let mut docs: Vec<DocChange> = Vec::new();
+    for file in unified
+        .split("\ndiff --git ")
+        .filter(|f| !f.trim().is_empty())
+    {
+        let Some(path) = file.lines().find_map(|l| {
+            l.strip_prefix("+++ b/")
+                .or_else(|| l.strip_prefix("--- a/"))
+        }) else {
+            continue;
+        };
+        let path = path.strip_prefix(prefix).unwrap_or(path).to_string();
+        let lines: Vec<&str> = file
+            .lines()
+            .filter(|l| {
+                (l.starts_with('+') || l.starts_with('-'))
+                    && !l.starts_with("+++")
+                    && !l.starts_with("---")
+                    && l.trim().len() > 1
+            })
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+        docs.push(DocChange {
+            id: format!("doc:{path}"),
+            path,
+            lines: cut(&lines.join("\n"), MAX_DOC),
+        });
+    }
+    // All docs together fit MAX_DOCS: the files that come last are cut first.
+    let mut room = MAX_DOCS;
+    for d in &mut docs {
+        d.lines = cut(&d.lines, room);
+        room = room.saturating_sub(d.lines.len());
+    }
+    docs.retain(|d| !d.lines.is_empty() && d.lines != "…");
+    Ok(Intent {
+        commits,
+        uncommitted: range.len() == 1,
+        docs,
+        words: Vec::new(),
     })
 }
 
@@ -260,4 +348,88 @@ pub fn changes_page(pair: &CommitPair) -> String {
         Some(&docair_scip::cache_dir().join("layouts")),
         Some(&changed),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(dir: &Path, args: &[&str]) {
+        let mut all = vec![
+            "-c",
+            "user.name=docair test",
+            "-c",
+            "user.email=test@example.invalid",
+        ];
+        all.extend(args);
+        git(dir, &all).unwrap();
+    }
+
+    /// docair-8l6.19: what was meant between two commits: their messages, the README's changed lines,
+    /// and a doc block whose words alone changed.
+    #[test]
+    fn the_intent_is_read_from_the_commits_and_the_docs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        // SAFETY: this test's own cache; no other test of this binary reads DOCAIR_CACHE.
+        unsafe { std::env::set_var("DOCAIR_CACHE", cache.path()) };
+        let w = |rel: &str, text: &str| {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        w("docair.toml", "system = \"shop\"\n");
+        w("README.md", "# shop\n\nThe shop sells things.\n");
+        let lib = |summary: &str| {
+            format!("/***\n * {summary}\n *\n * @id shop.buy\n ***/\npub fn buy() {{}}\n")
+        };
+        w("src/lib.rs", &lib("Buy the cart."));
+        run(dir.path(), &["init", "-q", "-b", "main"]);
+        run(dir.path(), &["add", "."]);
+        run(dir.path(), &["commit", "-q", "-m", "a"]);
+        w(
+            "README.md",
+            "# shop\n\nThe shop sells things.\n\nEvery order is audited.\n",
+        );
+        w("src/lib.rs", &lib("Buy the cart, and audit the order."));
+        run(
+            dir.path(),
+            &[
+                "commit",
+                "-q",
+                "-am",
+                "Audit every order\n\nThe auditors asked for a trail of each order.",
+            ],
+        );
+        let pair = compare(dir.path(), "HEAD~1", Some("HEAD"), false).unwrap();
+        let i = &pair.intent;
+        assert_eq!(i.commits.len(), 1, "{i:?}");
+        assert!(
+            i.commits[0].id.starts_with("commit:") && i.commits[0].subject == "Audit every order"
+        );
+        assert!(i.commits[0].body.contains("trail of each order"));
+        assert!(!i.uncommitted);
+        let readme = i
+            .docs
+            .iter()
+            .find(|d| d.path == "README.md")
+            .expect("the README changed");
+        assert_eq!(readme.id, "doc:README.md");
+        assert!(
+            readme.lines.contains("+Every order is audited."),
+            "{}",
+            readme.lines
+        );
+        assert!(
+            i.words
+                .iter()
+                .any(|w| w.part == "shop.buy" && w.after.contains("audit")),
+            "{:?}",
+            i.words
+        );
+        assert!(i.sources().contains("doc:README.md"));
+        // The working tree as B: the commits up to HEAD, and what is not committed said.
+        let work = compare(dir.path(), "HEAD~1", None, false).unwrap();
+        assert!(work.intent.uncommitted && work.intent.commits.len() == 1);
+    }
 }

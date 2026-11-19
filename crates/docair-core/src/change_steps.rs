@@ -575,6 +575,148 @@ pub fn steps(m: &Merged, f: &FlowChange, marks: &FlowMarks) -> Vec<ChangeStep> {
     out
 }
 
+/// A change picture with more parts than this opens focused on its changes (docair-zrr.28).
+pub const FOCUS_ABOVE: usize = 30;
+
+/***
+ * A big change's picture with what is not relevant collapsed (docs/CHANGES.md §8, docair-zrr.27): the parts a change is about (new, gone, changed in their code, and the shared parts where a step forks off and rejoins) and the boxes they are in stay; every other part folds away. A box that holds no change is drawn closed, counting what it holds; an unchanged leaf in a box that stays counts into that box's `· n more`. A line goes to the closed box its end folded into, one line per pair, bundled; a line to a folded leaf is left out. Laid out again, the changes sit close together.
+ ***/
+pub fn focused(m: &Merged, marks: &FlowMarks, steps: &[ChangeStep]) -> Merged {
+    let mut keep: HashSet<&str> = m
+        .pic
+        .parts
+        .iter()
+        .filter(|p| marks.parts.get(&p.id).is_some_and(|w| *w != PartMark::Same))
+        .map(|p| p.id.as_str())
+        .collect();
+    keep.extend(steps.iter().flat_map(|s| s.parts()).map(String::as_str));
+    folded_around(m, &keep)
+}
+
+/***
+ * One change of a big flow on its own (docs/CHANGES.md §8, docair-zrr.27): its parts, the shared parts where it forks off and rejoins, and the boxes they are in; the rest folded away as in `focused`, so the change sits close together, whatever else changed.
+ ***/
+pub fn focused_on(m: &Merged, step: &ChangeStep) -> Merged {
+    let keep: HashSet<&str> = step.parts().map(String::as_str).collect();
+    folded_around(m, &keep)
+}
+
+/// The picture with only these parts and the boxes they are in; every other part folded into its box's `· n more` or the closed box it is in.
+fn folded_around(m: &Merged, keep_ids: &HashSet<&str>) -> Merged {
+    let n = m.pic.parts.len();
+    let at: HashMap<&str, usize> = m
+        .pic
+        .parts
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id.as_str(), i))
+        .collect();
+    let parent = |i: usize| {
+        m.pic.parts[i]
+            .parent
+            .as_deref()
+            .and_then(|p| at.get(p).copied())
+    };
+    let mut keep: Vec<bool> = m
+        .pic
+        .parts
+        .iter()
+        .map(|p| keep_ids.contains(p.id.as_str()))
+        .collect();
+    for i in 0..n {
+        if keep[i] {
+            let mut up = parent(i);
+            while let Some(q) = up {
+                keep[q] = true;
+                up = parent(q);
+            }
+        }
+    }
+    // Each part that folds away: the outermost box of it that holds no change, or the part itself.
+    let fold = |i: usize| {
+        let mut r = i;
+        while let Some(q) = parent(r).filter(|&q| !keep[q]) {
+            r = q;
+        }
+        r
+    };
+    let has_kids: HashSet<usize> = (0..n).filter_map(parent).collect();
+    let mut holds = vec![0usize; n];
+    let mut more = vec![0usize; n];
+    for i in (0..n).filter(|&i| !keep[i]) {
+        let r = fold(i);
+        if r != i {
+            holds[r] += 1 + m.pic.parts[i].holds;
+        } else if !(has_kids.contains(&i) || m.pic.parts[i].closed) {
+            // A leaf of its own, in a box that stays: counted there.
+            if let Some(q) = parent(i) {
+                more[q] += 1;
+            }
+        }
+    }
+    let drawn =
+        |i: usize| keep[i] || (fold(i) == i && (has_kids.contains(&i) || m.pic.parts[i].closed));
+    let mut pic = LayerPicture {
+        parts: Vec::new(),
+        lines: Vec::new(),
+        ..m.pic.clone()
+    };
+    for (i, p) in m.pic.parts.iter().enumerate().filter(|(i, _)| drawn(*i)) {
+        let mut q = p.clone();
+        if keep[i] {
+            q.more += more[i];
+        } else {
+            q.open = false;
+            q.closed = true;
+            q.holds = p.holds + holds[i];
+            q.more = 0;
+        }
+        pic.parts.push(q);
+    }
+    // The lines between what is drawn, a folded end at its closed box; one line per pair.
+    let end = |id: &str| -> Option<String> {
+        let i = *at.get(id)?;
+        let r = if keep[i] { i } else { fold(i) };
+        drawn(r).then(|| m.pic.parts[r].id.clone())
+    };
+    let mut by_ends: HashMap<(String, String, crate::model::EdgeKind), usize> = HashMap::new();
+    for l in &m.pic.lines {
+        let (Some(from), Some(to)) = (end(&l.from), end(&l.to)) else {
+            continue;
+        };
+        if from == to {
+            continue;
+        }
+        let moved = from != l.from || to != l.to;
+        let key = (from.clone(), to.clone(), l.kind);
+        match by_ends.get(&key) {
+            Some(&k) => {
+                let line = &mut pic.lines[k];
+                let says: Vec<usize> = line.says.take().unwrap_or_else(|| line.members.clone());
+                let theirs = l.says.clone().unwrap_or_else(|| l.members.clone());
+                line.members.extend(&l.members);
+                line.says = Some(says.into_iter().chain(theirs).collect());
+                line.bundled = true;
+                line.via.clear();
+            }
+            None => {
+                by_ends.insert(key, pic.lines.len());
+                pic.lines.push(LayerLine {
+                    from,
+                    to,
+                    bundled: l.bundled || moved,
+                    via: if moved { Vec::new() } else { l.via.clone() },
+                    ..l.clone()
+                });
+            }
+        }
+    }
+    Merged {
+        graph: m.graph.clone(),
+        pic,
+    }
+}
+
 /***
  * A changed flow's steps, from the two graphs and what `changes` found (docs/EXPLAIN.md §8): the flow before and after as one picture, its marks, and its steps; empty for a new or gone flow, or a seed neither version has.
  *
@@ -802,6 +944,96 @@ mod tests {
             assert!(
                 s[0].ends.contains(&"orders.create".to_string())
                     && s[0].ends.contains(&"orders-db".to_string())
+            );
+        }
+    }
+
+    /// docair-zrr.27: focused, a change keeps its parts, its ends and their boxes; a box with no
+    /// change in it is drawn closed with what it holds; every line ends at a drawn part.
+    #[test]
+    fn a_focused_picture_keeps_the_change_and_closes_the_rest() {
+        let after = shop();
+        let mut before = after.clone();
+        before
+            .edges
+            .retain(|e| !(e.from == "orders.create" && e.to == "orders-db"));
+        let (pa, pb) = (
+            flow_picture(&before, "data.order").unwrap(),
+            flow_picture(&after, "data.order").unwrap(),
+        );
+        let f = change("data.order", (&before, &pa), (&after, &pb));
+        let m = merged(Some((&before, &pa)), Some((&after, &pb)), &IdMoves::new()).unwrap();
+        let marked = marks(&m, &f, &HashSet::new());
+        let s = steps(&m, &f, &marked);
+        let small = focused(&m, &marked, &s);
+        let ids: HashSet<&str> = small.pic.parts.iter().map(|p| p.id.as_str()).collect();
+        for p in s[0].parts() {
+            assert!(ids.contains(p.as_str()), "{p} is kept");
+        }
+        assert!(
+            small.pic.parts.len() < m.pic.parts.len(),
+            "something folds away"
+        );
+        let closed: Vec<&LayerPart> = small.pic.parts.iter().filter(|p| p.closed).collect();
+        assert!(
+            closed
+                .iter()
+                .all(|p| p.holds > 0 || m.pic.parts.iter().any(|q| q.id == p.id && q.closed))
+        );
+        for l in &small.pic.lines {
+            assert!(
+                ids.contains(l.from.as_str()) && ids.contains(l.to.as_str()),
+                "{} -> {}",
+                l.from,
+                l.to
+            );
+        }
+        // The new line is still there, between the same two parts.
+        let marked_small = marks(&small, &f, &HashSet::new());
+        assert!(marked_small.lines.values().any(|w| *w == LineMark::Added));
+    }
+
+    /// docair-zrr.27: one change on its own keeps only its parts and the boxes they are in.
+    #[test]
+    fn one_change_on_its_own_keeps_only_its_parts() {
+        let after = shop();
+        let mut before = after.clone();
+        before
+            .edges
+            .retain(|e| !(e.from == "orders.create" && e.to == "orders-db"));
+        let (pa, pb) = (
+            flow_picture(&before, "data.order").unwrap(),
+            flow_picture(&after, "data.order").unwrap(),
+        );
+        let f = change("data.order", (&before, &pa), (&after, &pb));
+        let m = merged(Some((&before, &pa)), Some((&after, &pb)), &IdMoves::new()).unwrap();
+        let s = steps(&m, &f, &marks(&m, &f, &HashSet::new()));
+        let one = focused_on(&m, &s[0]);
+        let ids: HashSet<&str> = one.pic.parts.iter().map(|p| p.id.as_str()).collect();
+        for p in s[0].parts() {
+            assert!(ids.contains(p.as_str()));
+        }
+        // Each part drawn is the change's, a box around it, or a closed box of the rest.
+        for p in &one.pic.parts {
+            let around = s[0].parts().any(|q| {
+                let mut at = Some(q.as_str());
+                while let Some(id) = at {
+                    if id == p.id {
+                        return true;
+                    }
+                    at = m
+                        .pic
+                        .parts
+                        .iter()
+                        .find(|x| x.id == id)
+                        .and_then(|x| x.parent.as_deref());
+                }
+                false
+            });
+            assert!(
+                around || p.closed,
+                "{} is neither the change, a box around it, nor closed",
+                p.id
             );
         }
     }

@@ -153,7 +153,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair build` (also `docair scan`) | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
 | `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
 | `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
-| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | what `docair diff` finds, explained by the model (docs/EXPLAIN.md): links between parts it could not prove the same, what each changed flow now does, words on each of its change steps (by docair's step ids), every claim bound against both graphs; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`), so the next run asks only about flows not explained yet and never about a human's correction; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters, at most 3 at once, each answered one said on stderr; a pull request comment on stdout |
+| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`), the commit messages and the changed docs go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why (its sources), what to check and where a commit or doc disagrees; every claim bound against both graphs, the pieces and the sources, every piece no change holds an other edit; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`, `docair.explained/1`), asked again only when its changes and other edits no longer cover the pieces, never about a human's change; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters, 3 at once, progress on stderr; the review as a pull request comment on stdout |
 | `docair check`   | 1–6         | prints diagnostics; exits non-zero on errors (CI gate) |
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
 | `docair ask "<question>" [--follow-up] [--apply]` | 1–7 + AI | asks the configured model and prints the reply: answer, walkthrough (recorded in `walkthroughs/`), view changes, proposed edits (written to `.docair/docair.patch`). `--follow-up` continues the last conversation; `--apply` writes the edits into the files and the view changes into `docair.toml` (§10) |
@@ -921,15 +921,22 @@ into `docair.html`:
   parts of one box whose code changed), each step's camera on its change at a
   size to read and its card above the flow's details, which list what it now
   and no longer goes through, the parts changed in their code and those whose
-  words alone changed. Stored findings (docs/EXPLAIN.md) show there
-  too: the model's explanation and who recorded it in the details, and its
-  words on each change on that change's step, by the step's id
-  (`docair_core::change_steps`), over docair's own words; the list
-  shows the model's links and counts the flows not explained yet, with the
-  command, and served with `docair serve --changes <A>` a button that asks for
-  them (`POST /api/explain`) and then says how far the job is (`GET
-  /api/explain/<job>`, its `text`, every 1.5 s) until the page is written
-  again.
+  words alone changed. A flow of more than 30 parts gets one picture per
+  change instead (`#changes/<seed>`, `/2`, …, linked by Back and Next): the
+  change, where it forks off and rejoins, and the boxes they are in, the rest
+  folded into closed boxes; its details link all changes in one picture
+  (`/all`) and the whole flow (`/whole`). The list leads with the review
+  (docs/EXPLAIN.md §9), when `docair explain` stored one: the AI's changes,
+  each one difference in what the app does, at `#review/<n>` on a picture of
+  its pieces only, walked through them in the order they work together, each
+  step's card the model's words over docair's; its details say how, why (with
+  the commits and docs it comes from), what to check, where a commit or doc
+  and the code disagree, and the flows it touches; then the *Other edits*,
+  the pieces no change holds, and the model's links. Without a review the
+  list says the AI writes it, with the command, and served with `docair serve
+  --changes <A>` a button that asks for it (`POST /api/explain`) and then says
+  how far the job is (`GET /api/explain/<job>`, its `text`, every 1.5 s)
+  until the page is written again.
 * Tidy (docs/ADAPTERS.md §6.1): the CLI counts the tags the code repeats
   (`docair_core::tidy::repeated`) and writes the header's **✂ Tidy · n**
   (**✂ Tidy ✓** when none), a banner under the header that a reader can

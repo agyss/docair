@@ -64,15 +64,6 @@ fn with_code(text: &str) -> String {
         .collect()
 }
 
-/// The stored finding about a flow (`docair_ai::explain::FlowExplained` as JSON).
-fn finding<'v>(findings: Option<&'v Value>, seed: &str) -> Option<&'v Value> {
-    findings?
-        .get("flows")?
-        .as_array()?
-        .iter()
-        .find(|f| f.get("seed").and_then(Value::as_str) == Some(seed))
-}
-
 /// Who recorded a finding, and when: `by fake-model · 2026-11-19`, `corrected by hand · …`.
 fn recorded(f: &Value) -> String {
     let r = &f["recorded"];
@@ -84,7 +75,7 @@ fn recorded(f: &Value) -> String {
     }
 }
 
-/// A box around some parts of a laid-out picture, with room around it: a walk step's camera.
+/// A box around some parts of a laid-out picture, with room around it: where the camera of a step goes.
 fn camera_of(laid: &Layout, parts: &[usize]) -> Value {
     let (mut x0, mut y0, mut x1, mut y1) = (
         f64::INFINITY,
@@ -106,13 +97,44 @@ fn camera_of(laid: &Layout, parts: &[usize]) -> Value {
 }
 
 /// One step's card of a walk on a change's picture: its title, where it is, what it says, Back and Next.
-fn step_card(glyph: &str, title: &str, at: &str, body: &str, (k, n): (usize, usize)) -> String {
+fn step_card(glyph: &str, title: &str, at: &str, body: &str, nav: &str) -> String {
     format!(
-        r#"<section class="card flow" data-test="step-card"><div class="card-head"><span class="card-glyph">{glyph}</span><b>{}</b><button class="card-close" title="Close the walk">×</button></div><div class="card-step">{at}</div>{body}<div class="card-nav"><button class="btn" data-step="-1"{}>◀ Back</button><button class="btn" data-step="1"{}>Next ▶</button></div></section>"#,
-        escape_text(title),
+        r#"<section class="card flow" data-test="step-card"><div class="card-head"><span class="card-glyph">{glyph}</span><b>{}</b><button class="card-close" title="Close the walk">×</button></div><div class="card-step">{at}</div>{body}<div class="card-nav">{nav}</div></section>"#,
+        escape_text(title)
+    )
+}
+
+/// Back and Next of step `k` of `n`, as the walk goes through them.
+fn walk_nav(k: usize, n: usize) -> String {
+    format!(
+        r#"<button class="btn" data-step="-1"{}>◀ Back</button><button class="btn" data-step="1"{}>Next ▶</button>"#,
         if k == 0 { " disabled" } else { "" },
         if k + 1 >= n { " disabled" } else { "" }
     )
+}
+
+/// Back and Next between the pictures of a big flow's changes, each on its own (docair-zrr.27): links to their addresses.
+fn picture_nav(prev: Option<&str>, next: Option<&str>) -> String {
+    let link = |to: Option<&str>, words: &str, test: &str| match to {
+        Some(a) => format!(
+            r#"<a class="btn" href="{}" data-test="{test}">{words}</a>"#,
+            href(a)
+        ),
+        None => format!(r#"<button class="btn" disabled>{words}</button>"#),
+    };
+    format!(
+        "{}{}",
+        link(prev, "◀ Back", "change-back"),
+        link(next, "Next ▶", "change-next")
+    )
+}
+
+/// Where a step's picture stands among the pictures of a big flow's changes: its place, how many, and the addresses before and after it.
+struct StepAt {
+    k: usize,
+    n: usize,
+    prev: Option<String>,
+    next: Option<String>,
 }
 
 /// Names as code, which the page links to their parts: `a`, `b` and `c`; past eight, how many more.
@@ -144,7 +166,8 @@ fn changes_walk(
     m: &Merged,
     laid: &Layout,
     flow_steps: &[ChangeStep],
-    (title, words): (&str, Option<&Value>),
+    (title, words, in_order): (&str, Option<&Value>, bool),
+    at_picture: Option<&StepAt>,
     linker: &crate::page_glossary::Linker,
 ) -> Option<Value> {
     if flow_steps.is_empty() {
@@ -181,12 +204,14 @@ fn changes_walk(
             .unwrap_or_default()
     };
     let mut order: Vec<&ChangeStep> = flow_steps.iter().collect();
-    order.sort_by_key(|s| {
-        (
-            matches!(s.kind, StepKind::Code | StepKind::Box),
-            top_left(&places(s)),
-        )
-    });
+    if !in_order {
+        order.sort_by_key(|s| {
+            (
+                matches!(s.kind, StepKind::Code | StepKind::Box),
+                top_left(&places(s)),
+            )
+        });
+    }
     let count = order.len();
     let steps: Vec<Value> = order
         .iter()
@@ -213,13 +238,20 @@ fn changes_walk(
                 ),
                 None => format!("<p>{said}</p>{route}"),
             };
-            let card = step_card(
-                "Δ",
-                "The changes",
-                &format!("change {} of {count}", k + 1),
-                &body,
-                (k, count),
-            );
+            // A review's change is walked through its pieces; a flow through its changes.
+            let (head, unit) = if in_order {
+                ("This change", "piece")
+            } else {
+                ("The changes", "change")
+            };
+            let (at, nav) = match at_picture {
+                Some(p) => (
+                    format!("{unit} {} of {}", p.k + 1, p.n),
+                    picture_nav(p.prev.as_deref(), p.next.as_deref()),
+                ),
+                None => (format!("{unit} {} of {count}", k + 1), walk_nav(k, count)),
+            };
+            let card = step_card("Δ", head, &at, &body, &nav);
             json!({
                 "id": s.id,
                 "card": linker.link(&card, None),
@@ -525,6 +557,326 @@ fn draw_one(m: &Merged, marks: &FlowMarks, keep: Option<&Path>) -> (Layout, Stri
     (laid, svg)
 }
 
+/***
+ * A big flow's pictures (docs/CHANGES.md §8, docair-zrr.27): each change on its own, the rest folded away, its card's Back and Next linking the pictures before and after it, the first at the flow's own address; then all changes in one picture (`/all`) and the whole flow (`/whole`). Their addresses.
+ *
+ * @calls docair-core.change_steps.focused_on "each change on its own"
+ * @calls docair-core.change_steps.focused "all changes in one picture"
+ ***/
+fn pictures_by_change(
+    (m, mk, flow_steps): (&Merged, &FlowMarks, &[ChangeStep]),
+    f: &FlowChange,
+    code: &HashSet<&str>,
+    (addr, title, pair): (&str, &str, &str),
+    words: Option<&Value>,
+    keep: Option<&Path>,
+    linker: &crate::page_glossary::Linker,
+) -> (Vec<ChangePicture>, String, String) {
+    let mut out = Vec::new();
+    let n = flow_steps.len();
+    let at_of = |k: usize| {
+        if k == 0 {
+            addr.to_string()
+        } else {
+            format!("{addr}/{}", k + 1)
+        }
+    };
+    for (k, step) in flow_steps.iter().enumerate() {
+        let one_change = change_steps::focused_on(m, step);
+        let its_marks = change_steps::marks(&one_change, f, code);
+        let (laid, svg) = draw_one(&one_change, &its_marks, keep);
+        let here = StepAt {
+            k,
+            n,
+            prev: (k > 0).then(|| at_of(k - 1)),
+            next: (k + 1 < n).then(|| at_of(k + 1)),
+        };
+        let step_title = format!("{pair} · change {} of {n}", k + 1);
+        out.push(ChangePicture {
+            addr: at_of(k),
+            title: if k == 0 {
+                pair.to_string()
+            } else {
+                step_title.clone()
+            },
+            crumbs: if k == 0 {
+                vec![(pair.to_string(), addr.to_string())]
+            } else {
+                vec![(pair.to_string(), addr.to_string()), (step_title, at_of(k))]
+            },
+            svg,
+            change: Some(f.seed.clone()),
+            walk: changes_walk(
+                &one_change,
+                &laid,
+                std::slice::from_ref(step),
+                (title, words, false),
+                Some(&here),
+                linker,
+            ),
+        });
+    }
+    // All changes in one picture, the rest folded away; and the whole flow.
+    let all = change_steps::focused(m, mk, flow_steps);
+    let all_marks = change_steps::marks(&all, f, code);
+    let (laid, svg) = draw_one(&all, &all_marks, keep);
+    let (all_addr, whole_addr) = (format!("{addr}/all"), format!("{addr}/whole"));
+    for (to, what, svg, walk) in [
+        (
+            all_addr.to_string(),
+            "all changes in one picture",
+            svg,
+            changes_walk(&all, &laid, flow_steps, (title, words, false), None, linker),
+        ),
+        (
+            whole_addr.to_string(),
+            "the whole flow",
+            draw_one(m, mk, keep).1,
+            None,
+        ),
+    ] {
+        let t = format!("{title}: {what}");
+        out.push(ChangePicture {
+            addr: to.clone(),
+            title: t.clone(),
+            crumbs: vec![(pair.to_string(), addr.to_string()), (t, to)],
+            svg,
+            change: Some(f.seed.clone()),
+            walk,
+        });
+    }
+    (out, all_addr, whole_addr)
+}
+
+/// The review's changes in a stored finding of `docair.explained/1` (docs/EXPLAIN.md §9.4); none for another schema.
+fn review_changes(findings: Option<&Value>) -> &[Value] {
+    findings
+        .filter(|f| f["schema"].as_str() == Some("docair.explained/1"))
+        .and_then(|f| f["changes"].as_array())
+        .map_or(&[][..], Vec::as_slice)
+}
+
+/// A changed flow's title, from the version that has it: *Datum order*, *Scenario checkout*.
+fn flow_title(after: &Graph, before: &Graph, seed: &str) -> String {
+    match docair_core::slice::find(after, seed) {
+        Some(s) => slice_title(&s, &|id| name_in(after, id)),
+        None => docair_core::slice::find(before, seed).map_or_else(
+            || seed.to_string(),
+            |s| slice_title(&s, &|id| name_in(before, id)),
+        ),
+    }
+}
+
+/// The review as the page shows it: what leads the changes' list, each change's details and pictures.
+struct ReviewView {
+    list: String,
+    details: Map<String, Value>,
+    pictures: Vec<ChangePicture>,
+}
+
+/***
+ * The review (docs/EXPLAIN.md §9.5, docair-8l6.22): the AI's changes in its order, each at `#review/<n>` on its own picture (its pieces' parts only, docair-8l6.33), walked through its pieces in the order of *how*, each step's card the model's words for that piece over docair's own; its details lead with what the app does differently, how, why with its sources, and what to check, then where it disagrees and the flows it touches. Then the other edits. Without a review: that the AI writes it, the command, and, served, a button (docair-8l6.26).
+ *
+ * @calls docair-core.review.pieces "the pieces of the whole change"
+ * @calls docair-core.review.change_picture "each change's own picture"
+ ***/
+fn review_view(
+    after: &Graph,
+    changed: &Changed,
+    keep: Option<&Path>,
+    linker: &crate::page_glossary::Linker,
+    code: &HashSet<&str>,
+) -> ReviewView {
+    let c = changed.changes;
+    let before = changed.before;
+    let found = review_changes(changed.findings);
+    let mut out = ReviewView {
+        list: String::new(),
+        details: Map::new(),
+        pictures: Vec::new(),
+    };
+    if found.is_empty() {
+        let b_arg = if c.working_tree {
+            String::new()
+        } else {
+            format!(" {}", c.b)
+        };
+        let _ = write!(
+            out.list,
+            r#"<p class="muted" data-test="review-needs-ai">The AI writes the review: what each change does, how, why and what to check. <code>docair explain {}{}</code> writes it.</p><button class="btn primary" type="button" data-test="explain" data-served hidden data-a="{}"{}>✦ Review the changes</button>"#,
+            escape_text(&c.a),
+            escape_text(&b_arg),
+            escape_text(&c.a),
+            if c.working_tree {
+                String::new()
+            } else {
+                format!(r#" data-b="{}""#, escape_text(&c.b))
+            }
+        );
+        return out;
+    }
+    let pieces = docair_core::review::pieces(before, after, c);
+    let piece = |id: &str| pieces.iter().find(|p| p.id() == id);
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    out.list
+        .push_str(r#"<ol class="review-list" data-test="review-list">"#);
+    let n = found.len();
+    for (k, ch) in found.iter().enumerate() {
+        let addr = format!("review/{}", k + 1);
+        let title = text(ch, "title");
+        let how: Vec<(String, String)> = ch["how"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|h| (text(h, "piece"), text(h, "words")))
+            .filter(|(p, _)| piece(p).is_some())
+            .collect();
+        let its: Vec<&docair_core::review::Piece> =
+            how.iter().filter_map(|(p, _)| piece(p)).collect();
+        let mut flows: Vec<&String> = its.iter().flat_map(|p| &p.flows).collect();
+        flows.sort();
+        flows.dedup();
+        let _ = write!(
+            out.list,
+            r#"<li><a class="link" href="{}" data-test="review-change">{}</a> <span class="muted">· {}</span></li>"#,
+            href(&addr),
+            with_code(&title),
+            count(its.len(), "piece")
+        );
+        // Its picture, walked through its pieces in the order of how.
+        let words: Map<String, Value> = how
+            .iter()
+            .map(|(p, w)| (p.clone(), Value::String(w.clone())))
+            .collect();
+        let words = Value::Object(words);
+        let steps: Vec<ChangeStep> = its.iter().map(|p| p.step.clone()).collect();
+        let drawn =
+            docair_core::review::change_picture(before, after, c, &addr, &its).map(|(m, f)| {
+                let marked = change_steps::marks(&m, &f, code);
+                let (laid, svg) = draw_one(&m, &marked, keep);
+                let walk = changes_walk(
+                    &m,
+                    &laid,
+                    &steps,
+                    (&title, Some(&words), true),
+                    None,
+                    linker,
+                );
+                (svg, walk)
+            });
+        let short_title = docair_core::review::cut(&title.replace('`', ""), 80);
+        out.pictures.push(ChangePicture {
+            addr: addr.clone(),
+            title: short_title.clone(),
+            crumbs: vec![(short_title, addr.clone())],
+            svg: drawn
+                .as_ref()
+                .map_or_else(|| NOT_FOUND.to_string(), |d| d.0.clone()),
+            change: Some(addr.clone()),
+            walk: drawn.and_then(|d| d.1),
+        });
+        // Its details: what, how, why, what to check, where it disagrees, the flows it touches.
+        let mut d = format!(
+            r#"<h2 data-test="review-title">{}</h2><div class="meta">change {} of {n} · from <code>{}</code> to <code>{}</code></div>"#,
+            escape_text(&title.replace('`', "")),
+            k + 1,
+            escape_text(short(&c.a)),
+            escape_text(short(&c.b))
+        );
+        d.push_str(r#"<h4>How</h4><ol data-test="review-how">"#);
+        for (_, w) in &how {
+            let _ = write!(d, "<li>{}</li>", with_code(w));
+        }
+        d.push_str("</ol>");
+        let why = text(ch, "why");
+        if !why.is_empty() {
+            let sources: Vec<String> = ch["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|s| format!("<code>{}</code>", escape_text(s)))
+                .collect();
+            let _ = write!(
+                d,
+                r#"<h4>Why</h4><p data-test="review-why">{}</p>{}"#,
+                with_code(&why),
+                if sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        r#"<div class="muted" data-test="review-sources">from {}</div>"#,
+                        sources.join(", ")
+                    )
+                }
+            );
+        }
+        let check = text(ch, "check");
+        if !check.is_empty() {
+            let _ = write!(
+                d,
+                r#"<h4>What to check</h4><p data-test="review-check">{}</p>"#,
+                with_code(&check)
+            );
+        }
+        let disagrees: Vec<&str> = ch["disagrees"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if !disagrees.is_empty() {
+            d.push_str(r#"<h4>Says one thing, does another</h4><ul class="warn" data-test="review-disagrees">"#);
+            for x in disagrees {
+                let _ = write!(d, "<li>{}</li>", with_code(x));
+            }
+            d.push_str("</ul>");
+        }
+        if !flows.is_empty() {
+            d.push_str(r#"<h4>The flows it touches</h4><ul data-test="review-flows">"#);
+            for seed in flows {
+                let _ = write!(
+                    d,
+                    r#"<li><a class="link" href="{}">{}</a></li>"#,
+                    href(&format!("changes/{seed}")),
+                    escape_text(&flow_title(after, before, seed))
+                );
+            }
+            d.push_str("</ul>");
+        }
+        let _ = write!(
+            d,
+            r#"<div class="muted">{}</div><p><a class="link" data-changes-list>← All changes</a></p>"#,
+            escape_text(&recorded(ch))
+        );
+        out.details
+            .insert(addr, Value::String(linker.link(&d, None)));
+    }
+    out.list.push_str("</ol>");
+    // The pieces no change holds: shown, never hidden (docair-8l6.28).
+    let other: Vec<&docair_core::review::Piece> = changed
+        .findings
+        .and_then(|f| f["other"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(piece)
+        .collect();
+    if !other.is_empty() {
+        let _ = write!(
+            out.list,
+            r#"<h4>Other edits · {}</h4><ul class="other-edits" data-test="other-edits">"#,
+            other.len()
+        );
+        for p in other {
+            let _ = write!(out.list, "<li>{}</li>", docair_words(after, &p.step));
+        }
+        out.list.push_str("</ul>");
+    }
+    out.list = linker.link(&out.list, None);
+    out
+}
+
 /// The picture of a flow neither version has: it says so.
 const NOT_FOUND: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" class="docair-pic changes" viewBox="0 0 280 120" width="280" height="120"><g class="side-missing"><rect x="0" y="0" width="280" height="120" rx="8"/><text x="140" y="60">Not found in either version</text></g></svg>"#;
 
@@ -581,16 +933,26 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     let c = changed.changes;
     let (a, b) = (short(&c.a), short(&c.b));
     let n = c.flows.len();
+    let review_n = review_changes(changed.findings).len();
     let button = format!(
-        r#"<button class="btn" id="btn-changes" data-test="changes-button" title="What changed from {} to {}">Δ Changes · {n}</button>"#,
-        escape_text(a),
-        escape_text(b)
-    );
-    let mut list = format!(
-        r#"<h2>Δ Changes</h2><div class="meta">from <code>{}</code> to <code>{}</code> · {n} {} changed</div>"#,
+        r#"<button class="btn" id="btn-changes" data-test="changes-button" title="What changed from {} to {}">Δ Changes · {}</button>"#,
         escape_text(a),
         escape_text(b),
-        if n == 1 { "flow" } else { "flows" }
+        if review_n > 0 { review_n } else { n }
+    );
+    let mut list = format!(
+        r#"<h2>Δ Changes</h2><div class="meta">from <code>{}</code> to <code>{}</code> · {}</div>"#,
+        escape_text(a),
+        escape_text(b),
+        if review_n > 0 {
+            format!(
+                "{} reviewed by the AI · {}",
+                count(review_n, "change"),
+                count(n, "flow")
+            )
+        } else {
+            format!("{} changed", count(n, "flow"))
+        }
     );
     if !c.graph.reading.is_empty() {
         let _ = write!(
@@ -599,11 +961,20 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
             escape_text(&c.graph.reading.join("; "))
         );
     }
-    list.push_str(r#"<ul class="changes-list" data-test="changes-list">"#);
     let mut details = Map::new();
     let mut pictures = Vec::new();
     // Code the model names links to its part, as in every other panel.
     let linker = crate::page_glossary::Linker::new(after);
+    // The review leads (docs/EXPLAIN.md §9.5); the flows it is built from follow.
+    let inside_code = change_steps::changed_inside(&c.graph).code;
+    let reviewed = review_view(after, changed, keep, &linker, &inside_code);
+    list.push_str(&reviewed.list);
+    details.extend(reviewed.details);
+    pictures.extend(reviewed.pictures);
+    let _ = write!(
+        list,
+        r#"<h3 class="flows-head">The flows the changes touch · {n}</h3><ul class="changes-list" data-test="changes-list">"#
+    );
     let name_b = |id: &str| name_in(after, id);
     let name_a = |id: &str| name_in(changed.before, id);
     // The parts that moved or were renamed, and the parts changed inside, in their code or only their words.
@@ -695,49 +1066,68 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         let marked = one
             .as_ref()
             .map(|m| change_steps::marks(m, f, &inside.code));
-        let drawn = one
-            .as_ref()
-            .zip(marked.as_ref())
-            .map(|(m, mk)| draw_one(m, mk, keep));
         let flow_steps = match (&one, &marked) {
             (Some(m), Some(mk)) => change_steps::steps(m, f, mk),
             _ => Vec::new(),
         };
-        let found = finding(changed.findings, &f.seed);
+        // A big flow (docair-zrr.27): each change on its own picture, the rest folded away, Back and Next
+        // between them; all changes in one picture and the whole flow a link away.
+        let whole_parts = one.as_ref().map_or(0, |m| m.pic.parts.len());
+        let big = whole_parts > change_steps::FOCUS_ABOVE && !flow_steps.is_empty();
+        // The model's words are on the review's changes (docs/EXPLAIN.md §9), not on a flow's steps.
+        let words: Option<&Value> = None;
         let pair = format!("{title}: before and after");
-        pictures.push(ChangePicture {
-            addr: addr.clone(),
-            title: pair.clone(),
-            crumbs: vec![(pair.clone(), addr.clone())],
-            svg: drawn
-                .as_ref()
-                .map_or_else(|| NOT_FOUND.to_string(), |d| d.1.clone()),
-            change: Some(f.seed.clone()),
-            // It opens on its first change, and steps from change to change.
-            walk: match (&one, &drawn) {
-                (Some(m), Some((laid, _))) => changes_walk(
-                    m,
-                    laid,
-                    &flow_steps,
-                    (&title, found.and_then(|x| x.get("steps"))),
+        let mut focus_links = String::new();
+        match (&one, &marked) {
+            (Some(m), Some(mk)) if big => {
+                let (more, all_addr, whole_addr) = pictures_by_change(
+                    (m, mk, &flow_steps),
+                    f,
+                    &inside.code,
+                    (&addr, &title, &pair),
+                    words,
+                    keep,
                     &linker,
-                ),
-                _ => None,
-            },
-        });
-        // What the model explained about it; its words on each change are on the walk's steps.
-        let mut explained = String::new();
-        if let Some(x) = found {
-            let _ = write!(
-                explained,
-                r#"<h4>✦ Explained</h4><p data-test="explanation">{}</p><div class="muted">{}</div>"#,
-                with_code(x["explanation"].as_str().unwrap_or("")),
-                escape_text(&recorded(x))
-            );
+                );
+                pictures.extend(more);
+                focus_links = format!(
+                    r#"<p data-test="focus">A big change: each change is drawn on its own, with what it forks off and rejoins at and the boxes they are in; the rest is folded away. <a class="link" href="{}" data-test="changes-only">Change by change</a> · <a class="link" href="{}" data-test="all-changes">All changes in one picture</a> · <a class="link" href="{}" data-test="whole-flow">The whole flow · {whole_parts} parts</a></p>"#,
+                    href(&addr),
+                    href(&all_addr),
+                    href(&whole_addr)
+                );
+            }
+            _ => {
+                let drawn = one
+                    .as_ref()
+                    .zip(marked.as_ref())
+                    .map(|(m, mk)| draw_one(m, mk, keep));
+                pictures.push(ChangePicture {
+                    addr: addr.clone(),
+                    title: pair.clone(),
+                    crumbs: vec![(pair.clone(), addr.clone())],
+                    svg: drawn
+                        .as_ref()
+                        .map_or_else(|| NOT_FOUND.to_string(), |d| d.1.clone()),
+                    change: Some(f.seed.clone()),
+                    // It opens on its first change, and steps from change to change.
+                    walk: match (&one, &drawn) {
+                        (Some(m), Some((laid, _))) => changes_walk(
+                            m,
+                            laid,
+                            &flow_steps,
+                            (&title, words, false),
+                            None,
+                            &linker,
+                        ),
+                        _ => None,
+                    },
+                });
+            }
         }
         // Its details, shown with its picture.
         let mut d = format!(
-            r#"<h2>{}</h2><div class="meta">{} · from <code>{}</code> to <code>{}</code>{uncertain}</div><p>{}</p>{explained}"#,
+            r#"<h2>{}</h2><div class="meta">{} · from <code>{}</code> to <code>{}</code>{uncertain}</div><p>{}</p>{focus_links}"#,
             escape_text(&title),
             how(f),
             escape_text(a),
@@ -812,31 +1202,6 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         }
         list.push_str("</ul>");
     }
-    // The flows the model has not explained yet: docair serve asks for them, a file says how.
-    let left = c
-        .flows
-        .iter()
-        .filter(|f| finding(changed.findings, &f.seed).is_none())
-        .count();
-    if left > 0 {
-        let b_arg = if c.working_tree {
-            String::new()
-        } else {
-            format!(" {}", c.b)
-        };
-        let _ = write!(
-            list,
-            r#"<p class="muted" data-test="unexplained">{left} of {n} not explained yet: <code>docair explain {}{}</code> explains them.</p><button class="btn primary" type="button" data-test="explain" data-served hidden data-a="{}"{}>✦ Explain them</button>"#,
-            escape_text(&c.a),
-            escape_text(&b_arg),
-            escape_text(&c.a),
-            if c.working_tree {
-                String::new()
-            } else {
-                format!(r#" data-b="{}""#, escape_text(&c.b))
-            }
-        );
-    }
     ChangeView {
         button,
         list,
@@ -909,7 +1274,15 @@ mod tests {
         );
         let linker = crate::page_glossary::Linker::new(&after);
         let flow_steps = steps(&m, &f, &marked);
-        let walk = changes_walk(&m, &laid, &flow_steps, ("Datum order", None), &linker).unwrap();
+        let walk = changes_walk(
+            &m,
+            &laid,
+            &flow_steps,
+            ("Datum order", None, false),
+            None,
+            &linker,
+        )
+        .unwrap();
         let st = &walk["steps"].as_array().unwrap()[0];
         assert_eq!(walk["steps"].as_array().unwrap().len(), 1);
         assert_eq!(st["id"], "data.order#path:orders-db");
@@ -938,7 +1311,8 @@ mod tests {
             &m,
             &laid,
             &flow_steps,
-            ("Datum order", Some(&words)),
+            ("Datum order", Some(&words), false),
+            None,
             &linker,
         )
         .unwrap();
@@ -951,6 +1325,86 @@ mod tests {
             card.contains("Now goes through"),
             "docair's words stay under the model's"
         );
+    }
+
+    /// docair-zrr.27: a big flow's changes each get a picture of their own, Back and Next linking them,
+    /// the first at the flow's address; then all changes in one picture, and the whole flow.
+    #[test]
+    fn a_big_flow_gets_a_picture_per_change() {
+        let (before, after, mut f) = a_new_line();
+        f.through = vec!["shop-ui.cart".into()];
+        let code: HashSet<&str> = ["shop-ui.cart"].into_iter().collect();
+        let (pa, pb) = (
+            flow_picture(&before, "data.order").unwrap(),
+            flow_picture(&after, "data.order").unwrap(),
+        );
+        let m = merged(Some((&before, &pa)), Some((&after, &pb)), &HashMap::new()).unwrap();
+        let marked = marks(&m, &f, &code);
+        let flow_steps = steps(&m, &f, &marked);
+        assert_eq!(flow_steps.len(), 2, "the new line, and the cart's code");
+        let linker = crate::page_glossary::Linker::new(&after);
+        let (pics, all, whole) = pictures_by_change(
+            (&m, &marked, &flow_steps),
+            &f,
+            &code,
+            (
+                "changes/data.order",
+                "Datum order",
+                "Datum order: before and after",
+            ),
+            None,
+            None,
+            &linker,
+        );
+        let addrs: Vec<&str> = pics.iter().map(|p| p.addr.as_str()).collect();
+        assert_eq!(
+            addrs,
+            [
+                "changes/data.order",
+                "changes/data.order/2",
+                all.as_str(),
+                whole.as_str()
+            ]
+        );
+        assert_eq!(
+            (all.as_str(), whole.as_str()),
+            ("changes/data.order/all", "changes/data.order/whole")
+        );
+        let card = |k: usize| {
+            pics[k].walk.as_ref().unwrap()["steps"][0]["card"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(
+            card(0).contains("change 1 of 2")
+                && card(0).contains(r#"data-test="change-next""#)
+                && card(0).contains("data.order/2"),
+            "{}",
+            card(0)
+        );
+        assert!(
+            card(1).contains("change 2 of 2") && card(1).contains(r#"data-test="change-back""#),
+            "{}",
+            card(1)
+        );
+        assert!(
+            pics[0].walk.as_ref().unwrap()["steps"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 1,
+            "one change per picture"
+        );
+        assert_eq!(
+            pics[2].walk.as_ref().unwrap()["steps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2,
+            "all changes, walked"
+        );
+        assert!(pics[3].walk.is_none(), "the whole flow is just shown");
     }
 
     /// docair-zrr.26: a step's lines as routes, from where none of them arrives to where they end;

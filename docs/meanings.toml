@@ -223,6 +223,11 @@ why = "Project word: a value the adapter read from the code, as opposed to an au
 term = false
 why = "everyday word for what a step is given; meanings::Input and docair-layout's Input are each what their own step reads"
 
+[intent]
+from = "docair-core.review.intent"
+checked = "3913838c"
+why = "the review's word for what was meant beside what changed: the commit messages, the changed docs, the doc blocks whose words changed (docs/EXPLAIN.md §9.2)"
+
 [item]
 from = "docair-lang-rust.item"
 checked = "cbf29ce4"
@@ -307,6 +312,11 @@ why = "The sentences use patch for the proposed doc-block edits; the glossary en
 term = false
 why = "Everyday phrase: a file the user picked; the sentences use it plainly."
 
+[piece]
+from = "docair-core.review.piece"
+checked = "b6fc4925"
+why = "the review's word for one bit of a change docair found, which the AI groups into changes (docs/EXPLAIN.md §9.2)"
+
 [placed]
 term = false
 why = "Everyday participle in the sentences (laid out on the canvas); the Placed part is about where symbols merge, a different sense."
@@ -370,6 +380,11 @@ why = "A pipeline stage name; the resolve module text says what stage 5 does."
 [resolved]
 term = false
 why = "Everyday participle (worked out, applied) in mixed senses; the Resolved part has no text."
+
+[review]
+from = "docair-core.review"
+checked = "adeea32c"
+why = "what docair explain writes and the changes section shows first: the changes, made understandable by the AI (docs/EXPLAIN.md §9)"
 
 [route]
 from = "docair-core.route.route"

@@ -894,7 +894,7 @@ function wire() {
   pic.addEventListener('pointerdown', (ev) => {
     if (!S.svg || ev.button !== 0) return;
     // A part or a box is moved by hand, with what it holds; anywhere else the picture pans.
-    const g = !IX.pictures[S.addr]?.still && ev.target.closest?.('#pic .part, #pic .box');
+    const g = IX.pictures[S.addr]?.still ? null : ev.target.closest?.('#pic .part, #pic .box');
     const id = g?.dataset.id;
     const along = g ? [...S.svg.querySelectorAll('.part, .box')].filter((x) => { for (let c = x.dataset.id; c; c = P.parents[c]) if (c === id) return true; return false; }) : [];
     drag = { x: ev.clientX, y: ev.clientY, view: S.view, moved: false, id, along: along.map((x) => [x, x.getAttribute('transform') || '']) };

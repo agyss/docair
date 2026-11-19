@@ -640,12 +640,12 @@ fn a_changed_flow_shows_before_and_after() {
     );
 }
 
-/// Explained changes in the page (docs/EXPLAIN.md §8, docair-8l6.6, 8l6.12): a flow's stored finding
-/// shows in its details, the model's words on each change show on that change's step of the walk,
-/// by the step's id; the model's links are listed, and the flows not explained yet are counted, with
-/// the command and, for docair serve, a button.
+/// The review in the page (docs/EXPLAIN.md §9.5, docair-8l6.22): the AI's changes lead the changes'
+/// list, each opens at #review/<n> on its own picture, walked through its pieces with the model's
+/// words; its details lead with how, why (with its sources), what to check and where it disagrees,
+/// then the flows it touches. Without a review, the list says the AI writes it and offers a button.
 #[test]
-fn an_explained_change_shows_its_finding_and_step_words() {
+fn a_review_shows_its_changes_on_their_own_pictures() {
     use docair_core::changes::{Changes, FlowChange};
     use docair_core::diff::{ChangedItem, GraphDiff};
     let after = graph("shop");
@@ -675,30 +675,39 @@ fn an_explained_change_shows_its_finding_and_step_words() {
         parts: vec!["orders.create".to_string()],
         flows: vec![flow("data.order"), flow("flow:checkout")],
     };
-    // The step the model's words are about, by the id docair gives it.
-    let steps =
-        docair_core::change_steps::change_steps(&before, &after, &changes, &changes.flows[0]);
-    assert_eq!(steps.len(), 1, "one change: the code of orders.create");
-    let step = steps[0].id.clone();
+    // The piece the review is about, by the id docair gives it.
+    let pieces = docair_core::review::pieces(&before, &after, &changes);
+    assert_eq!(pieces.len(), 1, "one piece: the code of orders.create");
+    let piece = pieces[0].id().to_string();
     let recorded = serde_json::json!({ "by": "model", "model": "fake-model", "at": "2026-11-19" });
     let findings = serde_json::json!({
-        "schema": "docair.explained/0",
+        "schema": "docair.explained/1",
         "a": "01234567", "b": "fedcba98",
         "links": [{ "a": "orders.make", "b": "orders.create", "why": "the same work, renamed", "recorded": recorded }],
-        "flows": [{
-            "seed": "data.order",
-            "explanation": "The order is now stored before the cart hears back.",
-            "steps": { step.clone(): "Here `orders.create` now checks the cart before it stores it." },
+        "changes": [{
+            "title": "Placing an order now checks the cart first.",
+            "how": [{ "piece": piece.clone(), "words": "Here `orders.create` now checks the cart before it stores it." }],
+            "why": "The auditors asked for every order to be checked.",
+            "sources": ["commit:abc1234"],
+            "check": "That `orders.create` still answers fast.",
+            "disagrees": ["The commit says the cart checks it, but `orders.create` does."],
             "recorded": recorded
         }],
         "problems": [], "left": [], "requests": 1
     });
-    let changed = docair_viewer::doc_page::Changed {
-        before: &before,
-        changes: &changes,
-        findings: Some(&findings),
+    let render = |findings: Option<&Value>| {
+        let changed = docair_viewer::doc_page::Changed {
+            before: &before,
+            changes: &changes,
+            findings,
+        };
+        docair_viewer::doc_page::render_page_with(&after, None, Some(&changed))
     };
-    let page = docair_viewer::doc_page::render_page_with(&after, None, Some(&changed));
+    let page = render(Some(&findings));
+    assert!(
+        page.contains("Δ Changes · 1"),
+        "the button counts the review's changes"
+    );
     let ix = script(&page, "docair-index");
     let packed = script(&page, "docair-packed");
     let unpacked = |k: &str| -> Value {
@@ -708,39 +717,76 @@ fn an_explained_change_shows_its_finding_and_step_words() {
         .unwrap()
     };
     let panels = unpacked("panels");
-    let details = panels["flowChanges"]["data.order"].as_str().unwrap();
-    assert!(
-        details.contains("is now stored before the")
-            && details.contains(r#"data-term="order""#)
-            && details.contains("by fake-model · 2026-11-19")
-            && !details.contains("workflow"),
-        "the finding shows in the flow's details: {details}"
-    );
-    let p = &ix["pictures"]["changes/data.order"];
-    assert!(
-        p["walk"] == true && p["still"] == true,
-        "the change is walked through, and not moved by hand"
-    );
-    let walks = unpacked("walks");
-    let steps = walks["changes/data.order"]["steps"].as_array().unwrap();
-    assert_eq!(steps.len(), 1);
-    let card = steps[0]["card"].as_str().unwrap();
-    assert_eq!(steps[0]["id"], Value::from(step));
-    assert!(
-        card.contains(r#"data-test="step-words""#)
-            && card.contains("before it stores it")
-            && card.contains("Code changed in")
-            && steps[0]["camera"].is_array(),
-        "the model's words on the change, over docair's, framed: {card}"
-    );
     let list = panels["changes"].as_str().unwrap();
+    assert!(
+        list.contains(r#"data-test="review-list""#)
+            && list.contains(r##"href="#review/1" data-test="review-change">Placing an order now checks the cart first.</a>"##)
+            && !list.contains("review-needs-ai"),
+        "the review leads the list: {list}"
+    );
+    assert!(
+        list.contains(r#"data-test="changes-list""#)
+            && list.contains("The flows the changes touch"),
+        "the flows follow: {list}"
+    );
     assert!(
         list.contains("<code>orders.make</code> at A is <code>orders.create</code> at B: the same work, renamed"),
         "the model's links are listed"
     );
+    let p = &ix["pictures"]["review/1"];
     assert!(
-        list.contains("1 of 2 not explained yet")
+        p["walk"] == true && p["still"] == true && p["change"] == "review/1",
+        "{p}"
+    );
+    let walks = unpacked("walks");
+    let steps = walks["review/1"]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["id"], Value::from(piece));
+    let card = steps[0]["card"].as_str().unwrap();
+    assert!(
+        card.contains(r#"data-test="step-words""#)
+            && card.contains("before it stores it")
+            && card.contains("Code changed in"),
+        "the model's words on its piece, over docair's: {card}"
+    );
+    let details = panels["flowChanges"]["review/1"].as_str().unwrap();
+    for test in [
+        "review-title",
+        "review-how",
+        "review-why",
+        "review-sources",
+        "review-check",
+        "review-disagrees",
+        "review-flows",
+    ] {
+        assert!(
+            details.contains(&format!(r#"data-test="{test}""#)),
+            "{test}: {details}"
+        );
+    }
+    assert!(
+        details.contains("<code>commit:abc1234</code>")
+            && details.contains("by fake-model · 2026-11-19")
+    );
+    assert!(
+        details.contains(r##"href="#changes/data.order""##),
+        "the flows it touches link to them"
+    );
+    // Without a review: the AI writes it, the command says how, docair serve offers a button.
+    let page = render(None);
+    let ix = script(&page, "docair-index");
+    let packed = script(&page, "docair-packed");
+    let panels: Value = serde_json::from_str(&unpack(
+        packed[ix["panels"].as_u64().unwrap() as usize]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    let list = panels["changes"].as_str().unwrap();
+    assert!(
+        list.contains(r#"data-test="review-needs-ai""#)
+            && list.contains("docair explain 0123456789abcdef0123456789abcdef01234567 fedcba9876543210fedcba9876543210fedcba98")
             && list.contains(r#"data-test="explain" data-served hidden data-a="0123456789abcdef0123456789abcdef01234567" data-b="fedcba9876543210fedcba9876543210fedcba98""#),
-        "the flows not explained yet are counted, with a button for docair serve: {list}"
+        "the review needs the AI: {list}"
     );
 }

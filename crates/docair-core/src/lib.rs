@@ -28,6 +28,10 @@ pub mod changes;
  ***/
 pub mod change_steps;
 /***
+ * The review: the pieces of a whole change across every flow, the intent beside them, and a change's own picture.
+ ***/
+pub mod review;
+/***
  * How much of what authors wrote the code confirms: `docair check --coverage`.
  ***/
 pub mod coverage;

@@ -47,7 +47,11 @@ The first catches what the second cannot: a route registered in another
 file, a config file (Helm values, `nginx.conf`) that reroutes a request
 without touching any code part.
 
-**Moves and renames.** Each part gets a fingerprint of its body. A part gone
+**Moves and renames.** Each part gets a fingerprint of its body, two hashes
+(docair-zrr.29): one leaves out the names of the graph's parts and finds
+moves and renames; the other keeps every word. A part that kept its id
+changed its body only when both differ: the same text is no change, nor is a
+caller of a part that was renamed. A part gone
 at B and a part new at B with the same fingerprint are one part, moved or
 renamed. docair links these itself; the AI links only what it cannot prove.
 
@@ -101,6 +105,11 @@ under their ids at B; `marks_of` marks each part and line `ch-added`,
 `docair serve --changes <A>` serves the same page and writes it again with
 each change; the comparison is shared by the CLI and the server
 (`docair_server::commits`).
+
+**The review** (docs/EXPLAIN.md §9, docair-8l6.17 to 8l6.24). The changes
+section now leads with the AI's review: changes as the reader understands
+them, each on its own picture; the flows below are what the review is built
+from, and stay as a view of their own.
 
 ## 6. Steps
 
@@ -215,6 +224,27 @@ plainly (a dark outline, their own fill), never in a change's colour; a lit
 new line stays solid green, a lit gone line dashed red. A part whose tags
 changed what it calls is shown by its lines, not listed as a change in its
 words.
+
+**Big changes** (docair-zrr.27, zrr.28). A picture of more than 30 parts is
+too big to find its changes in, even step by step: on docair's own work of
+one day (`e3d27b7` to the working tree), *Datum graph* has 182 parts and 45
+changes. Such a flow gets one picture per change instead: the change's
+parts, the shared parts where it forks off and rejoins, and the boxes they
+are in (`change_steps::focused_on`). Everything else folds away: a box with
+no change in it is drawn closed with what it holds, an unchanged part in a
+box that stays counts into its *· n more*, and a line goes to the closed box
+its end folded into, one per pair. Laid out again, the change sits close
+together. The first change is at `#changes/<seed>`, the others at
+`#changes/<seed>/2`, `/3`, …; the card's Back and Next link them. The
+details link *All changes in one picture* (`/all`, `change_steps::focused`,
+walked as before) and *The whole flow* (`/whole`).
+
+| Flow (`e3d27b7` to the working tree) | The whole flow | Its first change on its own |
+|--------------------------------------|----------------|-----------------------------|
+| *Datum files* | 90 parts | 12 |
+| *Datum page* | 117 | 17 |
+| *Datum graph* | 182 | 52 |
+| *docair-server.ask* | 59 | 22 |
 
 **The list** puts the flows whose path changed first, then *same path · 4
 parts changed in their code: …*, then, apart, the flows whose words or tags
