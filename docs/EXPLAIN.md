@@ -266,7 +266,7 @@ removed at A that is the same as one added at B.
 | a `how` entry names a piece docair made | a part's id, or a piece id guessed from it (`path:<part>`), binds to the piece that holds that part (docair-8l6.37); else that entry is left out; a piece already in an earlier change stays there (docair-8l6.32) |
 | words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `disagrees` that does not is left out alone |
 | a source is a commit in the range or a doc docair sent | else it is left out |
-| every piece belongs somewhere | a piece in no change is an *other edit*; the review lists them (docair-8l6.28) |
+| every piece belongs somewhere | the prompt asks for every piece in its change; a piece in no change goes with the change that has the most pieces in its module, when one has more there than every other (*also changed with it*, docair-8l6.41); the rest is an *other edit*, which the review lists (docair-8l6.28) |
 
 The findings go to the store as before (§4): `docs/changes/<A>..<B>.json`,
 schema `docair.explained/1`, with `changes`, the pieces the model left as
@@ -277,15 +277,17 @@ schema `docair.explained/1`, with `changes`, the pieces the model left as
 ### 9.5 The page
 
 **Δ Changes** opens the review: the changes, in the model's order (what
-matters to the user first), then *Other edits*, then the flows they touch,
-as before (CHANGES.md §8). A change opens at `#review/<n>` on its own
-picture: its pieces' parts at A and at B as one picture, nothing else
-(docair-8l6.33), marked as in CHANGES.md §8. Its details lead with what,
-how, why and what to check, then where it disagrees, the flows it touches,
-and who wrote it. Its walk goes through its pieces in the order of *how*:
-each step's card has the model's words for that piece over docair's own
-(Before and After). Without findings the review says the AI makes it, with
-the command, and, served, a button.
+matters to the user first), then the flows they touch, with how many of the
+system's flows changed, then the *Other edits*, folded (docair-8l6.42). A
+change opens at `#review/<n>` on its own picture: its pieces' parts at A and
+at B as one picture, nothing else (docair-8l6.33), marked as in CHANGES.md
+§8. Its walk opens on *What and why*, headed by the change's title: what was
+done, why with its sources, what to check, where it disagrees, framed on the
+whole change; then *How · k of n*, its pieces in the order of *how*, each
+card the model's words for that piece over docair's own (Before and After),
+then what docair put with it (docair-8l6.43). Its details say the same in the
+same order, then the flows it touches and who wrote it. Without findings the
+review says the AI makes it, with the command, and, served, a button.
 
 ### 9.6 `docair explain` and the comment
 
@@ -332,3 +334,9 @@ different names (docair-zrr.29); the model named parts where pieces belong
 and `changes.spec.ts` (*a reviewed change opens on its own picture, with why
 and other edits*), with the fake AI.
 
+**Reported on the live page** (docair-8l6.38 to 8l6.40): the flows were not
+to be seen below 32 other edits; the other edits were unfair, most of them
+pieces of a change; a change opened on its first piece under *This change*.
+On the same work (`02ffe98` to the working tree), asking for every piece
+in its change left 9 other edits of 46 pieces, and docair's module rule put
+5 of them with their change: 4 remain.

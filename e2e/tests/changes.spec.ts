@@ -90,7 +90,7 @@ test.describe('what changed since a commit', () => {
   });
 
   /***
-   * Reviewed by the model (docair explain, docs/EXPLAIN.md §9): the changes list leads with the review's change, titled from the commit; it opens on its own picture, walked through its pieces with the model's words over docair's, the route after on the card, the new step lit; its details say why with the commit and the README as sources; the cart's code edit, which no change explains, is an other edit; the flows still follow.
+   * Reviewed by the model (docair explain, docs/EXPLAIN.md §9): the changes list leads with the review's change, titled from the commit, the flows right after it, the cart's code edit, which no change explains, a folded other edit; the change opens on its own picture on what and why, headed by its title, then the how, its pieces with the model's words over docair's, the route after on the card, the new step lit; its details say why with the commit and the README as sources.
    *
    * @part-of e2e.changes
    * @covers  docair-viewer.page_changes.review_view "checks the review's change opens on its picture with its why and other edits"
@@ -106,17 +106,30 @@ test.describe('what changed since a commit', () => {
     await page.getByTestId('changes-button').click();
     const review = page.getByTestId('review-list');
     await expect(review).toContainText('Audit every order: the flow now reaches orders.audit.');
-    await expect(page.getByTestId('other-edits')).toContainText('total');
+    // The flows right after the changes; the other edits last, folded (docair-8l6.42).
+    await expect(page.getByTestId('flows-head')).toBeVisible();
     await expect(page.getByTestId('changes-list')).toContainText('Scenario checkout');
+    await expect(page.getByTestId('other-edits')).toContainText('total');
+    const flowsFirst = await page.evaluate(() => {
+      const f = document.querySelector('[data-test="flows-head"]');
+      const o = document.querySelector('[data-test="other-edits-box"]');
+      return !!f && !!o && !!(f.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING) && !o.hasAttribute('open');
+    });
+    expect(flowsFirst).toBe(true);
     await page.getByTestId('review-change').first().click();
     await expect(page).toHaveURL(/#review\/1$/);
-    // Walked through its pieces: the new step, and the cart's own block the model put with it.
-    await expect(page.getByTestId('step-card')).toContainText('piece 1 of 2');
+    // It opens on what was done and why, headed by the change's title (docair-8l6.43) ...
+    await expect(page.getByTestId('step-card')).toContainText('What and why');
+    await expect(page.getByTestId('step-card')).toContainText('Audit every order');
+    await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('The commit says: Audit every order.');
+    // ... then the how: the new step, and the cart's own block the model put with it.
+    await page.getByTestId('step-card').locator('[data-step="1"]').click();
+    await expect(page.getByTestId('step-card')).toContainText('How · 1 of 2');
     await expect(page.getByTestId('step-words')).toContainText('now reaches');
     await expect(page.getByTestId('route-after')).toContainText('audit');
     await expect(page.locator('#pic g.part.flow-current[data-id="orders.audit"]')).toHaveCount(1);
-    await expect(page.getByTestId('review-why')).toContainText('The commit says: Audit every order.');
-    await expect(page.getByTestId('review-sources')).toContainText('doc:README.md');
+    await expect(page.locator('#details > [data-test="review-why"], #details h2 ~ [data-test="review-why"]').first()).toContainText('The commit says: Audit every order.');
+    await expect(page.locator('[data-test="review-sources"]').first()).toContainText('doc:README.md');
     await expect(page.getByTestId('review-flows')).toContainText('Scenario checkout');
   });
 });

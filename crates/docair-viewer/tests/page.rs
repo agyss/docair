@@ -726,8 +726,8 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     );
     assert!(
         list.contains(r#"data-test="changes-list""#)
-            && list.contains("The flows the changes touch"),
-        "the flows follow: {list}"
+            && list.contains("The flows the changes touch · 2 of the system's"),
+        "the flows follow, with how many the system has: {list}"
     );
     assert!(
         list.contains("<code>orders.make</code> at A is <code>orders.create</code> at B: the same work, renamed"),
@@ -740,11 +740,23 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     );
     let walks = unpacked("walks");
     let steps = walks["review/1"]["steps"].as_array().unwrap();
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0]["id"], Value::from(piece));
-    let card = steps[0]["card"].as_str().unwrap();
+    // docair-8l6.43: it opens on what was done and why, headed by the change's title; then the how.
+    assert_eq!(steps.len(), 2);
+    let intro = steps[0]["card"].as_str().unwrap();
     assert!(
-        card.contains(r#"data-test="step-words""#)
+        intro.contains(r#"<span class="card-glyph">Δ</span><b>Placing an "#)
+            && intro.contains(r#"<div class="card-step">What and why</div>"#)
+            && intro.contains(r#"data-test="review-what""#)
+            && intro.contains(r#"data-test="review-why""#)
+            && intro.contains(r#"data-test="review-check""#)
+            && !intro.contains("This change"),
+        "what and why first: {intro}"
+    );
+    assert_eq!(steps[1]["id"], Value::from(piece));
+    let card = steps[1]["card"].as_str().unwrap();
+    assert!(
+        card.contains("How · 1 of 1")
+            && card.contains(r#"data-test="step-words""#)
             && card.contains("before it stores it")
             && card.contains("Code changed in"),
         "the model's words on its piece, over docair's: {card}"
@@ -767,6 +779,11 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     assert!(
         details.contains("<code>commit:abc1234</code>")
             && details.contains("by fake-model · 2026-11-19")
+    );
+    let at = |t: &str| details.find(&format!(r#"data-test="{t}""#)).unwrap();
+    assert!(
+        at("review-why") < at("review-how") && at("review-check") < at("review-how"),
+        "why before how: {details}"
     );
     assert!(
         details.contains(r##"href="#changes/data.order""##),

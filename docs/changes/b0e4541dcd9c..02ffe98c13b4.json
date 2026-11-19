@@ -1,0 +1,53 @@
+{
+  "schema": "docair.explained/1",
+  "a": "HEAD~1",
+  "b": "HEAD",
+  "links": [],
+  "changes": [
+    {
+      "title": "A function put in between two parts, or taken out again, now shows as one fork step together with the line it replaced",
+      "how": [
+        {
+          "piece": "code:docair-core.change_steps",
+          "words": "Its fork pairing now counts new and gone lines as well as parts (commit:02ffe98, doc:docs/CHANGES.md), so a function slipped between two parts — or removed — comes out as a single step pairing the fork with the direct line it replaced, instead of separate part and line steps."
+        }
+      ],
+      "why": "So a structural edit like slipping `validate_order` between `create_order` and `orders-db` reads as one change with a clear before and after, rather than as scattered part and line steps (commit:02ffe98, doc:docs/CHANGES.md).",
+      "sources": [
+        "commit:02ffe98",
+        "doc:docs/CHANGES.md"
+      ],
+      "check": "Counting whole lines in the fork pairing can merge or split steps where a stretch mixes part edits with line edits — check such a stretch still comes out as the right fork steps.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-19T14:39:30Z"
+      }
+    },
+    {
+      "title": "A step now shows its route before and after — as Before/After chains on the card, with the fork's shared parts lit plainly in the picture",
+      "how": [
+        {
+          "piece": "path:docair-viewer.page_changes.before_after",
+          "words": "`changes_walk` now calls the new `before_after`, which traces the step's lines into chains of parts (`docair-viewer.page_changes.routes`) and prints the names as code (`docair-viewer.page_changes.names_as_code`), so the card reads 'Before · create_order → orders-db' and 'After · create_order → validate_order → orders-db'; per commit:02ffe98 the same `changes_walk` edit also lights the fork's shared parts plainly and draws lit new lines solid green and gone lines dashed."
+        },
+        {
+          "piece": "path:docair-viewer.page_changes.line_ends",
+          "words": "`sort_flow` now calls the new `line_ends`, which gives the two ends of a graph line by its id (`<from> -<kind>-> <to>`, with a label or `#2` after it) — the endpoint detail each of the step's lines is presented by."
+        }
+      ],
+      "why": "So a reviewer can read straight off the card how the route changed — for example a write moving from `orders-db` to `orders-queue` — and see in the picture where the change forks off and rejoins; a part whose tags changed what it calls is shown by its lines, not listed as a change in its words (commit:02ffe98, doc:docs/CHANGES.md).",
+      "sources": [
+        "commit:02ffe98",
+        "doc:docs/CHANGES.md"
+      ],
+      "check": "The Before/After chains are traced from the step's own lines, so check them against the real before and after graphs — especially where a part's tags changed what it calls, and where a step has no line to it (the doc's `audit` row shows Before as '—').",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-19T14:39:30Z"
+      }
+    }
+  ],
+  "requests": 1
+}

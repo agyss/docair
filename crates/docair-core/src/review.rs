@@ -159,6 +159,58 @@ fn module_of(s: &ChangeStep) -> String {
         .unwrap_or_else(|| id.rsplit_once('.').map_or(id, |(m, _)| m).to_string())
 }
 
+/// The module an id is in: the id without its last segment (`docair-core.review.pieces` → `docair-core.review`).
+fn parent_id(id: &str) -> &str {
+    id.rsplit_once('.').map_or(id, |(m, _)| m)
+}
+
+/// The modules a piece is in: its box, and the modules of its own new, gone and edited parts; for a line alone, of its ends.
+pub fn modules_of(p: &Piece) -> HashSet<String> {
+    let s = &p.step;
+    let mut out: HashSet<String> = s.in_box.iter().cloned().collect();
+    let own = s.added.iter().chain(&s.removed).chain(&s.code);
+    out.extend(own.map(|id| parent_id(id).to_string()));
+    if out.is_empty() {
+        for l in &s.lines {
+            out.insert(parent_id(&l.from).to_string());
+            out.insert(parent_id(&l.to).to_string());
+        }
+    }
+    out
+}
+
+/***
+ * The other edits that belong with a change (docs/EXPLAIN.md §9.4, docair-8l6.41): a piece no change holds goes with the change that has the most pieces in a module it is in, when that change has more there than every other; else it stays an other edit. A rule docair can stand behind: the model groups by meaning, this only by where the code is.
+ ***/
+pub fn attach_by_module(
+    pieces: &[Piece],
+    held: &[Vec<String>],
+    other: &[String],
+) -> (Vec<Vec<String>>, Vec<String>) {
+    let by_id: HashMap<&str, &Piece> = pieces.iter().map(|p| (p.id(), p)).collect();
+    let modules = |id: &str| by_id.get(id).map(|p| modules_of(p)).unwrap_or_default();
+    let held_modules: Vec<Vec<HashSet<String>>> = held
+        .iter()
+        .map(|ids| ids.iter().map(|id| modules(id)).collect())
+        .collect();
+    let mut also: Vec<Vec<String>> = vec![Vec::new(); held.len()];
+    let mut rest = Vec::new();
+    for o in other {
+        let mine = modules(o);
+        let score: Vec<usize> = held_modules
+            .iter()
+            .map(|ms| ms.iter().filter(|m| !m.is_disjoint(&mine)).count())
+            .collect();
+        let best = score.iter().copied().max().unwrap_or(0);
+        let winners: Vec<usize> = (0..score.len()).filter(|&k| score[k] == best).collect();
+        match winners.as_slice() {
+            [k] if best > 0 => also[*k].push(o.clone()),
+            _ => rest.push(o.clone()),
+        }
+    }
+    (also, rest)
+}
+
 /// One picture of some parts at A and at B and the lines between them (`change_steps::merged`).
 fn picture_of(
     a: &Graph,
@@ -485,6 +537,43 @@ mod tests {
         assert_eq!(w[0].part, "orders.create");
         assert!(w[0].after.contains("checked first") && !w[0].before.contains("checked"));
         assert_eq!(cut("abcdef", 3), "abc…");
+    }
+
+    /// docair-8l6.41: an other edit goes with the change that has the most pieces in its module;
+    /// one in a module no change has, or two changes have alike, stays an other edit.
+    #[test]
+    fn other_edits_go_with_the_change_of_their_module() {
+        let piece = |id: &str, code: &[&str]| Piece {
+            step: ChangeStep {
+                id: id.into(),
+                kind: StepKind::Code,
+                added: vec![],
+                removed: vec![],
+                code: code.iter().map(|c| c.to_string()).collect(),
+                ends: vec![],
+                lines_added: vec![],
+                lines_removed: vec![],
+                lines: vec![],
+                in_box: None,
+            },
+            flows: vec![],
+        };
+        let pieces = vec![
+            piece("a1", &["x.review.pieces"]),
+            piece("a2", &["x.review.intent"]),
+            piece("b1", &["x.diff.loose"]),
+            piece("o1", &["x.review.cut"]),
+            piece("o2", &["x.diff.exact"]),
+            piece("o3", &["x.server.job"]),
+        ];
+        let held = vec![
+            vec!["a1".to_string(), "a2".to_string()],
+            vec!["b1".to_string()],
+        ];
+        let other: Vec<String> = ["o1", "o2", "o3"].iter().map(|s| s.to_string()).collect();
+        let (also, rest) = attach_by_module(&pieces, &held, &other);
+        assert_eq!(also, vec![vec!["o1".to_string()], vec!["o2".to_string()]]);
+        assert_eq!(rest, ["o3"], "a module no change has: still an other edit");
     }
 
     /// docair-8l6.33: a change's picture holds its pieces' parts, and marks the new line.

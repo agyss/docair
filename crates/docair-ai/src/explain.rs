@@ -48,7 +48,7 @@ const REVIEW_PROMPT: &str = r#"You help a reviewer understand what changed betwe
               "check": "<what a reviewer should check: the risky part, one sentence>",
               "disagrees": ["<where a commit message or a doc says one thing and the pieces show another, one sentence each>"]}],
  "links": [{"a": "<id at A>", "b": "<id at B>", "why": "<a few words>"}]}
-"how": the change's pieces in the order they work together; each piece in one change at most; a piece that belongs to no change: leave it out.
+"how": the change's pieces in the order they work together; each piece in one change at most. Put every piece into the change it is part of, also the small ones (a new type, a constant, an edited helper); leave a piece out only when it belongs to no change.
 "links": a part removed at A that is the same as a part added at B (renamed and changed); only from "removed at A" and "added at B", and only when sure.
 "sources": the ids only there, never in the title, the why or the words.
 For a piece whose code changed you see only that it changed, not how: do not say what the edit does unless a commit message, a doc or a summary you were given says it; then say where you have it from.
@@ -730,6 +730,24 @@ pub fn comment(changes: &Changes, review: &ChangeFindings, (a, b): (&Graph, &Gra
         "### docair: the review of `{}` → `{}`\n\n",
         changes.a, changes.b
     );
+    // What docair puts with a change by module, and what stays an other edit (docair-8l6.41).
+    let held: Vec<Vec<String>> = review
+        .changes
+        .iter()
+        .map(|c| {
+            c.pieces()
+                .filter(|p| piece(p).is_some())
+                .map(str::to_string)
+                .collect()
+        })
+        .collect();
+    let others: Vec<String> = review
+        .other
+        .iter()
+        .filter(|id| piece(id).is_some())
+        .cloned()
+        .collect();
+    let (also, rest) = docair_core::review::attach_by_module(&pieces, &held, &others);
     if review.changes.is_empty() {
         out.push_str(if pieces.is_empty() {
             "Nothing changed.\n"
@@ -759,9 +777,15 @@ pub fn comment(changes: &Changes, review: &ChangeFindings, (a, b): (&Graph, &Gra
                 out.push_str(&format!("- {} ({})\n", h.words, piece_words(p, a, b)));
             }
         }
+        // What docair put with it: in the same module as its pieces.
+        for id in &also[k] {
+            if let Some(p) = piece(id) {
+                out.push_str(&format!("- also, same module: {}\n", piece_words(p, a, b)));
+            }
+        }
         out.push_str("</details>\n\n");
     }
-    let other: Vec<&Piece> = review.other.iter().filter_map(|id| piece(id)).collect();
+    let other: Vec<&Piece> = rest.iter().filter_map(|id| piece(id)).collect();
     if !other.is_empty() {
         out.push_str(&format!(
             "<details><summary>Other edits ({})</summary>\n\n",

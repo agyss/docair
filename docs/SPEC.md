@@ -928,11 +928,14 @@ into `docair.html`:
   (`/all`) and the whole flow (`/whole`). The list leads with the review
   (docs/EXPLAIN.md §9), when `docair explain` stored one: the AI's changes,
   each one difference in what the app does, at `#review/<n>` on a picture of
-  its pieces only, walked through them in the order they work together, each
-  step's card the model's words over docair's; its details say how, why (with
-  the commits and docs it comes from), what to check, where a commit or doc
-  and the code disagree, and the flows it touches; then the *Other edits*,
-  the pieces no change holds, and the model's links. Without a review the
+  its pieces only, opening on *What and why* under its title (why with the
+  commits and docs it comes from, what to check, where a commit or doc and
+  the code disagree), then *How · k of n*, its pieces in the order they work
+  together, each card the model's words over docair's, then what docair put
+  with it by module; its details say the same, then the flows it touches;
+  after the changes the flows, with how many of the system's flows changed,
+  the model's links, and last the *Other edits*, folded: the pieces no change
+  holds. Without a review the
   list says the AI writes it, with the command, and served with `docair serve
   --changes <A>` a button that asks for it (`POST /api/explain`) and then says
   how far the job is (`GET /api/explain/<job>`, its `text`, every 1.5 s)

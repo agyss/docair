@@ -166,10 +166,12 @@ fn changes_walk(
     m: &Merged,
     laid: &Layout,
     flow_steps: &[ChangeStep],
-    (title, words, in_order): (&str, Option<&Value>, bool),
+    (title, words, intro): (&str, Option<&Value>, Option<&str>),
     at_picture: Option<&StepAt>,
     linker: &crate::page_glossary::Linker,
 ) -> Option<Value> {
+    // A review's change (docair-8l6.43): its pieces in the order given, after a first card on what and why.
+    let in_order = intro.is_some();
     if flow_steps.is_empty() {
         return None;
     }
@@ -213,7 +215,40 @@ fn changes_walk(
         });
     }
     let count = order.len();
-    let steps: Vec<Value> = order
+    let first = usize::from(intro.is_some());
+    let total = count + first;
+    let head = if in_order {
+        docair_core::review::cut(&title.replace('`', ""), 70)
+    } else {
+        "The changes".to_string()
+    };
+    let mut steps: Vec<Value> = Vec::new();
+    if let Some(intro) = intro {
+        // What was done and why, framed on the whole change, before its pieces.
+        let mut all: Vec<usize> = order.iter().flat_map(|s| places(s)).collect();
+        all.sort_unstable();
+        all.dedup();
+        let mut lines: Vec<usize> = order
+            .iter()
+            .flat_map(|s| {
+                s.lines
+                    .iter()
+                    .filter_map(|l| line_at.get(l.id.as_str()).copied())
+            })
+            .collect();
+        lines.sort_unstable();
+        lines.dedup();
+        let card = step_card("Δ", &head, "What and why", intro, &walk_nav(0, total));
+        steps.push(json!({
+            "id": "what-and-why",
+            "card": linker.link(&card, None),
+            "parts": all.iter().map(|&i| m.pic.parts[i].id.clone()).collect::<Vec<_>>(),
+            "lines": lines,
+            "camera": camera_of(laid, &all),
+            "tokens": [],
+        }));
+    }
+    let pieces: Vec<Value> = order
         .iter()
         .enumerate()
         .map(|(k, s)| {
@@ -238,20 +273,19 @@ fn changes_walk(
                 ),
                 None => format!("<p>{said}</p>{route}"),
             };
-            // A review's change is walked through its pieces; a flow through its changes.
-            let (head, unit) = if in_order {
-                ("This change", "piece")
-            } else {
-                ("The changes", "change")
-            };
+            // A review's change is walked through its pieces, the how; a flow through its changes.
+            let unit = if in_order { "How ·" } else { "change" };
             let (at, nav) = match at_picture {
                 Some(p) => (
                     format!("{unit} {} of {}", p.k + 1, p.n),
                     picture_nav(p.prev.as_deref(), p.next.as_deref()),
                 ),
-                None => (format!("{unit} {} of {count}", k + 1), walk_nav(k, count)),
+                None => (
+                    format!("{unit} {} of {count}", k + 1),
+                    walk_nav(k + first, total),
+                ),
             };
-            let card = step_card("Δ", head, &at, &body, &nav);
+            let card = step_card("Δ", &head, &at, &body, &nav);
             json!({
                 "id": s.id,
                 "card": linker.link(&card, None),
@@ -262,6 +296,7 @@ fn changes_walk(
             })
         })
         .collect();
+    steps.extend(pieces);
     Some(json!({ "title": format!("The changes · {title}"), "glyph": "Δ", "steps": steps }))
 }
 
@@ -610,7 +645,7 @@ fn pictures_by_change(
                 &one_change,
                 &laid,
                 std::slice::from_ref(step),
-                (title, words, false),
+                (title, words, None),
                 Some(&here),
                 linker,
             ),
@@ -626,7 +661,7 @@ fn pictures_by_change(
             all_addr.to_string(),
             "all changes in one picture",
             svg,
-            changes_walk(&all, &laid, flow_steps, (title, words, false), None, linker),
+            changes_walk(&all, &laid, flow_steps, (title, words, None), None, linker),
         ),
         (
             whole_addr.to_string(),
@@ -670,6 +705,8 @@ fn flow_title(after: &Graph, before: &Graph, seed: &str) -> String {
 /// The review as the page shows it: what leads the changes' list, each change's details and pictures.
 struct ReviewView {
     list: String,
+    /// The other edits, folded: the panel puts them after the flows.
+    other: String,
     details: Map<String, Value>,
     pictures: Vec<ChangePicture>,
 }
@@ -692,6 +729,7 @@ fn review_view(
     let found = review_changes(changed.findings);
     let mut out = ReviewView {
         list: String::new(),
+        other: String::new(),
         details: Map::new(),
         pictures: Vec::new(),
     };
@@ -718,36 +756,128 @@ fn review_view(
     let pieces = docair_core::review::pieces(before, after, c);
     let piece = |id: &str| pieces.iter().find(|p| p.id() == id);
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    // What the model grouped, and the other edits docair puts with a change by module (docair-8l6.41).
+    let how_of = |ch: &Value| -> Vec<(String, String)> {
+        ch["how"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|h| (text(h, "piece"), text(h, "words")))
+            .filter(|(p, _)| piece(p).is_some())
+            .collect()
+    };
+    let held: Vec<Vec<String>> = found
+        .iter()
+        .map(|ch| how_of(ch).into_iter().map(|(p, _)| p).collect())
+        .collect();
+    let other_ids: Vec<String> = changed
+        .findings
+        .and_then(|f| f["other"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|id| piece(id).is_some())
+        .map(str::to_string)
+        .collect();
+    let (also, rest) = docair_core::review::attach_by_module(&pieces, &held, &other_ids);
     out.list
         .push_str(r#"<ol class="review-list" data-test="review-list">"#);
     let n = found.len();
     for (k, ch) in found.iter().enumerate() {
         let addr = format!("review/{}", k + 1);
         let title = text(ch, "title");
-        let how: Vec<(String, String)> = ch["how"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|h| (text(h, "piece"), text(h, "words")))
-            .filter(|(p, _)| piece(p).is_some())
+        let how = how_of(ch);
+        let added: Vec<&docair_core::review::Piece> =
+            also[k].iter().filter_map(|id| piece(id)).collect();
+        let its: Vec<&docair_core::review::Piece> = how
+            .iter()
+            .filter_map(|(p, _)| piece(p))
+            .chain(added.iter().copied())
             .collect();
-        let its: Vec<&docair_core::review::Piece> =
-            how.iter().filter_map(|(p, _)| piece(p)).collect();
         let mut flows: Vec<&String> = its.iter().flat_map(|p| &p.flows).collect();
         flows.sort();
         flows.dedup();
         let _ = write!(
             out.list,
-            r#"<li><a class="link" href="{}" data-test="review-change">{}</a> <span class="muted">· {}</span></li>"#,
+            r#"<li><a class="link" href="{}" data-test="review-change">{}</a> <span class="muted">· {}{}</span></li>"#,
             href(&addr),
             with_code(&title),
-            count(its.len(), "piece")
+            count(how.len(), "piece"),
+            if added.is_empty() {
+                String::new()
+            } else {
+                format!(", {} more in the same module", added.len())
+            }
         );
-        // Its picture, walked through its pieces in the order of how.
-        let words: Map<String, Value> = how
+        // What, why, what to check and where it disagrees: the card it opens on, and the details' head.
+        let why = text(ch, "why");
+        let sources: Vec<String> = ch["sources"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|s| format!("<code>{}</code>", escape_text(s)))
+            .collect();
+        let check = text(ch, "check");
+        let disagrees: Vec<&str> = ch["disagrees"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let mut what_why = String::new();
+        if !why.is_empty() {
+            let _ = write!(
+                what_why,
+                r#"<h4>Why</h4><p data-test="review-why">{}</p>{}"#,
+                with_code(&why),
+                if sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        r#"<div class="muted" data-test="review-sources">from {}</div>"#,
+                        sources.join(", ")
+                    )
+                }
+            );
+        }
+        if !check.is_empty() {
+            let _ = write!(
+                what_why,
+                r#"<h4>What to check</h4><p data-test="review-check">{}</p>"#,
+                with_code(&check)
+            );
+        }
+        if !disagrees.is_empty() {
+            what_why.push_str(r#"<h4>Says one thing, does another</h4><ul class="warn" data-test="review-disagrees">"#);
+            for x in &disagrees {
+                let _ = write!(what_why, "<li>{}</li>", with_code(x));
+            }
+            what_why.push_str("</ul>");
+        }
+        let intro = format!(
+            r#"<p data-test="review-what">{}</p>{what_why}<p class="muted">Next: how, {}{}.</p>"#,
+            with_code(&title),
+            count(how.len(), "piece"),
+            if added.is_empty() {
+                String::new()
+            } else {
+                format!(" and {} more in the same module", added.len())
+            }
+        );
+        // Its picture, walked: what and why first, then its pieces in the order of how, then what docair added.
+        let mut words: Map<String, Value> = how
             .iter()
             .map(|(p, w)| (p.clone(), Value::String(w.clone())))
             .collect();
+        for p in &added {
+            words.insert(
+                p.id().to_string(),
+                Value::String(
+                    "Also changed with it, in the same module (put here by docair).".into(),
+                ),
+            );
+        }
         let words = Value::Object(words);
         let steps: Vec<ChangeStep> = its.iter().map(|p| p.step.clone()).collect();
         let drawn =
@@ -758,7 +888,7 @@ fn review_view(
                     &m,
                     &laid,
                     &steps,
-                    (&title, Some(&words), true),
+                    (&title, Some(&words), Some(&intro)),
                     None,
                     linker,
                 );
@@ -775,9 +905,9 @@ fn review_view(
             change: Some(addr.clone()),
             walk: drawn.and_then(|d| d.1),
         });
-        // Its details: what, how, why, what to check, where it disagrees, the flows it touches.
+        // Its details, in the same order: what, why, check, disagrees, then how, what docair added, the flows.
         let mut d = format!(
-            r#"<h2 data-test="review-title">{}</h2><div class="meta">change {} of {n} · from <code>{}</code> to <code>{}</code></div>"#,
+            r#"<h2 data-test="review-title">{}</h2><div class="meta">change {} of {n} · from <code>{}</code> to <code>{}</code></div>{what_why}"#,
             escape_text(&title.replace('`', "")),
             k + 1,
             escape_text(short(&c.a)),
@@ -788,47 +918,10 @@ fn review_view(
             let _ = write!(d, "<li>{}</li>", with_code(w));
         }
         d.push_str("</ol>");
-        let why = text(ch, "why");
-        if !why.is_empty() {
-            let sources: Vec<String> = ch["sources"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(|s| format!("<code>{}</code>", escape_text(s)))
-                .collect();
-            let _ = write!(
-                d,
-                r#"<h4>Why</h4><p data-test="review-why">{}</p>{}"#,
-                with_code(&why),
-                if sources.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        r#"<div class="muted" data-test="review-sources">from {}</div>"#,
-                        sources.join(", ")
-                    )
-                }
-            );
-        }
-        let check = text(ch, "check");
-        if !check.is_empty() {
-            let _ = write!(
-                d,
-                r#"<h4>What to check</h4><p data-test="review-check">{}</p>"#,
-                with_code(&check)
-            );
-        }
-        let disagrees: Vec<&str> = ch["disagrees"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect();
-        if !disagrees.is_empty() {
-            d.push_str(r#"<h4>Says one thing, does another</h4><ul class="warn" data-test="review-disagrees">"#);
-            for x in disagrees {
-                let _ = write!(d, "<li>{}</li>", with_code(x));
+        if !added.is_empty() {
+            d.push_str(r#"<h4>Also changed with it</h4><p class="muted">In the same module as its pieces; put here by docair, not by the model.</p><ul data-test="review-also">"#);
+            for p in &added {
+                let _ = write!(d, "<li>{}</li>", docair_words(after, &p.step));
             }
             d.push_str("</ul>");
         }
@@ -853,25 +946,19 @@ fn review_view(
             .insert(addr, Value::String(linker.link(&d, None)));
     }
     out.list.push_str("</ol>");
-    // The pieces no change holds: shown, never hidden (docair-8l6.28).
-    let other: Vec<&docair_core::review::Piece> = changed
-        .findings
-        .and_then(|f| f["other"].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(piece)
-        .collect();
+    // The pieces no change holds, folded, for the panel to put after the flows (docair-8l6.28, 8l6.42).
+    let other: Vec<&docair_core::review::Piece> = rest.iter().filter_map(|id| piece(id)).collect();
     if !other.is_empty() {
         let _ = write!(
-            out.list,
-            r#"<h4>Other edits · {}</h4><ul class="other-edits" data-test="other-edits">"#,
+            out.other,
+            r#"<details class="other-edits-box" data-test="other-edits-box"><summary>Other edits · {}</summary><p class="muted">Pieces no change holds, nor docair could put with one.</p><ul class="other-edits" data-test="other-edits">"#,
             other.len()
         );
         for p in other {
-            let _ = write!(out.list, "<li>{}</li>", docair_words(after, &p.step));
+            let _ = write!(out.other, "<li>{}</li>", docair_words(after, &p.step));
         }
-        out.list.push_str("</ul>");
+        out.other.push_str("</ul></details>");
+        out.other = linker.link(&out.other, None);
     }
     out.list = linker.link(&out.list, None);
     out
@@ -971,9 +1058,14 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     list.push_str(&reviewed.list);
     details.extend(reviewed.details);
     pictures.extend(reviewed.pictures);
+    // The flows next: what the review is built from, and how many of the system's flows changed (docair-8l6.42).
+    let all_flows = docair_core::slice::all(after)
+        .iter()
+        .filter(|s| s.seed.kind != docair_core::slice::SeedKind::Part)
+        .count();
     let _ = write!(
         list,
-        r#"<h3 class="flows-head">The flows the changes touch · {n}</h3><ul class="changes-list" data-test="changes-list">"#
+        r#"<h3 class="flows-head" data-test="flows-head">The flows the changes touch · {n} of the system's {all_flows}</h3><ul class="changes-list" data-test="changes-list">"#
     );
     let name_b = |id: &str| name_in(after, id);
     let name_a = |id: &str| name_in(changed.before, id);
@@ -1112,14 +1204,9 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
                     change: Some(f.seed.clone()),
                     // It opens on its first change, and steps from change to change.
                     walk: match (&one, &drawn) {
-                        (Some(m), Some((laid, _))) => changes_walk(
-                            m,
-                            laid,
-                            &flow_steps,
-                            (&title, words, false),
-                            None,
-                            &linker,
-                        ),
+                        (Some(m), Some((laid, _))) => {
+                            changes_walk(m, laid, &flow_steps, (&title, words, None), None, &linker)
+                        }
                         _ => None,
                     },
                 });
@@ -1202,6 +1289,8 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         }
         list.push_str("</ul>");
     }
+    // The other edits last, folded, so they never hide the flows.
+    list.push_str(&reviewed.other);
     ChangeView {
         button,
         list,
@@ -1278,7 +1367,7 @@ mod tests {
             &m,
             &laid,
             &flow_steps,
-            ("Datum order", None, false),
+            ("Datum order", None, None),
             None,
             &linker,
         )
@@ -1311,7 +1400,7 @@ mod tests {
             &m,
             &laid,
             &flow_steps,
-            ("Datum order", Some(&words), false),
+            ("Datum order", Some(&words), None),
             None,
             &linker,
         )
