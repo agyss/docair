@@ -102,3 +102,17 @@ body[data-served="true"] [data-served][hidden] { display: inline-block; }
 #pic .part.flow-current.ch-added > .sh { fill: var(--ch-added-bg); stroke: #1a7f37; stroke-width: 4.5; }
 #pic .part.flow-current.ch-removed > .sh { fill: var(--ch-removed-bg); stroke: #cf222e; stroke-width: 4.5; }
 #pic .part.flow-current.ch-changed > .sh { fill: var(--ch-changed-bg); stroke: #bf8700; stroke-width: 4; }
+/* In a change's walk, dashed means gone: a lit part that stayed gets a neutral outline and its own fill,
+   lit lines stay solid in their change's colour, and only a removed line is dashed (docair-zrr.22). */
+#pic .docair-pic.changes .part.flow-current.ch-same { opacity: 1; }
+#pic .docair-pic.changes .part.flow-current.ch-same > .sh { stroke: var(--text); stroke-width: 3; fill: var(--kb); }
+#pic .docair-pic.changes .line.flow-active > .ln { stroke-dasharray: none; }
+#pic .docair-pic.changes .line.flow-active.ch-same { --ec: var(--text); }
+#pic .docair-pic.changes .line.flow-active.ch-added { --ec: #1a7f37; }
+#pic .docair-pic.changes .line.flow-active.ch-changed { --ec: #bf8700; }
+#pic .docair-pic.changes .line.flow-active.ch-removed { --ec: #cf222e; }
+#pic .docair-pic.changes .line.flow-active.ch-removed > .ln { stroke-dasharray: 6 4; }
+/* A change step's routes on its card: before in the red of what went, after in the green of what came. */
+#details .ch-route { margin: 4px 0; font-size: 12.5px; }
+#details .ch-before b { color: #cf222e; }
+#details .ch-after b { color: #1a7f37; }

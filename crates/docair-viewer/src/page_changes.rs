@@ -4,12 +4,12 @@
 //! once and faded, what only the flow before had red, what only the flow after has green, a part
 //! changed inside amber.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
 
 use docair_core::change_steps::{
-    self, ChangeStep, FlowMarks, LineMark, Merged, PartMark, StepKind,
+    self, ChangeStep, FlowMarks, LineMark, Merged, PartMark, StepKind, StepLine,
 };
 use docair_core::changes::FlowChange;
 use docair_core::model::Graph;
@@ -201,12 +201,17 @@ fn changes_walk(
             lines.sort_unstable();
             lines.dedup();
             let said = docair_words(&m.graph, s);
+            let route = if matches!(s.kind, StepKind::Path | StepKind::Line) {
+                before_after(&m.graph, s)
+            } else {
+                String::new()
+            };
             let body = match words.and_then(|w| w.get(&s.id)).and_then(Value::as_str) {
                 Some(w) => format!(
-                    r#"<p data-test="step-words">{}</p><p class="muted">{said}</p>"#,
+                    r#"<p data-test="step-words">{}</p>{route}<p class="muted">{said}</p>"#,
                     with_code(w)
                 ),
-                None => format!("<p>{said}</p>"),
+                None => format!("<p>{said}</p>{route}"),
             };
             let card = step_card(
                 "Δ",
@@ -226,6 +231,77 @@ fn changes_walk(
         })
         .collect();
     Some(json!({ "title": format!("The changes · {title}"), "glyph": "Δ", "steps": steps }))
+}
+
+/// The routes some of a step's lines make, as chains of parts: from each part none of them reaches, along them to where they end; at most four.
+fn routes<'s>(lines: &[&'s StepLine]) -> Vec<Vec<&'s str>> {
+    fn walk<'s>(lines: &[&'s StepLine], path: &mut Vec<&'s str>, out: &mut Vec<Vec<&'s str>>) {
+        let at = path[path.len() - 1];
+        let next: Vec<&'s str> = lines
+            .iter()
+            .filter(|l| l.from == at)
+            .map(|l| l.to.as_str())
+            .collect();
+        if next.is_empty() || path.len() > 8 || out.len() >= 4 {
+            out.push(path.clone());
+            return;
+        }
+        for n in next {
+            path.push(n);
+            if path[..path.len() - 1].contains(&n) {
+                out.push(path.clone());
+            } else {
+                walk(lines, path, out);
+            }
+            path.pop();
+        }
+    }
+    let reached: HashSet<&str> = lines.iter().map(|l| l.to.as_str()).collect();
+    let mut starts: Vec<&str> = Vec::new();
+    for l in lines {
+        if !reached.contains(l.from.as_str()) && !starts.contains(&l.from.as_str()) {
+            starts.push(&l.from);
+        }
+    }
+    if starts.is_empty()
+        && let Some(l) = lines.first()
+    {
+        starts.push(&l.from);
+    }
+    let mut out = Vec::new();
+    for s in starts {
+        walk(lines, &mut vec![s], &mut out);
+    }
+    out.truncate(4);
+    out
+}
+
+/// A step's route before and after, as chains of parts (docair-zrr.26): *Before · `a` → `b`*, *After · `a` → `c` → `b`*; a part without lines on its own, *—* for nothing.
+fn before_after(graph: &Graph, s: &ChangeStep) -> String {
+    let of = |ids: &[String]| -> Vec<&StepLine> {
+        s.lines.iter().filter(|l| ids.contains(&l.id)).collect()
+    };
+    let chain = |r: &[&str]| -> String {
+        r.iter()
+            .map(|id| names_as_code(graph, &[id]))
+            .collect::<Vec<_>>()
+            .join(" → ")
+    };
+    let show = |rs: Vec<Vec<&str>>, parts: &[String]| -> String {
+        if !rs.is_empty() {
+            rs.iter().map(|r| chain(r)).collect::<Vec<_>>().join("<br>")
+        } else if !parts.is_empty() {
+            let ids: Vec<&str> = parts.iter().map(String::as_str).collect();
+            names_as_code(graph, &ids)
+        } else {
+            "—".into()
+        }
+    };
+    format!(
+        r#"<p class="ch-route ch-before" data-test="route-before"><b>Before</b> · {}</p><p class="ch-route ch-after" data-test="route-after"><b>After</b> · {}</p>"#,
+        show(routes(&of(&s.lines_removed)), &s.removed),
+        show(routes(&of(&s.lines_added)), &s.added)
+    )
 }
 
 /// What a step of a change is about, in docair's own words: what the flow now and no longer goes through, the line, or the code that changed.
@@ -320,6 +396,14 @@ enum FlowKind {
     Words,
 }
 
+/// The two ends of a graph line, by its id: `<from> -<kind>-> <to>`, with ` "<label>"` or ` #2` after it (docair-svh).
+fn line_ends(id: &str) -> Option<(&str, &str)> {
+    let (from, rest) = id.split_once(" -")?;
+    let (_, to) = rest.split_once("-> ")?;
+    let to = to.split(" \"").next()?.split(" #").next()?;
+    Some((from, to))
+}
+
 /// What a flow's change holds: how it changed, its parts changed in their code, those whose words alone changed.
 struct FlowSort<'f> {
     kind: FlowKind,
@@ -334,10 +418,20 @@ fn sort_flow<'f>(f: &'f FlowChange, inside: &change_steps::ChangedInside) -> Flo
         .iter()
         .filter(|p| on_path(p) && inside.code.contains(p.as_str()))
         .collect();
+    // A part whose tags changed what it calls is drawn by its lines, not listed as words.
+    let touched: HashSet<&str> = f
+        .lines_added
+        .iter()
+        .chain(&f.lines_removed)
+        .filter_map(|l| line_ends(l))
+        .flat_map(|(a, b)| [a, b])
+        .collect();
     let words: Vec<&String> = f
         .through
         .iter()
-        .filter(|p| on_path(p) && inside.words.contains(p.as_str()))
+        .filter(|p| {
+            on_path(p) && inside.words.contains(p.as_str()) && !touched.contains(p.as_str())
+        })
         .collect();
     let path = f.how != "changed"
         || !(f.parts_added.is_empty()
@@ -825,6 +919,12 @@ mod tests {
             "{card}"
         );
         assert!(
+            card.contains(r#"data-test="route-before"><b>Before</b> · —"#)
+                && card.contains(r#"data-test="route-after"><b>After</b> · "#)
+                && card.contains(" → "),
+            "the route before (none) and after: {card}"
+        );
+        assert!(
             st["parts"]
                 .as_array()
                 .unwrap()
@@ -851,6 +951,36 @@ mod tests {
             card.contains("Now goes through"),
             "docair's words stay under the model's"
         );
+    }
+
+    /// docair-zrr.26: a step's lines as routes, from where none of them arrives to where they end;
+    /// a line's ends read from its id.
+    #[test]
+    fn lines_make_routes_and_ids_name_their_ends() {
+        let line = |from: &str, to: &str| StepLine {
+            id: format!("{from} -call-> {to}"),
+            from: from.into(),
+            to: to.into(),
+        };
+        let (a, b, c, d) = (
+            line("a", "b"),
+            line("b", "c"),
+            line("a", "d"),
+            line("x", "y"),
+        );
+        assert_eq!(routes(&[&b, &a]), vec![vec!["a", "b", "c"]]);
+        assert_eq!(
+            routes(&[&a, &b, &c]),
+            vec![vec!["a", "b", "c"], vec!["a", "d"]]
+        );
+        assert_eq!(routes(&[&d]), vec![vec!["x", "y"]]);
+        assert!(routes(&[]).is_empty());
+        assert_eq!(
+            line_ends("orders.create -write-> orders-db"),
+            Some(("orders.create", "orders-db"))
+        );
+        assert_eq!(line_ends(r#"a -call-> b "posts" #2"#), Some(("a", "b")));
+        assert_eq!(line_ends("not a line"), None);
     }
 
     /// docair-zrr.22: the drawing's classes and tags for what docair-core marked.

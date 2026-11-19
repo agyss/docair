@@ -193,9 +193,28 @@ the whole picture is the change.
 
 A shared part is only an end, never a joint: two changes that touch one
 shared part stay two steps. A gone stretch and a new stretch that share an
-end are one step, the fork. A stretch with more than 8 new or gone parts is
+end are one step, the fork; a gone or new line alone counts too, so a
+function put in between, or taken out, is one step with the line it
+replaced (docair-zrr.26). A stretch with more than 8 new or gone parts is
 told box by box; a card names at most 8 parts (docair-zrr.25). Path steps
 come first, then code steps, each in reading order.
+
+**Before and after on the card** (docair-zrr.26). A path or line step's card
+also shows its route as chains of parts, from where its lines start to
+where they end:
+
+| Change | Before | After |
+|--------|--------|-------|
+| a function put in between | `create_order` → `orders-db` | `create_order` → `validate_order` → `orders-db` |
+| taken out again | `create_order` → `validate_order` → `orders-db` | `create_order` → `orders-db` |
+| a write that goes elsewhere | `create_order` → `orders-db` | `create_order` → `orders-queue` |
+| a new step, no line to it | — | `audit` |
+
+In the picture, the shared parts a step forks off and rejoins at are lit
+plainly (a dark outline, their own fill), never in a change's colour; a lit
+new line stays solid green, a lit gone line dashed red. A part whose tags
+changed what it calls is shown by its lines, not listed as a change in its
+words.
 
 **The list** puts the flows whose path changed first, then *same path · 4
 parts changed in their code: …*, then, apart, the flows whose words or tags

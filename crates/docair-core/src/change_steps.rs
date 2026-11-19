@@ -426,21 +426,26 @@ pub fn steps(m: &Merged, f: &FlowChange, marks: &FlowMarks) -> Vec<ChangeStep> {
         }
         split.extend(by_box.into_iter().map(|(b, g, l)| (g, l, b)));
     }
-    // A fork: what is gone and what replaced it, where they meet the same shared part, are one step.
-    let kinds = |parts: &[usize]| {
+    // A fork: what is gone and what replaced it, where they meet the same shared part, are one step;
+    // a gone line alone counts as gone, a new line alone as new (a function put in between, or taken out).
+    let kinds = |(parts, lines): (&[usize], &[usize])| {
         let has = |w: PartMark| parts.iter().any(|&i| mark(i) == w);
-        (has(PartMark::Added), has(PartMark::Removed))
+        let has_line = |w: LineMark| lines.iter().any(|&k| line_mark(&m.pic.lines[k]) == w);
+        (
+            has(PartMark::Added) || has_line(LineMark::Added),
+            has(PartMark::Removed) || has_line(LineMark::Removed),
+        )
     };
     let ends_of = |parts: &[usize]| -> HashSet<usize> {
         parts.iter().copied().filter(|&i| !on_path(i)).collect()
     };
     let mut k = 0;
     while k < split.len() {
-        if kinds(&split[k].0) == (false, true) {
+        if kinds((&split[k].0, &split[k].1)) == (false, true) {
             let gone_ends = ends_of(&split[k].0);
             let pair = (0..split.len()).find(|&j| {
                 j != k
-                    && kinds(&split[j].0) == (true, false)
+                    && kinds((&split[j].0, &split[j].1)) == (true, false)
                     && !ends_of(&split[j].0).is_disjoint(&gone_ends)
             });
             if let Some(j) = pair {
@@ -744,6 +749,61 @@ mod tests {
             steps(&m, &f, &marks(&m, &f, &HashSet::new()))[0].id,
             s[0].id
         );
+    }
+
+    /// docair-zrr.26: a function put in between, its new lines, and the direct line it replaced are
+    /// one step, the fork; taken out again, the same the other way round.
+    #[test]
+    fn a_function_put_in_between_is_one_step_with_the_line_it_replaced() {
+        let before = shop();
+        let mut after = before.clone();
+        let direct = after
+            .edges
+            .iter()
+            .position(|e| e.from == "orders.create" && e.to == "orders-db")
+            .expect("the shop writes the order");
+        let mut node = after
+            .nodes
+            .iter()
+            .find(|n| n.id == "orders.create")
+            .unwrap()
+            .clone();
+        node.id = "orders.validate".into();
+        node.name = "validate_order".into();
+        after.nodes.push(node);
+        let mut to_validate = after.edges[direct].clone();
+        to_validate.to = "orders.validate".into();
+        let mut to_db = after.edges[direct].clone();
+        to_db.from = "orders.validate".into();
+        after.edges.remove(direct);
+        after.edges.push(to_validate);
+        after.edges.push(to_db);
+        crate::ids::edge_ids(&mut after.edges);
+        for (a, b, added) in [(&before, &after, true), (&after, &before, false)] {
+            let (pa, pb) = (
+                flow_picture(a, "data.order").unwrap(),
+                flow_picture(b, "data.order").unwrap(),
+            );
+            let f = change("data.order", (a, &pa), (b, &pb));
+            let m = merged(Some((a, &pa)), Some((b, &pb)), &IdMoves::new()).unwrap();
+            let s = steps(&m, &f, &marks(&m, &f, &HashSet::new()));
+            assert_eq!(s.len(), 1, "one fork: {s:#?}");
+            let (new, gone) = if added {
+                (&s[0].added, &s[0].lines_removed)
+            } else {
+                (&s[0].removed, &s[0].lines_added)
+            };
+            assert_eq!(new, &vec!["orders.validate".to_string()]);
+            assert!(
+                gone.iter()
+                    .any(|l| l.starts_with("orders.create -") && l.contains("-> orders-db")),
+                "{gone:?}"
+            );
+            assert!(
+                s[0].ends.contains(&"orders.create".to_string())
+                    && s[0].ends.contains(&"orders-db".to_string())
+            );
+        }
     }
 
     /// docair-zrr.22, zrr.23: a part whose code changed is a code step of its box; an open box whose
