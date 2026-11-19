@@ -153,7 +153,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair build` (also `docair scan`) | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
 | `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
 | `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
-| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | what `docair diff` finds, explained by the model (docs/EXPLAIN.md): links between parts it could not prove the same, what each changed flow now does, workflows before and after, every claim bound against both graphs; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`), so the next run asks only about new flows and never about a human's correction; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters; a pull request comment on stdout |
+| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | what `docair diff` finds, explained by the model (docs/EXPLAIN.md): links between parts it could not prove the same, what each changed flow now does, words on each of its change steps (by docair's step ids), every claim bound against both graphs; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`), so the next run asks only about flows not explained yet and never about a human's correction; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters, at most 3 at once, each answered one said on stderr; a pull request comment on stdout |
 | `docair check`   | 1–6         | prints diagnostics; exits non-zero on errors (CI gate) |
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
 | `docair ask "<question>" [--follow-up] [--apply]` | 1–7 + AI | asks the configured model and prints the reply: answer, walkthrough (recorded in `walkthroughs/`), view changes, proposed edits (written to `.docair/docair.patch`). `--follow-up` continues the last conversation; `--apply` writes the edits into the files and the view changes into `docair.toml` (§10) |
@@ -808,6 +808,15 @@ by docair.
   dashed, one that only may reach its part (`could`) dashed.
 * A call through a trait or an interface says how many parts it may reach:
   `calls one of 5` (docs/ADAPTERS.md §5.5).
+* A line's words take at most two lines of 28 columns, the second cut with
+  `…` (docair-702.34; the whole words are in the line's tip and details).
+  The layout puts them on or beside their line where they cover no part, no
+  other words and no other line, else where they cover least, each other
+  line under them costing the same; they stand on an opaque tag with a thin
+  edge, so lines under them do not show through. Words that still sit on
+  another line are crowded (`data-z`): the page shows them once the zoom makes
+  them 9 px or more, and always those of the selected part's lines, a picked
+  line and a walk's step (docair-702.35); a file of its own shows every word.
 * A line's words stand where the layout put them. The data it carries are
   chips in them, found the way docair finds them (§3.6): a datum's name, the
   last part of its id or a `@carried-as` word, as a whole word in any case.
@@ -900,15 +909,27 @@ into `docair.html`:
   5 s while it is shown).
 * Changes (docs/CHANGES.md, `docair build --changes <A>`): the header's
   **Δ Changes · n** opens the list of the flows the working tree changes since
-  A, and each opens at `#changes/<seed>` as one still picture (nothing in it
-  is moved by hand) of its slice at A and at B side by side, with what it now
-  goes through marked at B and what it no longer does at A; its details say
-  so. Stored findings (docs/EXPLAIN.md) show there too: the model's
-  explanation, who recorded it, and its workflow before and after, each side
-  walked through like a walk (`#changes/<seed>/before`, `/after`); the list
+  A (those whose path changed first, then those whose parts changed only in
+  their code, then apart those whose words alone changed), and each opens at
+  `#changes/<seed>` as one still picture (nothing in it is moved by hand) of
+  its slice before and after (docs/CHANGES.md §8): what only the flow after
+  has is filled green and tagged *new*, what only the flow before had filled
+  red, dashed and tagged *gone*, a part whose code changed light amber and
+  tagged *code*, the rest faded, a part that only moved or was renamed once
+  under its new name. It opens on its changes only, as a walk with one step
+  per change (a stretch of the path where it forks off and rejoins, or the
+  parts of one box whose code changed), each step's camera on its change at a
+  size to read and its card above the flow's details, which list what it now
+  and no longer goes through, the parts changed in their code and those whose
+  words alone changed. Stored findings (docs/EXPLAIN.md) show there
+  too: the model's explanation and who recorded it in the details, and its
+  words on each change on that change's step, by the step's id
+  (`docair_core::change_steps`), over docair's own words; the list
   shows the model's links and counts the flows not explained yet, with the
   command, and served with `docair serve --changes <A>` a button that asks for
-  them (`POST /api/explain`).
+  them (`POST /api/explain`) and then says how far the job is (`GET
+  /api/explain/<job>`, its `text`, every 1.5 s) until the page is written
+  again.
 * Tidy (docs/ADAPTERS.md §6.1): the CLI counts the tags the code repeats
   (`docair_core::tidy::repeated`) and writes the header's **✂ Tidy · n**
   (**✂ Tidy ✓** when none), a banner under the header that a reader can
@@ -1853,7 +1874,8 @@ question; the key stays with the server.
 | `POST /api/apply` | → `{ edited, regenerated, version }`: the waiting edits written into the project's files, the view change into `docair.toml`, the documentation written again; 409 when nothing waits |
 | `GET /api/tidy` | → `{ tags, patch }`: the tags the code repeats (`node`, `tag`, `line`, `code_says`, `code_file`, `code_line`, `reason`) and the diff that removes them all |
 | `POST /api/tidy` | `{ tags?: [{ node, tag }] }` → `{ edited, regenerated, version }`: the picked tags removed (all when none are named), the documentation written again; 409 when no tag repeats |
-| `POST /api/explain` | `{ a, b? }` → `ChangeFindings` (docs/EXPLAIN.md): what the served project changes since commit `a` (or between `a` and `b`), the flows without stored findings explained by the model and stored as `docair explain` stores them; a page served with `--changes` is written again with them, so it reloads; 409 for a project without git history (an upload), 503 when AI is off |
+| `POST /api/explain` | `{ a, b? }` → 202 and an `ExplainJob` at once (docs/EXPLAIN.md §8): the job explains what the served project changes since commit `a` (or between `a` and `b`), the flows without stored findings sent to the model at most 3 requests at once and stored as `docair explain` stores them; a page served with `--changes` is written again with them. A second call while a job runs answers that job (the same commits) or 409 (others); 409 for a project without git history (an upload), 503 when AI is off |
+| `GET /api/explain/<job>` | `ExplainJob`: `job`, `a`, `b`, `running`, `phase` (`comparing`, `asking`, `done`, `failed`), `flows`, `requests`, `started`, `answered`, `left`, `asking` (the flows the model works on now), `seconds`, `error`, `text` (what the page shows, e.g. *The AI explains 30 flows in 5 requests · 2 answered · 1:12*), and at the end `findings` and the documentation's new `version`; kept 10 minutes after it ends, then 404 |
 
 An uploaded page asks the same routes under `/api/projects/<id>/` (§1.3):
 the server keeps the upload as a project, and answers any origin, since the

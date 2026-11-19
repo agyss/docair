@@ -39,10 +39,11 @@ function buildWithChanges(shop: string): string {
  ***/
 test.describe('what changed since a commit', () => {
   /***
-   * A new step in the checkout, committed after A: the page's Changes list the checkout as changed, and its picture shows it before and after, the new step marked.
+   * A new step in the checkout, committed after A: the page's Changes list the checkout as changed, and its one picture shows it before and after, the new step marked green and what stayed faded.
    *
    * @part-of e2e.changes
    * @covers  docair-viewer.page_changes.change_view "checks a changed flow is listed and drawn before and after"
+   * @covers  docair-viewer.page_changes.changes_walk "checks a changed flow opens on its change"
    * @covers  docair-viewer.doc_page.render_page_with "checks the page has the changes section"
    ***/
   test('a changed flow is listed and drawn before and after', async ({ page }) => {
@@ -55,28 +56,32 @@ test.describe('what changed since a commit', () => {
     await list.getByRole('link', { name: 'Scenario checkout' }).click();
     await expect(page).toHaveURL(/#changes\/flow:checkout$/);
     const svg = page.locator('#pic svg.docair-pic.changes');
-    await expect(svg.locator('.side-title')).toHaveText([/^Before · /, /^After · /]);
+    await expect(svg).toHaveCount(1);
+    expect(await svg.locator('g.part.ch-same').count()).toBeGreaterThan(2);
     await expect(svg.locator('g.part.ch-added[data-id="orders.audit"]')).toHaveCount(1);
+    // It opens on its change, not on the whole flow: the walk over the changes, one step per change.
+    await expect(page.getByTestId('step-card')).toContainText('change 1 of 1');
+    await expect(page.locator('#pic g.part.flow-current[data-id="orders.audit"]')).toHaveCount(1);
     await expect(page.locator('#details')).toContainText('Now goes through');
     await expect(page.locator('#details')).toContainText('audit');
   });
 
   /***
-   * Explained by the model (docair explain), the checkout's change shows the explanation in its details, and its workflow after the change is walked through on its side: a step lights the part it is in.
+   * Explained by the model (docair explain), the checkout's change shows the explanation in its details, and the model's words on its one change show on that change's step, over docair's own: the step lights the new part.
    *
    * @part-of e2e.changes
-   * @covers  docair-viewer.page_changes.workflow_walk "checks a workflow is walked through on its side"
+   * @covers  docair-viewer.page_changes.changes_walk "checks the model's words show on the change's step"
    ***/
-  test("an explained flow shows the model's words and walks its workflow", async ({ page }) => {
+  test("an explained flow shows the model's words on its change", async ({ page }) => {
     test.skip(!withFakeAi, 'needs the fake model');
     const shop = twoCommits();
     execFileSync(docair, ['explain', 'HEAD~1', '--root', shop], { env: { ...process.env, ...fakeAiEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
     await page.goto(buildWithChanges(shop) + '#changes/flow:checkout');
     await ready(page);
     await expect(page.getByTestId('explanation')).toContainText('changed, so this flow goes another way.');
-    await page.getByTestId('workflow-after').click();
-    await expect(page).toHaveURL(/#changes\/flow:checkout\/after$/);
-    await expect(page.getByTestId('step-card')).toContainText('step 1 of 1');
+    await expect(page.getByTestId('step-card')).toContainText('change 1 of 1');
+    await expect(page.getByTestId('step-words')).toContainText('now reaches');
+    await expect(page.getByTestId('step-card')).toContainText('Now goes through');
     await expect(page.locator('#pic g.flow-current[data-id="orders.audit"]')).toHaveCount(1);
   });
 });

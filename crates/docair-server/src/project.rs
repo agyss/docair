@@ -776,33 +776,159 @@ pub(crate) async fn tidy_apply(
 }
 
 /// `POST /api/explain`: which commits to compare; without `b`, the working tree.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ExplainRequest {
     pub a: String,
     #[serde(default)]
     pub b: Option<String>,
 }
 
+// ── Explain jobs (docs/EXPLAIN.md §8, docair-8l6.11) ──
+
+/// A job is kept this long after it ends, so a page that reloaded still finds it.
+const JOB_KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// An explain job as `GET /api/explain/<job>` answers it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExplainJob {
+    pub job: String,
+    pub a: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<String>,
+    pub running: bool,
+    /// `comparing` (reading the commits), `asking` (the model), `done` or `failed`.
+    pub phase: String,
+    #[serde(flatten)]
+    pub progress: docair_ai::explain::ExplainProgress,
+    /// The time so far, or the time it took.
+    pub seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// What the page shows, as it is: *The AI explains 30 flows in 5 requests · 2 answered · 1:12*.
+    pub text: String,
+    /// The documentation's version once it was written again with the findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    /// The findings, once the job is done.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub findings: Option<serde_json::Value>,
+}
+
+struct JobState {
+    answer: ExplainJob,
+    started: std::time::Instant,
+    ended: Option<std::time::Instant>,
+}
+
+impl JobState {
+    /// The answer as it is now: its time and words worked out at this moment.
+    fn now(&self) -> ExplainJob {
+        let took = self.ended.unwrap_or_else(std::time::Instant::now) - self.started;
+        let mut a = self.answer.clone();
+        a.seconds = took.as_secs();
+        a.text = job_text(&a);
+        a
+    }
+}
+
+/// `n thing` or `n things`.
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// What the page says about a job.
+fn job_text(j: &ExplainJob) -> String {
+    let time = format!("{}:{:02}", j.seconds / 60, j.seconds % 60);
+    let p = &j.progress;
+    match j.phase.as_str() {
+        "comparing" => format!(
+            "Comparing {} with {} · {time}",
+            j.a,
+            j.b.as_deref().unwrap_or("the working tree")
+        ),
+        "failed" => format!(
+            "The AI could not explain the changes: {}",
+            j.error.as_deref().unwrap_or("it failed")
+        ),
+        _ if p.flows == 0 => "Every changed flow is explained already".to_string(),
+        "done" => {
+            let left = j
+                .findings
+                .as_ref()
+                .map_or(0, |f| f["left"].as_array().map_or(0, Vec::len));
+            format!(
+                "Explained {} of {} in {} · {time}",
+                p.flows.saturating_sub(left),
+                count(p.flows, "flow", "flows"),
+                count(p.requests, "request", "requests")
+            )
+        }
+        _ => {
+            let mut t = format!(
+                "The AI explains {} in {} · {} answered · {time}",
+                count(p.flows - p.left, "flow", "flows"),
+                count(p.requests, "request", "requests"),
+                p.answered
+            );
+            if p.left > 0 {
+                t.push_str(&format!(
+                    " · {} left for later",
+                    count(p.left, "flow", "flows")
+                ));
+            }
+            t
+        }
+    }
+}
+
+/// The explain jobs of a server: one runs at a time, each kept a while after it ends.
+#[derive(Default)]
+pub struct ExplainJobs {
+    jobs: Mutex<Vec<std::sync::Arc<Mutex<JobState>>>>,
+}
+
+impl std::fmt::Debug for ExplainJobs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.jobs.lock().map_or(0, |j| j.len());
+        f.debug_struct("ExplainJobs").field("jobs", &n).finish()
+    }
+}
+
+impl ExplainJobs {
+    fn kept(&self) -> std::sync::MutexGuard<'_, Vec<std::sync::Arc<Mutex<JobState>>>> {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.retain(|j| {
+            let s = j.lock().unwrap_or_else(|e| e.into_inner());
+            s.ended.is_none_or(|t| t.elapsed() < JOB_KEPT_FOR)
+        });
+        jobs
+    }
+
+    /// The job with this id, as it is now.
+    pub fn get(&self, id: &str) -> Option<ExplainJob> {
+        self.kept().iter().find_map(|j| {
+            let s = j.lock().unwrap_or_else(|e| e.into_inner());
+            (s.answer.job == id).then(|| s.now())
+        })
+    }
+}
+
 /***
- * `POST /api/explain`: explain what the served project changes since commit `a` (or between `a` and `b`): the flows with no stored findings go to the model, the findings are stored as `docair explain` stores them and answered; a page served with `--changes` is written again with them. A project without git history (an upload) has no commits to compare: 409.
+ * `POST /api/explain`: start explaining what the served project changes since commit `a` (or between `a` and `b`), and answer the job at once (202); `GET /api/explain/<job>` says how far it is. A second call while a job runs answers that job (the same commits) or 409 (others). A project without git history (an upload) has no commits to compare: 409; AI off: 503.
  *
- * @calls docair-server.commits.compare "compares the commits"
- * @calls docair-ai.explain.explain "explains the changed flows"
+ * @calls docair-server.project.run_job "explains in the background"
  ***/
 pub(crate) async fn explain(
     State(config): State<crate::Config>,
     Json(req): Json<ExplainRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let shared = config.project.clone().ok_or_else(|| {
         ApiError(
             StatusCode::NOT_FOUND,
             "this server serves no project".into(),
         )
     })?;
-    let (root, lenient, comparing) = {
-        let s = shared.lock();
-        (s.root.clone(), s.lenient, s.changes.is_some())
-    };
+    let root = shared.lock().root.clone();
     if crate::commits::git(&root, &["rev-parse", "--show-toplevel"]).is_err() {
         return Err(ApiError(
             StatusCode::CONFLICT,
@@ -815,47 +941,133 @@ pub(crate) async fn explain(
             "AI is off: the server has no DOCAIR_AI_ENDPOINT and DOCAIR_AI_MODEL".into(),
         ));
     };
-    let answer = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, ApiError> {
-        // The working tree as B is the graph the server already has.
+    let job = {
+        let mut jobs = config.explains.kept();
+        let running = jobs.iter().find_map(|j| {
+            let s = j.lock().unwrap_or_else(|e| e.into_inner());
+            s.answer.running.then(|| s.now())
+        });
+        if let Some(r) = running {
+            if r.a == req.a && r.b == req.b {
+                return Ok((StatusCode::ACCEPTED, Json(r)).into_response());
+            }
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                format!("an explain job runs already ({}): {}", r.job, r.text),
+            ));
+        }
+        let job = std::sync::Arc::new(Mutex::new(JobState {
+            answer: ExplainJob {
+                job: upload_id(),
+                a: req.a.clone(),
+                b: req.b.clone(),
+                running: true,
+                phase: "comparing".into(),
+                progress: Default::default(),
+                seconds: 0,
+                error: None,
+                text: String::new(),
+                version: None,
+                findings: None,
+            },
+            started: std::time::Instant::now(),
+            ended: None,
+        }));
+        jobs.push(job.clone());
+        job
+    };
+    let answer = job.lock().unwrap_or_else(|e| e.into_inner()).now();
+    tokio::task::spawn_blocking(move || run_job(&job, &shared, &ai, &req));
+    Ok((StatusCode::ACCEPTED, Json(answer)).into_response())
+}
+
+/***
+ * `GET /api/explain/<job>`: how far an explain job is, its words for the page, and at the end its findings and the documentation's new version; 404 for a job no longer kept.
+ ***/
+pub(crate) async fn explain_job(
+    State(config): State<crate::Config>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<ExplainJob>, ApiError> {
+    config.explains.get(&id).map(Json).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "this explain job is no longer kept; explain again".into(),
+        )
+    })
+}
+
+/***
+ * An explain job: compare the commits (the working tree as B is the graph the server already has), send the flows with no stored findings to the model, store the findings as `docair explain` does, and write the page again when it shows the changes; each step goes into the job.
+ *
+ * @calls docair-server.commits.compare "compares the commits"
+ * @calls docair-ai.explain.explain_with "explains the changed flows, saying how far it is"
+ ***/
+fn run_job(
+    job: &std::sync::Arc<Mutex<JobState>>,
+    shared: &std::sync::Arc<ServedProject>,
+    ai: &AiConfig,
+    req: &ExplainRequest,
+) {
+    let set =
+        |f: &dyn Fn(&mut ExplainJob)| f(&mut job.lock().unwrap_or_else(|e| e.into_inner()).answer);
+    let done = (|| -> Result<(serde_json::Value, Option<u64>)> {
+        let (root, lenient, comparing) = {
+            let s = shared.lock();
+            (s.root.clone(), s.lenient, s.changes.is_some())
+        };
         let pair = match req.b.as_deref() {
             None => {
                 let work = shared.lock().graph.clone();
                 crate::commits::compare_work(&root, &req.a, &work, lenient)
             }
             Some(b) => crate::commits::compare(&root, &req.a, Some(b), lenient),
-        }
-        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+        }?;
+        set(&|j| j.phase = "asking".into());
         let settings = docair_core::config::load(&pair.root)
             .map(|c| c.explain.unwrap_or_default())
             .unwrap_or_default();
-        let store = pair
-            .root
-            .join(settings.store.as_deref().unwrap_or("docs/changes"));
-        let file = store.join(format!("{}.json", pair.key));
+        let file = crate::commits::findings_file(&pair);
         let kept: Option<docair_ai::explain::ChangeFindings> = std::fs::read_to_string(&file)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok());
         let max = settings
             .max_requests
             .unwrap_or(docair_ai::explain::MAX_REQUESTS);
-        let found =
-            docair_ai::explain::explain(&ai, &pair.a, &pair.b, &pair.changes, kept.as_ref(), max)
-                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-        std::fs::create_dir_all(&store)?;
-        std::fs::write(
-            &file,
-            serde_json::to_string_pretty(&found).unwrap_or_default() + "\n",
+        let found = docair_ai::explain::explain_with(
+            ai,
+            &pair.a,
+            &pair.b,
+            &pair.changes,
+            kept.as_ref(),
+            max,
+            &|p| set(&|j| j.progress = p.clone()),
         )?;
-        // A page with a changes section shows the findings: it is written again, and reloads.
-        if comparing {
-            shared
-                .rewrite()
-                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
         }
-        Ok(serde_json::to_value(&found).unwrap_or_default())
-    })
-    .await??;
-    Ok(Json(answer))
+        std::fs::write(&file, serde_json::to_string_pretty(&found)? + "\n")?;
+        // A page with a changes section shows the findings: it is written again, and reloads.
+        let version = if comparing {
+            Some(shared.rewrite()?)
+        } else {
+            None
+        };
+        Ok((serde_json::to_value(&found)?, version))
+    })();
+    let mut s = job.lock().unwrap_or_else(|e| e.into_inner());
+    s.ended = Some(std::time::Instant::now());
+    s.answer.running = false;
+    match done {
+        Ok((findings, version)) => {
+            s.answer.phase = "done".into();
+            s.answer.findings = Some(findings);
+            s.answer.version = version;
+        }
+        Err(e) => {
+            s.answer.phase = "failed".into();
+            s.answer.error = Some(format!("{e:#}"));
+        }
+    }
 }
 
 // ── Uploads kept as projects ──
@@ -1199,6 +1411,176 @@ mod tests {
             2,
             "written again, a new version"
         );
+    }
+
+    /// docair-8l6.11: POST /api/explain answers a job at once; the job compares, asks a model
+    /// (a fake one here) and says how far it is; at the end it holds the findings, the store has
+    /// them, and the page shown with --changes is written again. A second POST while it runs
+    /// answers the same job.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explaining_runs_as_a_job_and_says_how_far_it_is() {
+        use axum::body::Body;
+        use axum::http::Request;
+        // A fake model: every flow it is asked about "goes another way".
+        let model = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|Json(req): Json<serde_json::Value>| async move {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                let user = req["messages"][1]["content"].as_str().unwrap_or("").to_string();
+                let input: serde_json::Value =
+                    serde_json::from_str(&user[user.find('{').unwrap_or(0)..]).unwrap_or_default();
+                let flows: Vec<serde_json::Value> = input["flows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|f| serde_json::json!({ "seed": f["seed"], "explanation": "This flow goes another way." }))
+                    .collect();
+                let content = serde_json::json!({ "links": [], "flows": flows }).to_string();
+                Json(serde_json::json!({
+                    "choices": [{ "message": { "content": content } }],
+                    "usage": { "prompt_tokens": 1, "completion_tokens": 1 }
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(axum::serve(listener, model).into_future());
+        let ai = AiConfig {
+            endpoint,
+            model: "fake".into(),
+            max_tokens: 100,
+            ..no_ai()
+        };
+        // A project in git: commit A, then a new step in the working tree.
+        let dir = tiny();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args([
+                    "-c",
+                    "user.name=docair test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let readme = |extra: &str| {
+            format!(
+                "# tiny\n\n```docair\nThe user.\n\n@id      user\n@kind    external\n@part-of tiny\n@calls   app\n@flow    buy 1 \"clicks Buy\"\n```\n\n```docair\nThe app.\n\n@id      app\n@kind    module\n@part-of tiny\n@flow    buy 2 \"totals the cart\"\n{extra}```\n"
+            )
+        };
+        std::fs::write(dir.path().join("README.md"), readme("")).unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "a"]);
+        std::fs::write(
+            dir.path().join("README.md"),
+            readme("@calls   orders\n```\n\n```docair\nThe orders.\n\n@id      orders\n@kind    module\n@part-of tiny\n@flow    buy 3 \"keeps the order\"\n"),
+        )
+        .unwrap();
+        let project = std::sync::Arc::new(
+            ServedProject::open_comparing(
+                dir.path(),
+                None,
+                true,
+                Some(ai.clone()),
+                Some("HEAD".into()),
+            )
+            .unwrap(),
+        );
+        let router = crate::router(crate::Config {
+            ai: Some(ai),
+            project: Some(project.clone()),
+            ..Default::default()
+        });
+        let post = || {
+            Request::post("/api/explain")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"a":"HEAD"}"#))
+                .unwrap()
+        };
+        let (status, body) = call(router.clone(), post()).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let first: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let id = first["job"].as_str().unwrap().to_string();
+        assert_eq!(first["running"], true);
+        let (_, again) = call(router.clone(), post()).await;
+        let again: serde_json::Value = serde_json::from_str(&again).unwrap();
+        assert_eq!(
+            again["job"], first["job"],
+            "a second POST while it runs answers the same job"
+        );
+        let mut seen_asking = false;
+        let mut job = serde_json::Value::Null;
+        for _ in 0..300 {
+            let (status, body) = call(
+                router.clone(),
+                Request::get(format!("/api/explain/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            job = serde_json::from_str(&body).unwrap();
+            if job["phase"] == "asking" {
+                seen_asking = true;
+                assert!(
+                    job["text"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("The AI explains 1 flow in 1 request"),
+                    "{job}"
+                );
+            }
+            if job["running"] == false {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(job["phase"], "done", "{job}");
+        assert!(seen_asking, "the job said it was asking the model");
+        assert!(
+            job["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Explained 1 of 1 flow in 1 request"),
+            "{job}"
+        );
+        assert_eq!(
+            job["findings"]["flows"][0]["explanation"],
+            "This flow goes another way."
+        );
+        assert!(
+            job["version"].as_u64().unwrap() >= 2,
+            "the page was written again: {job}"
+        );
+        let stored = std::fs::read_dir(dir.path().join("docs/changes"))
+            .unwrap()
+            .count();
+        assert_eq!(stored, 1, "the findings are stored");
+        // Asked again, nothing is new: the store explains every flow.
+        let (_, body) = call(router.clone(), post()).await;
+        let next: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_ne!(
+            next["job"], first["job"],
+            "a new job once the first has ended"
+        );
+        let (status, _) = call(
+            router,
+            Request::get("/api/explain/0123456789abcdef")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     /// A project without git history (an upload, or a folder) has no commits to compare.

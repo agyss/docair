@@ -30,7 +30,9 @@ const BOX_NAME_AT: f64 = 12.0;
 /// (as docair_layout::words_size sizes them).
 const WORDS_FONT: f64 = 11.0;
 const WORDS_LINE: f64 = 14.0;
-const WORDS_WRAP: usize = 28;
+const WORDS_WRAP: usize = docair_layout::text::WORDS_COLUMNS;
+/// How large a crowded line's words must be on the screen, in px, before the page shows them.
+const READABLE: f64 = 9.0;
 /// Room around the picture, in px.
 const MARGIN: f64 = 16.0;
 
@@ -573,14 +575,18 @@ struct SvgPicture<'a> {
     marks: Option<&'a ChangeMarks<'a>>,
 }
 
-/// Parts and lines a picture marks: those a change added or removed (docair-zrr.7).
+/// Parts and lines a picture marks, each with its class, as a change between two versions does:
+/// kept (`ch-same`), changed inside (`ch-changed`), only before (`ch-removed`), only after
+/// (`ch-added`) (docair-zrr.7, docair-zrr.18; pictures.css draws them).
 pub struct ChangeMarks<'a> {
-    /// The class the marked ones get: `ch-added`, `ch-removed`.
-    pub class: &'a str,
-    /// The parts, by id.
-    pub parts: &'a std::collections::HashSet<String>,
-    /// The graph's lines, by id: a picture's line is marked when it stands for one of them.
-    pub lines: &'a std::collections::HashSet<String>,
+    /// Each marked part's class, by its id.
+    pub parts: &'a HashMap<String, &'a str>,
+    /// Each marked graph line's class, by its id: a picture's line takes the class of the first
+    /// of its lines that has one.
+    pub lines: &'a HashMap<String, &'a str>,
+    /// A word some parts and open boxes carry at their top right, by id: `new`, `gone`, `code`
+    /// (docair-zrr.22).
+    pub tags: &'a HashMap<String, &'a str>,
 }
 
 impl SvgPicture<'_> {
@@ -690,6 +696,7 @@ impl SvgPicture<'_> {
         if self.terraform.contains(p.id.as_str()) {
             tf_mark(out, r, sc);
         }
+        self.tag(out, &p.id, r, sc);
         out.push_str("</g>");
     }
 
@@ -726,6 +733,7 @@ impl SvgPicture<'_> {
         if self.terraform.contains(p.id.as_str()) {
             tf_mark(out, r, self.scale(i));
         }
+        self.tag(out, &p.id, r, self.scale(i));
         out.push_str("</g>");
     }
 
@@ -745,12 +753,12 @@ impl SvgPicture<'_> {
             class.push_str(" dangling");
         }
         class.push_str(reach_class(self.graph, l));
-        if let Some(m) = self.marks.filter(|m| {
+        if let Some(c) = self.marks.and_then(|m| {
             l.members
                 .iter()
-                .any(|&e| m.lines.contains(&edge_key(self.graph, e)))
+                .find_map(|&e| m.lines.get(&edge_key(self.graph, e)))
         }) {
-            let _ = write!(class, " {}", m.class);
+            let _ = write!(class, " {c}");
         }
         // The graph's lines it stands for, by their ids (docair-svh); ids hold spaces, never a newline.
         let members: Vec<String> = l
@@ -779,10 +787,27 @@ impl SvgPicture<'_> {
         let advance = Monospace::default().advance * fs;
         let names = carried(self.graph, &self.nodes, l);
         let top = at.y - at.h / 2.0;
+        // Words that sit on another line are crowded: the page shows them once it is zoomed in
+        // so far that they read, at READABLE px (docair-702.35); `data-z` is that zoom.
+        let crowded = self.layout.routes.lines.iter().enumerate().any(|(o, r)| {
+            o != j
+                && r.windows(2).any(|s| {
+                    s[0].0.min(s[1].0) < at.x + at.w / 2.0 - 1.0
+                        && s[0].0.max(s[1].0) > at.x - at.w / 2.0 + 1.0
+                        && s[0].1.min(s[1].1) < at.y + at.h / 2.0 - 1.0
+                        && s[0].1.max(s[1].1) > at.y - at.h / 2.0 + 1.0
+                })
+        });
+        let zoom = if crowded {
+            format!(r#" data-z="{:.2}""#, READABLE / fs)
+        } else {
+            String::new()
+        };
         let _ = write!(
             out,
-            r#"<g class="words{}" data-line="{k}"><rect x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
+            r#"<g class="words{}{}" data-line="{k}"{zoom}><rect x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
             if l.bundled { " bundle" } else { "" },
+            if crowded { " crowded" } else { "" },
             num(at.x - at.w / 2.0),
             num(top),
             num(at.w),
@@ -916,11 +941,37 @@ impl<'a> SvgPicture<'a> {
         }
     }
 
+    /// A change's word on a part or an open box, at its top right, drawn at the part's own scale
+    /// so it reads wherever the part does: `new`, `gone`, `code` (docair-zrr.22).
+    fn tag(&self, out: &mut String, id: &str, r: &Rect, sc: f64) {
+        let Some(word) = self.marks.and_then(|m| m.tags.get(id)) else {
+            return;
+        };
+        let fs = 10.0 * sc;
+        let w = columns(word) as f64 * Monospace::default().advance * fs + 8.0 * sc;
+        let h = 13.0 * sc;
+        let (x, y) = (r.x + r.w / 2.0 - w - 4.0 * sc, r.y - r.h / 2.0 - h / 2.0);
+        let _ = write!(
+            out,
+            r#"<g class="ch-tag ch-tag-{}"><rect x="{}" y="{}" width="{}" height="{}" rx="{}"/><text x="{}" y="{}" font-size="{}">{}</text></g>"#,
+            esc(word),
+            num(x),
+            num(y),
+            num(w),
+            num(h),
+            num(h / 2.0),
+            num(x + w / 2.0),
+            num(y + h / 2.0),
+            num(fs),
+            esc(word)
+        );
+    }
+
     /// The class a marked part gets: ` ch-added`, or nothing.
     fn mark(&self, id: &str) -> String {
         self.marks
-            .filter(|m| m.parts.contains(id))
-            .map(|m| format!(" {}", m.class))
+            .and_then(|m| m.parts.get(id))
+            .map(|c| format!(" {c}"))
             .unwrap_or_default()
     }
 }

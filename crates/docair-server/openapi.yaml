@@ -74,7 +74,7 @@ paths:
   /api/explain:
     post:
       operationId: explain
-      summary: Explain what the served project changes since commit a (or between a and b); the findings are stored.
+      summary: Start explaining what the served project changes since commit a (or between a and b), as a job; the findings are stored.
       requestBody:
         required: true
         content:
@@ -86,9 +86,18 @@ paths:
                 a: {type: string}
                 b: {type: string}
       responses:
-        '200': {description: "ChangeFindings: schema docair.explained/0, a, b, links, flows, problems, left, requests."}
-        '409': {description: The project has no git history (an upload).}
+        '202': {description: "ExplainJob: job, a, b, running, phase, flows, requests, started, answered, left, asking, seconds, error, text, version, findings. A job of the same commits that still runs is answered again."}
+        '409': {description: The project has no git history (an upload), or a job of other commits runs.}
         '503': {description: AI is off.}
+  /api/explain/{job}:
+    get:
+      operationId: explain_job
+      summary: How far an explain job is, the words the page shows, and at the end its findings (ChangeFindings) and the documentation's new version.
+      parameters:
+        - {name: job, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: ExplainJob.}
+        '404': {description: The job is no longer kept (10 minutes after it ends).}
   /api/tidy:
     get:
       operationId: tidy_list

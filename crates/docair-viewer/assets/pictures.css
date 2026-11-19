@@ -77,10 +77,11 @@
 .docair-pic .dangling > .ln { stroke-dasharray: 6 4; }
 
 /* a line's words, and the data it carries as chips */
-.docair-pic .words > rect { fill: var(--canvas); fill-opacity: 0.92; }
+/* A line's words stand on a tag of their own: opaque, edged, so lines that run under them do not show through (docair-irq). */
+.docair-pic .words > rect { fill: var(--canvas); fill-opacity: 1; stroke: var(--line); stroke-width: 0.6; }
 .docair-pic .words > text { fill: var(--muted); }
-.docair-pic .words.bundle > text { fill: var(--text); font-weight: 600; }
-.docair-pic .words > .chip { fill: var(--data-soft); fill-opacity: 1; stroke: var(--data); stroke-width: 0.8; }
+.docair-pic .words.bundle > text { fill: var(--text); font-weight: 500; }
+.docair-pic .words > rect.chip { fill: var(--data-soft); fill-opacity: 1; stroke: var(--data); stroke-width: 0.8; }
 .docair-pic .words .d { fill: var(--data); font-weight: 600; }
 
 /* Parts Terraform declares carry its mark on their corner. */

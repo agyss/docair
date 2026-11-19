@@ -91,6 +91,8 @@ command, and a button when docair serve shows the page; e2e
 | 5 | docair-8l6.5 | the store, `docair explain <A> <B>`, the comment on the pull request |
 | 6 | docair-8l6.6 | the HTML shows the findings |
 | 7 | docair-8l6.7 | tests with the fake AI, and the cost limit |
+| 8 | docair-8l6.11 | explain as a job: progress while it runs, batches in parallel (§8) |
+| 9 | docair-8l6.12 | the AI's words on each change's step, by a stable step id (§8) |
 
 Step 1 needs `docair diff`'s changed slices (docair-zrr.6), step 6 needs
 `docair serve` (docair-702.6).
@@ -105,3 +107,75 @@ Step 1 needs `docair diff`'s changed slices (docair-zrr.6), step 6 needs
 | 4 | the language of the comment on the pull request | plain English, one line per changed flow, the explanation under it, links and workflows folded in `<details>` |
 | 5 | (new) where the findings go | `[explain] store` in `docair.toml`, default `docs/changes`: one JSON file per pair of commits (`<A>..<B>.json`) |
 | 6 | (new) the cost limit | `[explain] max_requests`, default 8 requests per run; a run that would need more stops and says which flows are left |
+
+## 8. A walkthrough of each change (docair-8l6.11, 8l6.12)
+
+**Why.** On docair's own commit ba6ddf0, *Explain them* answered after
+4 min 20 s (5 requests, 27 of 30 flows explained) and showed nothing in the
+meantime. Its workflows before and after play on two separate pictures, so
+they cannot show where the flow now goes another way.
+
+**The walkthrough of the changes (docair-8l6.12).** The reader wants the
+changes only, not a tour of the flow. docair already walks a changed flow
+change by change (CHANGES.md §8, `changes_walk`): one step per change, its
+camera on it, its card worded from the parts' names. *Explain them* gives
+those steps the AI's words: for each step, what used to happen and what
+happens now, from the user's side. It adds no steps along the unchanged rest
+of the flow, and replaces the workflows before and after.
+
+| Rule | How |
+|------|-----|
+| each step has a stable id | `<seed>#path:<id>` for a stretch of the path, `<id>` its first new or gone part by id; `<seed>#line:<from>-><to>` for a line alone; `<seed>#code:<box>` for the parts of a box whose code changed; `<seed>#box:<id>` for an open box whose own block changed |
+| the AI answers by id | the digest sends each step's id with its parts and lines; the answer is `{step id: words}`, and `bind` keeps only the ids docair made, so nothing invented gets through |
+| every change has its step | a step the AI did not word keeps docair's words (docair-8l6.13) |
+| findings stored before | a finding with workflows but no step words counts as *not explained yet* and is asked about again; a human's correction is kept (docair-8l6.15) |
+
+To share the ids, the steps' grouping (not their cameras) moves from the
+viewer to docair-core, so the digest and the page work them out alike.
+Without the AI, the picture and its walk over the changes work as they are.
+
+**Built, the AI's side** (docair-8l6.12): the digest sends each changed
+flow's steps from `docair_core::change_steps` (id, kind, the parts added,
+removed and whose code changed, where the stretch forks off, its lines),
+and the prompt asks for `steps: {id: words}` instead of workflows.
+`FlowExplained.steps` holds them; `bind` keeps words only on the flow's own
+step ids and only when they name parts and lines of A or B. A stored
+finding counts as explained when a human wrote it, when it words the
+flow's steps, or when the flow has no steps; otherwise it is asked again and
+replaced. The pull request comment lists the step words under each flow.
+Workflows are gone: the model is not asked for them, and a stored one is
+not read. Test:
+`step_words_bind_by_docairs_step_ids` (shop: B also writes the order; one
+step `data.order#path:orders-db`).
+
+**Explain as a job (docair-8l6.11).**
+
+| Call | Answer |
+|------|--------|
+| `POST /api/explain` (`a`, `b`) | at once: a job id; a second call while a job runs answers that job |
+| `GET /api/explain/<job>` | the requests started, answered and left, the flows asked about, the time so far, an error; kept 10 minutes after the job ends |
+
+* Batches go out in parallel, at most 3 at once (docair-8l6.14). With the 2
+  questions to the model the server allows (`ASKING_AT_ONCE`), up to 5
+  requests reach the provider at once, and a chat question never waits
+  behind an explain. `docair explain` sends its batches the same way.
+* The links to make go with the first batch; links are merged as each batch
+  answers.
+* `[explain] max_requests` counts the requests started; the flows left over
+  are *not explained yet*, as today.
+* The page shows the job in words the server writes, for example *The AI
+  explains 30 flows in 5 requests · 2 answered · 1:12*, and asks again every
+  second or two. When the job ends, the server writes the page again and the
+  page reloads (docair-8l6.16). The page's script stays within its line
+  budget: the words come from the server.
+
+**Built** (docair-8l6.11): `docair_ai::explain::explain_with` sends the
+batches on up to `AT_ONCE` (3) threads, says each start and answer
+(`ExplainProgress`), and merges the answers in the batches' order, so the
+findings do not depend on which answered first; a failed request leaves its
+flows, and only when none answers is it an error. The server keeps the jobs
+(`ExplainJobs`, `crates/docair-server/src/project.rs`); `GET
+/api/explain/<job>` works out `seconds` and `text` when asked. `docair
+explain` uses the same and says each answered request on stderr. Tests:
+`explaining_runs_as_a_job_and_says_how_far_it_is` (a fake model in the
+test), the e2e `docair explain` test follows two jobs to their findings.

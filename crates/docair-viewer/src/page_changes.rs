@@ -1,27 +1,25 @@
-//! What changed between two versions, in the page (docs/CHANGES.md §5 and §7, docair-zrr.7): the
-//! header's button with the count of changed flows, the list it opens, and for each flow one
-//! picture of its slice at A and at B side by side, drawn like any slice, with what the flow now
-//! goes through marked at B and what it no longer does marked at A.
+//! What changed between two versions, in the page (docs/CHANGES.md §5, §7 and §8, docair-zrr.7,
+//! zrr.18): the header's button with the count of changed flows, the list it opens, and for each
+//! flow one picture of its slice before and after, drawn like any slice: a part both versions have
+//! once and faded, what only the flow before had red, what only the flow after has green, a part
+//! changed inside amber.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 
+use docair_core::change_steps::{
+    self, ChangeStep, FlowMarks, LineMark, Merged, PartMark, StepKind,
+};
 use docair_core::changes::FlowChange;
-use docair_core::layer_view::{LayerPicture, slice_picture};
 use docair_core::model::Graph;
-use docair_layout::draw::num;
-use docair_layout::{Input, Layout, Monospace, Routes};
+use docair_layout::{Input, Layout, Monospace};
 use serde_json::{Map, Value, json};
 
 use crate::doc_page::{Changed, slice_title};
 use crate::page_panels::href;
 use crate::svg::ChangeMarks;
 use crate::{escape_text, layout_input, svg};
-
-/// The gap between the two sides, and the band above them for their titles.
-const GAP: f64 = 80.0;
-const BAND: f64 = 44.0;
 
 /// The changes as the page shows them.
 pub(crate) struct ChangeView {
@@ -31,7 +29,7 @@ pub(crate) struct ChangeView {
     pub list: String,
     /// Each changed flow's details, by its seed: shown with its picture.
     pub details: Map<String, Value>,
-    /// Each changed flow's picture, and each side of its explained workflow.
+    /// Each changed flow's picture.
     pub pictures: Vec<ChangePicture>,
 }
 
@@ -43,7 +41,7 @@ pub(crate) struct ChangePicture {
     pub svg: String,
     /// The changed flow's seed, whose details show with the picture.
     pub change: Option<String>,
-    /// A workflow's steps (docs/EXPLAIN.md §3), when the picture is walked through.
+    /// The walk over its changes (docs/CHANGES.md §8), one step per change.
     pub walk: Option<Value>,
 }
 
@@ -86,88 +84,214 @@ fn recorded(f: &Value) -> String {
     }
 }
 
+/// A box around some parts of a laid-out picture, with room around it: a walk step's camera.
+fn camera_of(laid: &Layout, parts: &[usize]) -> Value {
+    let (mut x0, mut y0, mut x1, mut y1) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for r in parts.iter().filter_map(|&i| laid.placement.parts.get(i)) {
+        x0 = x0.min(r.x - r.w / 2.0);
+        y0 = y0.min(r.y - r.h / 2.0);
+        x1 = x1.max(r.x + r.w / 2.0);
+        y1 = y1.max(r.y + r.h / 2.0);
+    }
+    if x0 <= x1 {
+        json!([x0 - 60.0, y0 - 60.0, x1 - x0 + 120.0, y1 - y0 + 120.0])
+    } else {
+        Value::Null
+    }
+}
+
+/// One step's card of a walk on a change's picture: its title, where it is, what it says, Back and Next.
+fn step_card(glyph: &str, title: &str, at: &str, body: &str, (k, n): (usize, usize)) -> String {
+    format!(
+        r#"<section class="card flow" data-test="step-card"><div class="card-head"><span class="card-glyph">{glyph}</span><b>{}</b><button class="card-close" title="Close the walk">×</button></div><div class="card-step">{at}</div>{body}<div class="card-nav"><button class="btn" data-step="-1"{}>◀ Back</button><button class="btn" data-step="1"{}>Next ▶</button></div></section>"#,
+        escape_text(title),
+        if k == 0 { " disabled" } else { "" },
+        if k + 1 >= n { " disabled" } else { "" }
+    )
+}
+
+/// Names as code, which the page links to their parts: `a`, `b` and `c`; past eight, how many more.
+fn names_as_code(graph: &Graph, ids: &[&str]) -> String {
+    let mut named: Vec<String> = ids
+        .iter()
+        .take(MAX_NAMED)
+        .map(|id| format!("<code>{}</code>", escape_text(&name_in(graph, id))))
+        .collect();
+    if ids.len() > MAX_NAMED {
+        named.push(format!("{} more", ids.len() - MAX_NAMED));
+    }
+    match named.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// A step's card names at most this many parts, and a step holds at most this many new or gone parts.
+const MAX_NAMED: usize = 8;
+
 /***
- * A workflow's steps on one side, as a walk the page steps through: each step lights the parts it is in (or the box the picture folds them into), frames them, and says what the user does.
+ * A walk over a flow's changes only (docs/CHANGES.md §8, docair-zrr.19, 8l6.12): one step per change as docair-core works them out, the path's steps first, each kind in reading order; each step's camera frames its change at a size to read, and its card says what changed: the model's words on that step, by its id, over docair's own.
+ *
+ * @calls docair-core.change_steps.steps "the flow's changes in steps"
  ***/
-fn workflow_walk(
-    graph: &Graph,
-    pic: &LayerPicture,
+fn changes_walk(
+    m: &Merged,
     laid: &Layout,
-    (title, which): (&str, &str),
-    steps: &[Value],
+    flow_steps: &[ChangeStep],
+    (title, words): (&str, Option<&Value>),
     linker: &crate::page_glossary::Linker,
-) -> Value {
-    let drawn: HashMap<&str, usize> = pic
+) -> Option<Value> {
+    if flow_steps.is_empty() {
+        return None;
+    }
+    let at: HashMap<&str, usize> = m
+        .pic
         .parts
         .iter()
         .enumerate()
         .map(|(i, p)| (p.id.as_str(), i))
         .collect();
-    let parent = |id: &str| {
-        graph
-            .nodes
-            .iter()
-            .find(|n| n.id == id)
-            .and_then(|n| n.part_of.clone())
+    let mut line_at: HashMap<&str, usize> = HashMap::new();
+    for (k, l) in m.pic.lines.iter().enumerate() {
+        for e in l.members.iter().filter_map(|&e| m.graph.edges.get(e)) {
+            line_at.entry(e.id.as_str()).or_insert(k);
+        }
+    }
+    let places = |s: &ChangeStep| -> Vec<usize> {
+        let mut v: Vec<usize> = s
+            .parts()
+            .filter_map(|p| at.get(p.as_str()).copied())
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
     };
-    let n = steps.len();
-    let out: Vec<Value> = steps
+    let top_left = |parts: &[usize]| {
+        parts
+            .iter()
+            .filter_map(|&i| laid.placement.parts.get(i))
+            .map(|r| ((r.y - r.h / 2.0) as i64, (r.x - r.w / 2.0) as i64))
+            .min()
+            .unwrap_or_default()
+    };
+    let mut order: Vec<&ChangeStep> = flow_steps.iter().collect();
+    order.sort_by_key(|s| {
+        (
+            matches!(s.kind, StepKind::Code | StepKind::Box),
+            top_left(&places(s)),
+        )
+    });
+    let count = order.len();
+    let steps: Vec<Value> = order
         .iter()
         .enumerate()
-        .map(|(k, st)| {
-            let mut parts: Vec<usize> = Vec::new();
-            for id in st["nodes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                let mut at = Some(id.to_string());
-                while let Some(c) = at {
-                    if let Some(&i) = drawn.get(c.as_str()) {
-                        if !parts.contains(&i) {
-                            parts.push(i);
-                        }
-                        break;
-                    }
-                    at = parent(&c);
-                }
-            }
-            let (mut x0, mut y0, mut x1, mut y1) = (
-                f64::INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-                f64::NEG_INFINITY,
-            );
-            for r in parts.iter().filter_map(|&i| laid.placement.parts.get(i)) {
-                x0 = x0.min(r.x - r.w / 2.0);
-                y0 = y0.min(r.y - r.h / 2.0);
-                x1 = x1.max(r.x + r.w / 2.0);
-                y1 = y1.max(r.y + r.h / 2.0);
-            }
-            let camera = if x0 <= x1 {
-                json!([x0 - 40.0, y0 - 40.0, x1 - x0 + 80.0, y1 - y0 + 80.0])
-            } else {
-                Value::Null
+        .map(|(k, s)| {
+            let parts = places(s);
+            let mut lines: Vec<usize> = s
+                .lines
+                .iter()
+                .filter_map(|l| line_at.get(l.id.as_str()).copied())
+                .collect();
+            lines.sort_unstable();
+            lines.dedup();
+            let said = docair_words(&m.graph, s);
+            let body = match words.and_then(|w| w.get(&s.id)).and_then(Value::as_str) {
+                Some(w) => format!(
+                    r#"<p data-test="step-words">{}</p><p class="muted">{said}</p>"#,
+                    with_code(w)
+                ),
+                None => format!("<p>{said}</p>"),
             };
-            let card = format!(
-                r#"<section class="card flow" data-test="step-card"><div class="card-head"><span class="card-glyph">✦</span><b>{} · {which}</b><button class="card-close" title="Close the workflow">×</button></div><div class="card-step"><span class="muted">step {} of {n}</span> {}</div><div class="card-nav"><button class="btn" data-step="-1"{}>◀ Back</button><button class="btn" data-step="1"{}>Next ▶</button></div></section>"#,
-                escape_text(title),
-                k + 1,
-                with_code(st["title"].as_str().unwrap_or("")),
-                if k == 0 { " disabled" } else { "" },
-                if k + 1 >= n { " disabled" } else { "" }
+            let card = step_card(
+                "Δ",
+                "The changes",
+                &format!("change {} of {count}", k + 1),
+                &body,
+                (k, count),
             );
             json!({
+                "id": s.id,
                 "card": linker.link(&card, None),
-                "parts": parts.iter().map(|&i| pic.parts[i].id.clone()).collect::<Vec<_>>(),
-                "lines": [],
-                "camera": camera,
+                "parts": parts.iter().map(|&i| m.pic.parts[i].id.clone()).collect::<Vec<_>>(),
+                "lines": lines,
+                "camera": camera_of(laid, &parts),
                 "tokens": [],
             })
         })
         .collect();
-    json!({ "title": format!("{title} · {which}"), "glyph": "✦", "steps": out })
+    Some(json!({ "title": format!("The changes · {title}"), "glyph": "Δ", "steps": steps }))
+}
+
+/// What a step of a change is about, in docair's own words: what the flow now and no longer goes through, the line, or the code that changed.
+fn docair_words(graph: &Graph, s: &ChangeStep) -> String {
+    fn refs(v: &[String]) -> Vec<&str> {
+        v.iter().map(String::as_str).collect()
+    }
+    let mut said = match s.kind {
+        StepKind::Path => {
+            let mut parts = Vec::new();
+            if !s.added.is_empty() {
+                parts.push(format!(
+                    "Now goes through {}",
+                    names_as_code(graph, &refs(&s.added))
+                ));
+            }
+            if !s.removed.is_empty() {
+                parts.push(format!(
+                    "no longer through {}",
+                    names_as_code(graph, &refs(&s.removed))
+                ));
+            }
+            parts.join("; ")
+        }
+        StepKind::Line => {
+            let line = |ids: &[String]| -> Vec<String> {
+                s.lines
+                    .iter()
+                    .filter(|l| ids.contains(&l.id))
+                    .map(|l| {
+                        format!(
+                            "{} → {}",
+                            names_as_code(graph, &[&l.from]),
+                            names_as_code(graph, &[&l.to])
+                        )
+                    })
+                    .collect()
+            };
+            let (added, removed) = (line(&s.lines_added), line(&s.lines_removed));
+            let mut parts = Vec::new();
+            if !added.is_empty() {
+                parts.push(format!("A new line {}", added.join(", ")));
+            }
+            if !removed.is_empty() {
+                parts.push(format!("no more line {}", removed.join(", ")));
+            }
+            parts.join("; ")
+        }
+        StepKind::Code => format!("Code changed in {}", names_as_code(graph, &refs(&s.code))),
+        StepKind::Box => format!(
+            "{} itself changed, not the parts drawn in it",
+            names_as_code(graph, &refs(&s.code))
+        ),
+    };
+    if matches!(s.kind, StepKind::Path | StepKind::Line) && !s.ends.is_empty() {
+        let _ = write!(said, ", at {}", names_as_code(graph, &refs(&s.ends)));
+    }
+    if let Some(b) = s
+        .in_box
+        .as_deref()
+        .filter(|b| matches!(s.kind, StepKind::Code) && !s.code.iter().any(|c| c == b))
+    {
+        let _ = write!(said, " (in {})", names_as_code(graph, &[b]));
+    }
+    said.push('.');
+    said
 }
 
 /// A commit as people read it: a hash cut to 8 characters, a name as it is.
@@ -188,104 +312,83 @@ fn name_in(graph: &Graph, id: &str) -> String {
         .map_or(id.to_string(), |n| n.name.clone())
 }
 
-/// One version's slice through a seed: its picture, and the picture as the layout reads it.
-struct VersionSlice<'g> {
-    graph: &'g Graph,
-    pic: LayerPicture,
-    input: Input,
+/// How a flow changed, for the list's order and the details' words: its path, only its parts' code, or neither.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlowKind {
+    Path,
+    Code,
+    Words,
 }
 
-fn version_slice<'g>(graph: &'g Graph, seed: &str) -> Option<VersionSlice<'g>> {
-    let found = docair_core::slice::find(graph, seed)?;
-    let s = docair_core::slice::slice(graph, &found)?;
-    let pic = slice_picture(graph, &s);
-    let input = layout_input::input_with(graph, &pic, &Monospace::default(), &HashMap::new());
-    Some(VersionSlice { graph, pic, input })
+/// What a flow's change holds: how it changed, its parts changed in their code, those whose words alone changed.
+struct FlowSort<'f> {
+    kind: FlowKind,
+    code: Vec<&'f String>,
+    words: Vec<&'f String>,
 }
 
-/// What a layout line stands for, the same in both versions: the graph line's stable id.
-fn line_key(v: &VersionSlice, line: &docair_layout::Line) -> String {
-    let edge = line
-        .id
-        .parse::<usize>()
-        .ok()
-        .and_then(|k| v.pic.lines.get(k))
-        .and_then(|l| l.members.first())
-        .and_then(|&m| v.graph.edges.get(m));
-    match edge {
-        Some(e) if !e.id.is_empty() => e.id.clone(),
-        Some(e) => format!("{} {:?} {}", e.from, e.kind, e.to),
-        None => format!("#{}", line.id),
-    }
-}
-
-/// Where each part and line of either version is in the two laid out as one.
-struct Union {
-    input: Input,
-    parts: HashMap<String, usize>,
-    lines: HashMap<String, usize>,
-}
-
-/***
- * Both versions as one picture to lay out (docair-zrr.17): every part and line of either, a part both have once, at the larger of its two sizes; so a part that stayed is in the same place on both sides, and a part only one side has leaves its room empty on the other.
- ***/
-fn union(a: &VersionSlice, b: &VersionSlice) -> Union {
-    let mut input = b.input.clone();
-    let mut parts: HashMap<String, usize> = input
-        .parts
+fn sort_flow<'f>(f: &'f FlowChange, inside: &change_steps::ChangedInside) -> FlowSort<'f> {
+    let on_path = |p: &String| !f.parts_added.contains(p) && !f.parts_removed.contains(p);
+    let code: Vec<&String> = f
+        .through
         .iter()
-        .enumerate()
-        .map(|(i, p)| (p.id.clone(), i))
+        .filter(|p| on_path(p) && inside.code.contains(p.as_str()))
         .collect();
-    for p in &a.input.parts {
-        match parts.get(&p.id) {
-            Some(&i) => {
-                let q = &mut input.parts[i];
-                q.width = q.width.max(p.width);
-                q.height = q.height.max(p.height);
-                q.min_width = q.min_width.max(p.min_width);
-                q.name_width = q.name_width.max(p.name_width);
-            }
-            None => {
-                parts.insert(p.id.clone(), input.parts.len());
-                input.parts.push(docair_layout::Part {
-                    parent: None,
-                    ..p.clone()
-                });
-            }
+    let words: Vec<&String> = f
+        .through
+        .iter()
+        .filter(|p| on_path(p) && inside.words.contains(p.as_str()))
+        .collect();
+    let path = f.how != "changed"
+        || !(f.parts_added.is_empty()
+            && f.parts_removed.is_empty()
+            && f.lines_added.is_empty()
+            && f.lines_removed.is_empty());
+    let kind = if path {
+        FlowKind::Path
+    } else if !code.is_empty() {
+        FlowKind::Code
+    } else {
+        FlowKind::Words
+    };
+    FlowSort { kind, code, words }
+}
+
+/// A flow's marks as the drawing takes them: a class for each part and graph line, a tag on each part a change is about.
+struct Classes {
+    parts: HashMap<String, &'static str>,
+    lines: HashMap<String, &'static str>,
+    tags: HashMap<String, &'static str>,
+}
+
+/// The page's classes and tags for what docair-core marked (docs/CHANGES.md §8): `ch-added` *new*, `ch-removed` *gone*, `ch-changed` *code*, `ch-same`.
+fn classes(marks: &FlowMarks) -> Classes {
+    let mut c = Classes {
+        parts: HashMap::new(),
+        lines: HashMap::new(),
+        tags: HashMap::new(),
+    };
+    for (id, mark) in &marks.parts {
+        let (class, tag) = match mark {
+            PartMark::Added => ("ch-added", Some("new")),
+            PartMark::Removed => ("ch-removed", Some("gone")),
+            PartMark::Code => ("ch-changed", Some("code")),
+            PartMark::Same => ("ch-same", None),
+        };
+        c.parts.insert(id.clone(), class);
+        if let Some(t) = tag {
+            c.tags.insert(id.clone(), t);
         }
     }
-    // A's own parts in A's boxes, once every part has its place.
-    for p in &a.input.parts {
-        let i = parts[&p.id];
-        if i >= b.input.parts.len() {
-            input.parts[i].parent = p
-                .parent
-                .and_then(|q| parts.get(&a.input.parts[q].id).copied());
-        }
+    for (id, mark) in &marks.lines {
+        let class = match mark {
+            LineMark::Added => "ch-added",
+            LineMark::Removed => "ch-removed",
+            LineMark::Same => "ch-same",
+        };
+        c.lines.insert(id.clone(), class);
     }
-    let mut lines: HashMap<String, usize> = HashMap::new();
-    for (k, l) in b.input.lines.iter().enumerate() {
-        lines.entry(line_key(b, l)).or_insert(k);
-    }
-    for l in &a.input.lines {
-        let key = line_key(a, l);
-        if lines.contains_key(&key) {
-            continue;
-        }
-        lines.insert(key, input.lines.len());
-        input.lines.push(docair_layout::Line {
-            id: format!("a{}", l.id),
-            from: parts[&a.input.parts[l.from].id],
-            to: parts[&a.input.parts[l.to].id],
-            ..l.clone()
-        });
-    }
-    Union {
-        input,
-        parts,
-        lines,
-    }
+    c
 }
 
 /// Lay out a picture's input, or take its kept layout.
@@ -309,111 +412,35 @@ fn lay_out_kept(input: &Input, options: &docair_layout::Options, keep: Option<&P
     laid
 }
 
-/// One version's layout, taken from the two laid out as one.
-fn project(v: &VersionSlice, all: &Layout, u: &Union) -> Layout {
-    let mut placement = all.placement.clone();
-    let at: Vec<usize> = v.input.parts.iter().map(|p| u.parts[&p.id]).collect();
-    placement.parts = at.iter().map(|&i| all.placement.parts[i]).collect();
-    placement.scale = at.iter().map(|&i| all.placement.scale[i]).collect();
-    let lines: Vec<usize> = v
-        .input
-        .lines
-        .iter()
-        .map(|l| u.lines[&line_key(v, l)])
-        .collect();
-    Layout {
-        placement,
-        routes: Routes {
-            lines: lines.iter().map(|&i| all.routes.lines[i].clone()).collect(),
-            price: all.routes.price,
-            none: all.routes.none,
+/// A flow's one picture, laid out (or its kept layout taken) and drawn with its marks, in the page's class for it.
+fn draw_one(m: &Merged, marks: &FlowMarks, keep: Option<&Path>) -> (Layout, String) {
+    let input = layout_input::input_with(&m.graph, &m.pic, &Monospace::default(), &HashMap::new());
+    let laid = lay_out_kept(&input, &layout_input::options_for(&m.pic), keep);
+    let c = classes(marks);
+    let drawn = svg::draw_marked(
+        &m.graph,
+        &m.pic,
+        &laid,
+        &ChangeMarks {
+            parts: &c.parts,
+            lines: &c.lines,
+            tags: &c.tags,
         },
-        words: lines.iter().map(|&i| all.words[i]).collect(),
-    }
+    );
+    let svg = drawn.replacen(r#"class="docair-pic""#, r#"class="docair-pic changes""#, 1);
+    (laid, svg)
 }
 
-/// The two versions' layouts: laid out as one when the flow is in both, else the one on its own.
-fn lay_out_pair(
-    a: Option<&VersionSlice>,
-    b: Option<&VersionSlice>,
-    keep: Option<&Path>,
-) -> (Option<Layout>, Option<Layout>) {
-    let alone = |v: &VersionSlice| lay_out_kept(&v.input, &layout_input::options_for(&v.pic), keep);
-    match (a, b) {
-        (Some(a), Some(b)) => {
-            let u = union(a, b);
-            let all = lay_out_kept(&u.input, &layout_input::options_for(&b.pic), keep);
-            (Some(project(a, &all, &u)), Some(project(b, &all, &u)))
-        }
-        (a, b) => (a.map(alone), b.map(alone)),
-    }
-}
+/// The picture of a flow neither version has: it says so.
+const NOT_FOUND: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" class="docair-pic changes" viewBox="0 0 280 120" width="280" height="120"><g class="side-missing"><rect x="0" y="0" width="280" height="120" rx="8"/><text x="140" y="60">Not found in either version</text></g></svg>"#;
 
-/// A drawn picture's viewBox, and what it holds inside its outer element.
-fn inside(svg: &str) -> Option<([f64; 4], &str)> {
-    let vb: Vec<f64> = svg
-        .split("viewBox=\"")
-        .nth(1)?
-        .split('"')
-        .next()?
-        .split(' ')
-        .filter_map(|x| x.parse().ok())
-        .collect();
-    let start = svg.find('>')? + 1;
-    let end = svg.rfind("</svg>")?;
-    (vb.len() == 4 && start <= end).then(|| ([vb[0], vb[1], vb[2], vb[3]], &svg[start..end]))
-}
-
-/// The two versions side by side, each under its title; a side the flow is missing from says so.
-fn side_by_side(sides: [(String, Option<String>, &str); 2]) -> String {
-    let (mut x, mut height, mut body) = (0.0_f64, 0.0_f64, String::new());
-    for (title, drawn, missing) in sides {
-        let (w, h) = match drawn.as_deref().and_then(inside) {
-            Some(([vx, vy, w, h], held)) => {
-                let _ = write!(
-                    body,
-                    r#"<svg x="{}" y="{BAND}" width="{}" height="{}" viewBox="{} {} {} {}" overflow="visible">{held}</svg>"#,
-                    num(x),
-                    num(w),
-                    num(h),
-                    num(vx),
-                    num(vy),
-                    num(w),
-                    num(h)
-                );
-                (w, h)
-            }
-            None => {
-                let (w, h) = (280.0, 120.0);
-                let _ = write!(
-                    body,
-                    r#"<g class="side-missing"><rect x="{}" y="{BAND}" width="{w}" height="{h}" rx="8"/><text x="{}" y="{}">{}</text></g>"#,
-                    num(x),
-                    num(x + w / 2.0),
-                    num(BAND + h / 2.0),
-                    escape_text(missing)
-                );
-                (w, h)
-            }
-        };
-        // Each side's title stands over its middle.
-        let _ = write!(
-            body,
-            r#"<text class="side-title" x="{}" y="28" text-anchor="middle">{}</text>"#,
-            num(x + w / 2.0),
-            escape_text(&title)
-        );
-        x += w + GAP;
-        height = height.max(h);
+/// A count and its noun: `1 part`, `4 parts`.
+fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
     }
-    let (w, h) = (x - GAP, height + BAND);
-    format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" class="docair-pic changes" viewBox="0 0 {} {}" width="{}" height="{}">{body}</svg>"#,
-        num(w),
-        num(h),
-        num(w),
-        num(h)
-    )
 }
 
 /// How a flow changed, in a word.
@@ -451,10 +478,10 @@ fn parts_list(graph: &Graph, ids: &[String], linked: bool) -> String {
 }
 
 /***
- * The changes between two versions as the page shows them: the header's button, the list of changed flows with the moves apart, and for each flow its slice at A and at B side by side, marked.
+ * The changes between two versions as the page shows them: the header's button, the list of changed flows with the moves apart, and for each flow one picture of its slice before and after, marked.
  *
  * @calls docair-core.slice.find "finds each changed flow's seed in each version"
- * @calls docair-viewer.svg.draw_marked "draws each side with what changed marked"
+ * @calls docair-viewer.svg.draw_marked "draws each flow's one picture with what changed marked"
  ***/
 pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>) -> ChangeView {
     let c = changed.changes;
@@ -485,6 +512,11 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     let linker = crate::page_glossary::Linker::new(after);
     let name_b = |id: &str| name_in(after, id);
     let name_a = |id: &str| name_in(changed.before, id);
+    // The parts that moved or were renamed, and the parts changed inside, in their code or only their words.
+    let moves = change_steps::id_moves(&c.graph);
+    let inside = change_steps::changed_inside(&c.graph);
+    // The list's items: flows whose path changed first, then those whose parts changed only in their code, then words.
+    let mut items: [String; 3] = Default::default();
     for f in &c.flows {
         let seed = docair_core::slice::find(after, &f.seed)
             .or_else(|| docair_core::slice::find(changed.before, &f.seed));
@@ -497,8 +529,10 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         };
         let addr = format!("changes/{}", f.seed);
         let uncertain = if f.certain { "" } else { UNCERTAIN };
+        let sort = sort_flow(f, &inside);
+        let mut item = String::new();
         let _ = write!(
-            list,
+            item,
             r#"<li><a class="link" href="{}">{}</a> <span class="badge ch-{}">{}</span>{uncertain}"#,
             href(&addr),
             escape_text(&title),
@@ -526,77 +560,78 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
                     .join(", ")
             ));
         }
+        let few = |ids: &[&String]| {
+            let mut names: Vec<String> = ids.iter().take(6).map(|p| name_b(p)).collect();
+            if ids.len() > 6 {
+                names.push("…".into());
+            }
+            names.join(", ")
+        };
+        match sort.kind {
+            FlowKind::Path => {}
+            FlowKind::Code => gained.push(format!(
+                "same path · {} changed in their code: {}",
+                count(sort.code.len(), "part"),
+                few(&sort.code)
+            )),
+            FlowKind::Words if sort.words.is_empty() => {
+                gained.push("same path and code: parts only moved or reformatted".into())
+            }
+            FlowKind::Words => gained.push(format!("words or tags of {}", few(&sort.words))),
+        }
         if !gained.is_empty() {
             let _ = write!(
-                list,
+                item,
                 r#"<div class="muted">{}</div>"#,
                 escape_text(&gained.join(" · "))
             );
         }
-        list.push_str("</li>");
-        // The picture: A with what the flow no longer goes through marked, B with what it now does.
-        let set = |v: &[String]| v.iter().cloned().collect::<HashSet<String>>();
-        let (lost, lost_lines, won, won_lines) = (
-            set(&f.parts_removed),
-            set(&f.lines_removed),
-            set(&f.parts_added),
-            set(&f.lines_added),
+        item.push_str("</li>");
+        items[sort.kind as usize].push_str(&item);
+        // The picture: both versions as one, what changed marked, and its changes in steps.
+        let (pa, pb) = (
+            change_steps::flow_picture(changed.before, &f.seed),
+            change_steps::flow_picture(after, &f.seed),
         );
-        let (va, vb) = (
-            version_slice(changed.before, &f.seed),
-            version_slice(after, &f.seed),
+        let one = change_steps::merged(
+            pa.as_ref().map(|p| (changed.before, p)),
+            pb.as_ref().map(|p| (after, p)),
+            &moves,
         );
-        let (la, lb) = lay_out_pair(va.as_ref(), vb.as_ref(), keep);
-        // Each side as the walks need it too: its picture, its layout and its drawing.
-        let drawn = |v: VersionSlice, l: Layout, marks: ChangeMarks| {
-            let svg = svg::draw_marked(v.graph, &v.pic, &l, &marks);
-            (v.pic, l, svg)
+        let marked = one
+            .as_ref()
+            .map(|m| change_steps::marks(m, f, &inside.code));
+        let drawn = one
+            .as_ref()
+            .zip(marked.as_ref())
+            .map(|(m, mk)| draw_one(m, mk, keep));
+        let flow_steps = match (&one, &marked) {
+            (Some(m), Some(mk)) => change_steps::steps(m, f, mk),
+            _ => Vec::new(),
         };
-        let before = va.zip(la).map(|(v, l)| {
-            drawn(
-                v,
-                l,
-                ChangeMarks {
-                    class: "ch-removed",
-                    parts: &lost,
-                    lines: &lost_lines,
-                },
-            )
-        });
-        let now = vb.zip(lb).map(|(v, l)| {
-            drawn(
-                v,
-                l,
-                ChangeMarks {
-                    class: "ch-added",
-                    parts: &won,
-                    lines: &won_lines,
-                },
-            )
-        });
-        let svg = side_by_side([
-            (
-                format!("Before · {a}"),
-                before.as_ref().map(|s| s.2.clone()),
-                "Not there before",
-            ),
-            (
-                format!("After · {b}"),
-                now.as_ref().map(|s| s.2.clone()),
-                "Gone after",
-            ),
-        ]);
+        let found = finding(changed.findings, &f.seed);
         let pair = format!("{title}: before and after");
         pictures.push(ChangePicture {
             addr: addr.clone(),
             title: pair.clone(),
             crumbs: vec![(pair.clone(), addr.clone())],
-            svg,
+            svg: drawn
+                .as_ref()
+                .map_or_else(|| NOT_FOUND.to_string(), |d| d.1.clone()),
             change: Some(f.seed.clone()),
-            walk: None,
+            // It opens on its first change, and steps from change to change.
+            walk: match (&one, &drawn) {
+                (Some(m), Some((laid, _))) => changes_walk(
+                    m,
+                    laid,
+                    &flow_steps,
+                    (&title, found.and_then(|x| x.get("steps"))),
+                    &linker,
+                ),
+                _ => None,
+            },
         });
-        // What the model explained about it, and the workflow before and after, each walked through on its side.
-        let found = finding(changed.findings, &f.seed);
+        // What the model explained about it; its words on each change are on the walk's steps.
         let mut explained = String::new();
         if let Some(x) = found {
             let _ = write!(
@@ -605,59 +640,25 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
                 with_code(x["explanation"].as_str().unwrap_or("")),
                 escape_text(&recorded(x))
             );
-            let wf = &x["workflow"];
-            let wf_title = wf["title"].as_str().unwrap_or("The workflow");
-            let mut plays = Vec::new();
-            for (which, drawn, graph) in
-                [("before", &before, changed.before), ("after", &now, after)]
-            {
-                let steps = wf[which].as_array().map_or(&[][..], Vec::as_slice);
-                let Some((pic, laid, svg)) = drawn.as_ref().filter(|_| !steps.is_empty()) else {
-                    continue;
-                };
-                let walk_addr = format!("{addr}/{which}");
-                plays.push(format!(
-                    r#"<a class="link" href="{}" data-test="workflow-{which}">▶ {which} · {} {}</a>"#,
-                    href(&walk_addr),
-                    steps.len(),
-                    if steps.len() == 1 { "step" } else { "steps" }
-                ));
-                pictures.push(ChangePicture {
-                    addr: walk_addr.clone(),
-                    title: format!("{wf_title} · {which}"),
-                    crumbs: vec![
-                        (pair.clone(), addr.clone()),
-                        (format!("{wf_title} · {which}"), walk_addr),
-                    ],
-                    svg: svg.clone(),
-                    change: None,
-                    walk: Some(workflow_walk(
-                        graph,
-                        pic,
-                        laid,
-                        (wf_title, which),
-                        steps,
-                        &linker,
-                    )),
-                });
-            }
-            if !plays.is_empty() {
-                let _ = write!(
-                    explained,
-                    r#"<h4>{}</h4><p data-test="workflow">{}</p>"#,
-                    escape_text(wf_title),
-                    plays.join(" · ")
-                );
-            }
         }
         // Its details, shown with its picture.
         let mut d = format!(
-            r#"<h2>{}</h2><div class="meta">{} · from <code>{}</code> to <code>{}</code>{uncertain}</div><p>Left, the flow before; right, after. What it now goes through is marked green, what it no longer does red and dashed.</p>{explained}"#,
+            r#"<h2>{}</h2><div class="meta">{} · from <code>{}</code> to <code>{}</code>{uncertain}</div><p>{}</p>{explained}"#,
             escape_text(&title),
             how(f),
             escape_text(a),
-            escape_text(b)
+            escape_text(b),
+            match sort.kind {
+                FlowKind::Path =>
+                    "The flow before and after in one picture: what is new is green, what is gone red and dashed, a part whose code changed amber; what stayed the same is faded.",
+                FlowKind::Code =>
+                    "The path is the same before and after: the parts in amber changed in their code; the rest stayed the same and is faded.",
+                FlowKind::Words =>
+                    "The path and the code are the same before and after: only words or tags changed, so the picture marks nothing.",
+            }
         );
+        let code_ids: Vec<String> = sort.code.iter().map(|p| p.to_string()).collect();
+        let word_ids: Vec<String> = sort.words.iter().map(|p| p.to_string()).collect();
         for (head, ids, graph, linked) in [
             ("Now goes through", &f.parts_added, after, true),
             (
@@ -666,7 +667,8 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
                 changed.before,
                 false,
             ),
-            ("The changed parts on it", &f.through, after, true),
+            ("Changed in their code", &code_ids, after, true),
+            ("Only their words or tags changed", &word_ids, after, true),
         ] {
             if !ids.is_empty() {
                 let _ = write!(d, "<h4>{head}</h4>{}", parts_list(graph, ids, linked));
@@ -675,7 +677,16 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         d.push_str(r#"<p><a class="link" data-changes-list>← All changes</a></p>"#);
         details.insert(f.seed.clone(), Value::String(linker.link(&d, None)));
     }
+    let [path_items, code_items, word_items] = items;
+    list.push_str(&path_items);
+    list.push_str(&code_items);
     list.push_str("</ul>");
+    if !word_items.is_empty() {
+        let _ = write!(
+            list,
+            r#"<h4>Only words or tags changed</h4><ul class="changes-list" data-test="changes-words">{word_items}</ul>"#
+        );
+    }
     if !c.graph.moved.is_empty() {
         list.push_str(r#"<h4>Moved and renamed</h4><ul class="moved" data-test="moved">"#);
         for m in &c.graph.moved {
@@ -742,57 +753,125 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
 
-    /// docair-zrr.17: the two versions are laid out as one, so every part both have is in the same
-    /// place on both sides; a part only the new version has leaves its room empty in the old one.
-    #[test]
-    fn a_part_that_stayed_keeps_its_place() {
+    use super::*;
+    use docair_core::change_steps::{flow_picture, marks, merged, steps};
+
+    fn shop() -> Graph {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../e2e/fixtures/shop");
-        let after = docair_core::scan(
+        docair_core::scan(
             &root,
             docair_adapters::all(),
             &docair_core::Options::default(),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    /// The shop without its line from `orders.create` to `orders-db`, and the change of its order's flow.
+    fn a_new_line() -> (Graph, Graph, FlowChange) {
+        let after = shop();
         let mut before = after.clone();
-        before
+        let at = before
             .edges
-            .retain(|e| !(e.from == "orders.create" && e.to == "orders-db"));
-        let (a, b) = (
-            version_slice(&before, "data.order").unwrap(),
-            version_slice(&after, "data.order").unwrap(),
-        );
-        let has = |v: &VersionSlice, id: &str| v.input.parts.iter().any(|p| p.id == id);
-        assert!(
-            has(&b, "orders-db") && !has(&a, "orders-db"),
-            "only B writes the order"
-        );
-        let (la, lb) = lay_out_pair(Some(&a), Some(&b), None);
-        let (la, lb) = (la.unwrap(), lb.unwrap());
-        let place = |v: &VersionSlice, l: &Layout, id: &str| {
-            let i = v.input.parts.iter().position(|p| p.id == id).unwrap();
-            l.placement.parts[i]
+            .iter()
+            .position(|e| e.from == "orders.create" && e.to == "orders-db")
+            .unwrap();
+        let line = before.edges.remove(at).id;
+        let f = FlowChange {
+            seed: "data.order".into(),
+            how: "changed".into(),
+            parts_added: vec!["orders-db".into()],
+            parts_removed: vec![],
+            lines_added: vec![line],
+            lines_removed: vec![],
+            through: vec![],
+            certain: true,
         };
-        let mut both = 0;
-        for p in &a.input.parts {
-            if has(&b, &p.id) {
-                both += 1;
-                assert_eq!(
-                    place(&a, &la, &p.id),
-                    place(&b, &lb, &p.id),
-                    "{} stays",
-                    p.id
-                );
-            }
-        }
-        assert!(both >= 3, "the flow's other parts are on both sides");
-        assert_eq!(
-            (la.placement.width, la.placement.height),
-            (lb.placement.width, lb.placement.height),
-            "both sides are the same size"
+        (before, after, f)
+    }
+
+    /// docair-zrr.18, zrr.19, 8l6.12: the one picture is drawn with its marks and tags and opens as a
+    /// walk over its one change; the model's words on that step, by its id, show over docair's.
+    #[test]
+    fn a_change_is_drawn_and_walked_with_its_words() {
+        let (before, after, f) = a_new_line();
+        let (pa, pb) = (
+            flow_picture(&before, "data.order").unwrap(),
+            flow_picture(&after, "data.order").unwrap(),
         );
-        assert_eq!(la.routes.lines.len(), a.input.lines.len());
-        assert_eq!(lb.routes.lines.len(), b.input.lines.len());
+        let m = merged(Some((&before, &pa)), Some((&after, &pb)), &HashMap::new()).unwrap();
+        let marked = marks(&m, &f, &HashSet::new());
+        let (laid, svg) = draw_one(&m, &marked, None);
+        assert!(
+            svg.starts_with(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" class="docair-pic changes""#
+            )
+        );
+        assert!(svg.contains(r#"ch-added" data-id="orders-db""#), "{svg}");
+        assert!(
+            svg.matches(r#" ch-same" data-id"#).count() >= 3,
+            "what stayed is faded"
+        );
+        let linker = crate::page_glossary::Linker::new(&after);
+        let flow_steps = steps(&m, &f, &marked);
+        let walk = changes_walk(&m, &laid, &flow_steps, ("Datum order", None), &linker).unwrap();
+        let st = &walk["steps"].as_array().unwrap()[0];
+        assert_eq!(walk["steps"].as_array().unwrap().len(), 1);
+        assert_eq!(st["id"], "data.order#path:orders-db");
+        let card = st["card"].as_str().unwrap();
+        assert!(
+            card.contains("change 1 of 1") && card.contains("Now goes through"),
+            "{card}"
+        );
+        assert!(
+            st["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "orders-db")
+        );
+        assert!(st["camera"].is_array());
+        // The model's words on that step, kept by its id.
+        let words = json!({ "data.order#path:orders-db": "The order is now kept in `orders-db`." });
+        let walk = changes_walk(
+            &m,
+            &laid,
+            &flow_steps,
+            ("Datum order", Some(&words)),
+            &linker,
+        )
+        .unwrap();
+        let card = walk["steps"][0]["card"].as_str().unwrap();
+        assert!(
+            card.contains(r#"data-test="step-words""#) && card.contains("is now kept in"),
+            "{card}"
+        );
+        assert!(
+            card.contains("Now goes through"),
+            "docair's words stay under the model's"
+        );
+    }
+
+    /// docair-zrr.22: the drawing's classes and tags for what docair-core marked.
+    #[test]
+    fn classes_say_new_gone_and_code() {
+        let mut m = FlowMarks::default();
+        for (id, mark) in [
+            ("a", PartMark::Added),
+            ("r", PartMark::Removed),
+            ("c", PartMark::Code),
+            ("s", PartMark::Same),
+        ] {
+            m.parts.insert(id.into(), mark);
+        }
+        m.lines.insert("x -call-> y".into(), LineMark::Removed);
+        let c = classes(&m);
+        assert_eq!((c.parts["a"], c.tags["a"]), ("ch-added", "new"));
+        assert_eq!((c.parts["r"], c.tags["r"]), ("ch-removed", "gone"));
+        assert_eq!((c.parts["c"], c.tags["c"]), ("ch-changed", "code"));
+        assert_eq!(c.parts["s"], "ch-same");
+        assert!(!c.tags.contains_key("s"));
+        assert_eq!(c.lines["x -call-> y"], "ch-removed");
     }
 }

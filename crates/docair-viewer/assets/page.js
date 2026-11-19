@@ -66,8 +66,7 @@ async function show(addr, keepView = false) {
   if (run !== S.run) return;
   const view = S.view;
   $('#pic').innerHTML = text;
-  S.svg = $('#pic > svg');
-  S.addr = addr;
+  [S.svg, S.addr] = [$('#pic > svg'), addr];
   // The legend explains what this picture holds, and no more.
   for (const r of document.querySelectorAll('#legend .row')) r.hidden = !S.svg.querySelector(r.dataset.in);
   for (const g of document.querySelectorAll('#legend .group')) g.hidden = !g.querySelector('.row:not([hidden])');
@@ -93,7 +92,7 @@ async function show(addr, keepView = false) {
     mark(S.selected);
     if (left && !W) details(S.selected);
   } else if (W || left) details(null);
-  if (p.change && !part) panel(P.flowChanges[p.change]);
+  if (p.change && !part) details(null);
   else if (addr.startsWith('box/') && !part && !W) details((S.selected = addr.slice(4)));
 }
 
@@ -391,8 +390,18 @@ function wireChat() {
   document.addEventListener('click', async (ev) => {
     if (ev.target.closest('[data-tidy-open], #btn-tidy')) fetch(`${base}/api/tidy`).then((r) => r.json()).then((t) => Object.assign($('#details [data-test="tidy-diff"]') || {}, { textContent: t.patch || '', hidden: !t.patch })).catch(() => {});
     if (ev.target.closest('[data-test="tidy-patch"]')) download((await (await fetch(`${base}/api/tidy`)).json()).patch || '', 'docair-tidy.patch');
+    // Explaining is a job on the server: the button says how far it is; done, the page was written again (docair-8l6.11).
     const explain = ev.target.closest('[data-test="explain"]');
-    if (explain) ((explain.disabled = true), post('/api/explain', { a: explain.dataset.a, b: explain.dataset.b || undefined }).then(() => location.reload(), (err) => toast(err.message)));
+    if (explain) {
+      explain.disabled = true;
+      let job = await post('/api/explain', { a: explain.dataset.a, b: explain.dataset.b || undefined }).catch((err) => ({ error: err.message }));
+      for (; job.running; job = await fetch(`${base}/api/explain/${job.job}`).then((r) => r.json()).catch((err) => ({ error: err.message }))) {
+        explain.textContent = job.text;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      [explain.textContent, explain.disabled] = [job.text || job.error || '', job.phase === 'done'];
+      if (job.phase === 'done') location.reload();
+    }
     const one = ev.target.closest('[data-tidy-one]');
     if (!one && !ev.target.closest('[data-test="tidy-apply"]')) return;
     const tags = (one ? [one] : [...document.querySelectorAll('#details .tidy-tag input:checked')]).map((x) => ({ node: x.dataset.node, tag: x.dataset.tag }));
@@ -469,7 +478,9 @@ function select(id, close) {
 /** The details panel: a walk's step card on top, then the selected part's details; the walks to start when there is neither. */
 function details(id) {
   const card = W ? W.steps[W.k].card : '';
-  $('#details').innerHTML = card || id ? card + (id ? P.details[id] || '' : '') : EMPTY;
+  // A change's picture keeps its flow's changes under the step's card (docair-zrr.22).
+  const more = id ? P.details[id] || '' : P.flowChanges?.[IX.pictures[S.addr]?.change] || '';
+  $('#details').innerHTML = card || more ? card + more : EMPTY;
   hideLinks();
 }
 
@@ -512,7 +523,8 @@ function goStep(k) {
     l.classList.toggle('flow-active', on);
     l.classList.toggle('flow-trail', was);
     l.classList.toggle('flow-dim', !on && !was);
-    S.svg.querySelector(`.words[data-line="${l.dataset.id}"]`)?.classList.toggle('flow-dim', !on && !was);
+    const w = S.svg.querySelector(`.words[data-line="${l.dataset.id}"]`);
+    w?.classList.toggle('flow-dim', !on && !was), w?.classList.toggle('flow-on', on);
   }
   details(S.selected && cur.has(S.selected) ? S.selected : null);
   if (st.camera) frame(st.camera, true);
@@ -580,7 +592,7 @@ async function tokens(st, run) {
 function pickLine(l) {
   mark(null);
   S.selected = null;
-  l.classList.add('sel');
+  l.classList.add('sel'), S.svg.querySelector(`.words[data-line="${l.dataset.id}"]`)?.classList.add('sel');
   const box = $('#details');
   box.innerHTML = W ? W.steps[W.k].card : '';
   const head = document.createElement('h2');
@@ -657,7 +669,7 @@ function mark(id) {
   // The picked part is never dimmed: not by the search, not by a walk.
   g.classList.add('sel');
   g.classList.remove('dim');
-  for (const l of S.svg.querySelectorAll('.line')) if (l.dataset.from === id || l.dataset.to === id) l.classList.add('hl');
+  for (const l of S.svg.querySelectorAll('.line')) if (l.dataset.from === id || l.dataset.to === id) l.classList.add('hl'), S.svg.querySelector(`.words[data-line="${l.dataset.id}"]`)?.classList.add('hl');
   return g;
 }
 
@@ -680,9 +692,11 @@ function fit() {
 }
 
 function setView(v) {
-  S.view = v;
-  S.fitted = false;
+  [S.view, S.fitted] = [v, false];
   S.svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
+  // Words that sit on other lines show once the zoom makes them readable (svg.rs data-z).
+  const px = Math.min(S.svg.clientWidth / v.w, S.svg.clientHeight / v.h);
+  for (const w of S.svg.querySelectorAll('.words[data-z]')) w.classList.toggle('far', px < +w.dataset.z);
 }
 
 /** A point on the screen in the picture's units. */

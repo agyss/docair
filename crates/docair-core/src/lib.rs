@@ -24,6 +24,10 @@ pub mod config;
  ***/
 pub mod changes;
 /***
+ * The steps of a change: a changed flow before and after as one picture, its marks, and its changes in steps with stable ids, for the page's walk and the model's words.
+ ***/
+pub mod change_steps;
+/***
  * How much of what authors wrote the code confirms: `docair check --coverage`.
  ***/
 pub mod coverage;

@@ -316,11 +316,13 @@ fn line_words(g: &GraphLookup, l: &LayerLine) -> String {
         None => what,
     };
     let what = clip(&what, LABEL_MAX);
-    if l.via.is_empty() {
+    let all = if l.via.is_empty() {
         what
     } else {
         format!("{what} · via {}", via_words(g, &l.via))
-    }
+    };
+    // At most two lines in the picture; the whole words stay in the line's tip (docair-702.34).
+    docair_layout::text::cut(&all, docair_layout::text::WORDS_COLUMNS, 2)
 }
 
 /// The size of a part of a kind, for its words.

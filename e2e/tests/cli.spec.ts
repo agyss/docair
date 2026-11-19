@@ -131,6 +131,7 @@ test.describe('the CLI', () => {
    * @part-of e2e.cli
    * @covers  docair-cli.diff.cmd_explain "checks the findings are kept and the comment written"
    * @covers  docair-ai.explain.explain "checks only the changed flows go to the model, bound"
+   * @covers  docair-server.project.explain_job "checks a served page's explain runs as a job and ends with its findings"
    * @covers  docair-cli.diff.cmd_diff "checks the flows two commits change"
    ***/
   test('docair explain explains the changed flows and keeps the findings', async ({ page, request }) => {
@@ -160,6 +161,10 @@ test.describe('the CLI', () => {
     const found = JSON.parse(fs.readFileSync(path.join(store, file), 'utf8'));
     expect(found.schema).toBe('docair.explained/0');
     expect(found.flows.find((f: any) => f.seed === 'flow:checkout').recorded.by).toBe('model');
+    // The model's words on each change step, by docair's step id (docair-8l6.12).
+    const stepIds = Object.keys(found.flows.find((f: any) => f.seed === 'flow:checkout').steps ?? {});
+    expect(stepIds.length).toBeGreaterThan(0);
+    expect(stepIds.every((id) => id.startsWith('flow:checkout#'))).toBe(true);
     // What the model got: the changed flows only, never the whole graph.
     const sent = (await (await request.get(`${fakeAi}/requests`)).json()) as any[];
     const mine = sent.filter((r) => r.messages[0].content.startsWith('You explain changes') && r.messages[1].content.includes('orders.audit'));
@@ -175,20 +180,31 @@ test.describe('the CLI', () => {
     expect(again).toContain('Audited by hand');
     const sentAgain = (await (await request.get(`${fakeAi}/requests`)).json()) as any[];
     expect(sentAgain.filter((r) => r.messages[0].content.startsWith('You explain changes') && r.messages[1].content.includes('orders.audit')).length).toBe(before);
-    // The same from a served page: docair serve on the repository explains through POST /api/explain.
+    // The same from a served page: docair serve on the repository explains as a job (docair-8l6.11).
     const served = await serveFolder(shop, ['--changes', 'HEAD~1']);
     const html = fs.readFileSync(path.join(shop, '.docair', 'docair.html'), 'utf8');
     expect(html).toContain('Δ Changes · ');
-    const res = await request.post(`${served.url}/api/explain`, { data: { a: 'HEAD~1', b: 'HEAD' } });
-    expect(res.status()).toBe(200);
-    const answer = await res.json();
+    // POST answers a job at once; GET /api/explain/<job> says how far it is, and at the end holds the findings.
+    const explainJob = async (data: object) => {
+      const res = await request.post(`${served.url}/api/explain`, { data });
+      expect(res.status()).toBe(202);
+      let job = await res.json();
+      expect(job.text).toBeTruthy();
+      for (let i = 0; i < 200 && job.running; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        job = await (await request.get(`${served.url}/api/explain/${job.job}`)).json();
+      }
+      expect(job.phase, job.text).toBe('done');
+      return job;
+    };
+    const answer = (await explainJob({ a: 'HEAD~1', b: 'HEAD' })).findings;
     expect(answer.flows.find((f: any) => f.seed === 'flow:checkout').explanation).toContain('Audited by hand');
     // The working tree as B, the page's own pair: the model explains it, and the page is written again with the findings.
     const version = async () => (await (await request.get(`${served.url}/api/version`)).json()).version;
     const was = await version();
-    const work = await request.post(`${served.url}/api/explain`, { data: { a: 'HEAD~1' } });
-    expect(work.status()).toBe(200);
-    expect((await work.json()).flows.find((f: any) => f.seed === 'flow:checkout').explanation).toContain('so this flow goes another way');
+    const work = await explainJob({ a: 'HEAD~1' });
+    expect(work.text).toMatch(/^Explained \d+ of \d+ flows? in \d+ requests? · /);
+    expect(work.findings.flows.find((f: any) => f.seed === 'flow:checkout').explanation).toContain('so this flow goes another way');
     expect(await version()).toBeGreaterThan(was);
     await page.goto(`${served.url}/#changes/flow:checkout`);
     await ready(page);

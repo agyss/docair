@@ -418,14 +418,14 @@ fn a_walk_is_one_picture_with_its_steps() {
     );
 }
 
-/// The page's script stays thin (docs/SLICES.md §7): its budget is 1,000 lines.
+/// The page's script stays thin (docs/SLICES.md §7): its budget is 1,050 lines (docair-702.37).
 #[test]
 fn the_script_stays_within_its_budget() {
     let script = include_str!("../assets/page.js");
     let lines = script.lines().count();
     assert!(
-        lines <= 1000,
-        "page.js has {lines} lines; its budget is 1,000"
+        lines <= 1050,
+        "page.js has {lines} lines; its budget is 1,050"
     );
     for library in ["cytoscape", "elk.", "dagre"] {
         assert!(
@@ -542,9 +542,9 @@ fn the_page_offers_to_tidy_the_tags_the_code_repeats() {
     );
 }
 
-/// The changes section (docs/CHANGES.md §7, docair-zrr.7): a changed flow is listed and opens as
-/// one still picture of its slice before and after, side by side, with what it now goes through
-/// marked; a move is listed apart.
+/// The changes section (docs/CHANGES.md §7 and §8, docair-zrr.7, zrr.18): a changed flow is listed
+/// and opens as one still picture of its slice before and after, with what it now goes through
+/// marked green, what stayed faded, a part that only moved not marked; a move is listed apart.
 #[test]
 fn a_changed_flow_shows_before_and_after() {
     use docair_core::changes::{Changes, FlowChange};
@@ -602,15 +602,23 @@ fn a_changed_flow_shows_before_and_after() {
             .as_str()
             .unwrap(),
     );
-    assert!(
-        svg.contains("Before · 01234567") && svg.contains("After · work"),
-        "each side says which version it is"
+    assert_eq!(
+        svg.matches("<svg ").count(),
+        1,
+        "before and after are one picture"
     );
-    assert_eq!(svg.matches("<svg ").count(), 3, "two sides in one picture");
+    assert!(svg.contains(r#"class="docair-pic changes""#));
     assert!(
-        svg.contains(r#"<g class="part k-store ch-added" data-id="orders-db">"#)
-            && svg.contains("ch-added\" data-id"),
+        svg.contains(r#"<g class="part k-store ch-added" data-id="orders-db">"#),
         "what the flow now goes through is marked"
+    );
+    assert!(
+        svg.contains(r#"ch-same" data-id="orders.create">"#),
+        "a part that only moved is not marked as changed inside"
+    );
+    assert!(
+        svg.matches(" ch-same\" data-id").count() >= 3,
+        "what stayed is faded"
     );
     let panels: Value = serde_json::from_str(&unpack(
         packed[ix["panels"].as_u64().unwrap() as usize]
@@ -632,13 +640,14 @@ fn a_changed_flow_shows_before_and_after() {
     );
 }
 
-/// Explained changes in the page (docs/EXPLAIN.md, docair-8l6.6): a flow's stored finding shows in
-/// its details, its workflow is walked through on each side, the model's links are listed, and the
-/// flows not explained yet are counted, with the command and, for docair serve, a button.
+/// Explained changes in the page (docs/EXPLAIN.md §8, docair-8l6.6, 8l6.12): a flow's stored finding
+/// shows in its details, the model's words on each change show on that change's step of the walk,
+/// by the step's id; the model's links are listed, and the flows not explained yet are counted, with
+/// the command and, for docair serve, a button.
 #[test]
-fn an_explained_change_shows_its_finding_and_workflow() {
+fn an_explained_change_shows_its_finding_and_step_words() {
     use docair_core::changes::{Changes, FlowChange};
-    use docair_core::diff::GraphDiff;
+    use docair_core::diff::{ChangedItem, GraphDiff};
     let after = graph("shop");
     let before = after.clone();
     let flow = |seed: &str| FlowChange {
@@ -656,10 +665,21 @@ fn an_explained_change_shows_its_finding_and_workflow() {
         a: "0123456789abcdef0123456789abcdef01234567".to_string(),
         b: "fedcba9876543210fedcba9876543210fedcba98".to_string(),
         working_tree: false,
-        graph: GraphDiff::default(),
+        graph: GraphDiff {
+            changed: vec![ChangedItem {
+                id: "orders.create".to_string(),
+                what: vec!["body".to_string()],
+            }],
+            ..GraphDiff::default()
+        },
         parts: vec!["orders.create".to_string()],
         flows: vec![flow("data.order"), flow("flow:checkout")],
     };
+    // The step the model's words are about, by the id docair gives it.
+    let steps =
+        docair_core::change_steps::change_steps(&before, &after, &changes, &changes.flows[0]);
+    assert_eq!(steps.len(), 1, "one change: the code of orders.create");
+    let step = steps[0].id.clone();
     let recorded = serde_json::json!({ "by": "model", "model": "fake-model", "at": "2026-11-19" });
     let findings = serde_json::json!({
         "schema": "docair.explained/0",
@@ -668,14 +688,7 @@ fn an_explained_change_shows_its_finding_and_workflow() {
         "flows": [{
             "seed": "data.order",
             "explanation": "The order is now stored before the cart hears back.",
-            "workflow": {
-                "title": "Buying",
-                "before": [{ "title": "The shopper fills the cart", "nodes": ["shop-ui.cart"] }],
-                "after": [
-                    { "title": "The shopper fills the cart", "nodes": ["shop-ui.cart"] },
-                    { "title": "The order is stored", "nodes": ["orders-db"] }
-                ]
-            },
+            "steps": { step.clone(): "Here `orders.create` now checks the cart before it stores it." },
             "recorded": recorded
         }],
         "problems": [], "left": [], "requests": 1
@@ -700,27 +713,25 @@ fn an_explained_change_shows_its_finding_and_workflow() {
         details.contains("is now stored before the")
             && details.contains(r#"data-term="order""#)
             && details.contains("by fake-model · 2026-11-19")
-            && details.contains(r##"href="#changes/data.order/after" data-test="workflow-after">▶ after · 2 steps</a>"##),
-        "the finding and its workflow show in the flow's details: {details}"
+            && !details.contains("workflow"),
+        "the finding shows in the flow's details: {details}"
     );
-    let p = &ix["pictures"]["changes/data.order/after"];
+    let p = &ix["pictures"]["changes/data.order"];
     assert!(
         p["walk"] == true && p["still"] == true,
-        "each side of the workflow is walked through, and not moved by hand"
+        "the change is walked through, and not moved by hand"
     );
     let walks = unpacked("walks");
-    let steps = walks["changes/data.order/after"]["steps"]
-        .as_array()
-        .unwrap();
-    assert_eq!(steps.len(), 2);
+    let steps = walks["changes/data.order"]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    let card = steps[0]["card"].as_str().unwrap();
+    assert_eq!(steps[0]["id"], Value::from(step));
     assert!(
-        steps[1]["parts"]
-            .as_array()
-            .unwrap()
-            .contains(&Value::from("orders-db"))
-            && steps[1]["camera"].is_array()
-            && steps[1]["card"].as_str().unwrap().contains("step 2 of 2"),
-        "a step lights its parts, frames them and says what the user does"
+        card.contains(r#"data-test="step-words""#)
+            && card.contains("before it stores it")
+            && card.contains("Code changed in")
+            && steps[0]["camera"].is_array(),
+        "the model's words on the change, over docair's, framed: {card}"
     );
     let list = panels["changes"].as_str().unwrap();
     assert!(

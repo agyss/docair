@@ -7,7 +7,7 @@ pub mod ask;
 pub mod client;
 pub mod config;
 /***
- * The AI explains what two commits change: links, explanations and workflows, bound against both graphs (docs/EXPLAIN.md).
+ * The AI explains what two commits change: links, explanations and words on each change step, bound against both graphs (docs/EXPLAIN.md).
  ***/
 pub mod explain;
 /***

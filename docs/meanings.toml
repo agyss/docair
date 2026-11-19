@@ -57,6 +57,10 @@ why = "everyday word here: the verb, or half of 'view change'; the components na
 term = false
 why = "Plain word: different from before; the page's Changed (docair-viewer.doc_page), what changed between two versions, is named after it."
 
+["change steps"]
+from = "docair-core.change_steps"
+why = "the module that works out a changed flow's steps; its ChangeStep is one of them"
+
 [check]
 term = false
 why = "everyday verb, as in the examples; the command and stage of the same name need no entry"
@@ -495,8 +499,8 @@ term = false
 why = "Plain word: a comparison of two versions, as git uses it; docair-core.diff and docair-cli.diff are named after it."
 
 [workflow]
-from = "docair-ai.explain.workflow"
-why = "Project word: what a user does along a changed flow, before and after (docs/EXPLAIN.md); the Workflow part defines it."
+term = false
+why = "Plain word: what a user does, step by step. docair's findings no longer hold workflows; the AI words each change step instead (docs/EXPLAIN.md §8)."
 
 ["graph diff"]
 from = "docair-core.diff.graph-diff"
@@ -509,3 +513,7 @@ why = "Plain verb; docair explain and docair-ai.explain are named after it."
 [commits]
 from = "docair-server.commits"
 why = "Project word: two commits of a project compared, their graphs read from git worktrees (docs/CHANGES.md); docair-server.commits defines it."
+
+["explain job"]
+from = "docair-server.project.explain-job"
+why = "Project word: one run of explaining a pair of commits on the server, followed through GET /api/explain/<job> (docs/EXPLAIN.md §8); docair-server.project.explain-job is what it answers, explain-jobs keeps them."

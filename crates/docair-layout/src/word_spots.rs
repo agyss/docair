@@ -14,6 +14,9 @@ struct Area {
     y2: f64,
 }
 
+/// What words on another line's piece cost: as much as covering 20 px² of a part.
+const LINE_PRICE: f64 = 60.0;
+
 fn overlap(b: &Area, t: &Area) -> f64 {
     (b.x2.min(t.x2) - b.x1.max(t.x1)).max(0.0) * (b.y2.min(t.y2) - b.y1.max(t.y1)).max(0.0)
 }
@@ -88,7 +91,7 @@ pub(crate) fn place_words(input: &Input, placed: &Placement, routes: &Routes) ->
             let reach = (len / 2.0 - half).max(0.0);
             let mut d = 0.0;
             let mut count = 0;
-            while d <= reach && count < 15 {
+            while d <= reach && count < 30 {
                 let ts: Vec<f64> = if d > 0.0 {
                     vec![len / 2.0 + d, len / 2.0 - d]
                 } else {
@@ -108,7 +111,7 @@ pub(crate) fn place_words(input: &Input, placed: &Placement, routes: &Routes) ->
                         beside.push((c.0 + w / 2.0 + 3.0, c.1));
                     }
                 }
-                d += 20.0;
+                d += 10.0;
                 count += 1;
             }
         }
@@ -156,7 +159,13 @@ pub(crate) fn place_words(input: &Input, placed: &Placement, routes: &Routes) ->
                     .iter()
                     .map(|t| 2.0 * overlap(&bx, t))
                     .sum::<f64>()
-                + near_pieces.iter().map(|t| overlap(&bx, t)).sum::<f64>()
+                // Each line the words would sit on costs the same, however it crosses them:
+                // fewer lines covered beats a smaller overlap (docair-irq).
+                + near_pieces
+                    .iter()
+                    .filter(|t| overlap(&bx, t) > 0.0)
+                    .count() as f64
+                    * LINE_PRICE
         };
         let mut at: Option<(f64, f64)> = None;
         let mut least = f64::INFINITY;
@@ -187,7 +196,7 @@ pub fn words_size(font: &crate::Monospace, text: &str) -> Option<(f64, f64)> {
     if columns(text) == 0 {
         return None;
     }
-    let lines = wrap(text, 28);
+    let lines = wrap(text, crate::text::WORDS_COLUMNS);
     let w = lines
         .iter()
         .map(|l| font.width(l, 11.0).ceil())

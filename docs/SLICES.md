@@ -225,7 +225,7 @@ moves them says why, `DOCAIR_BLESS=1` rewrites them.
 | send questions to `docair serve` and show the answer | |
 | move a part the reader drags, and draw the lines docair-layout routed again for it | |
 
-Its budget is 1,000 lines, checked by a test.
+Its budget is 1,050 lines, checked by a test (1,000 until docair-702.37: showing an explanation's progress needed the room).
 
 **Moving a part by hand** (docair-9qv). The page carries docair-layout's move
 of a part built to WebAssembly (`crates/docair-layout-wasm`, about 90 kB

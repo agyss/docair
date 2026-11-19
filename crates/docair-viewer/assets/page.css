@@ -72,11 +72,33 @@ a.seg { color: inherit; text-decoration: none; display: inline-block; }
 /* What needs docair serve shows once a server answers. */
 body[data-served="true"] [data-served][hidden] { display: inline-block; }
 /* Changes (docs/CHANGES.md §7): a flow before and after, side by side; what it gained green, what it lost red and dashed. */
-.docair-pic .side-title { font-size: 18px; font-weight: 650; fill: var(--text); }
 .docair-pic .side-missing rect { fill: none; stroke: var(--muted); stroke-dasharray: 6 4; }
 .docair-pic .side-missing text { fill: var(--muted); font-size: 14px; text-anchor: middle; dominant-baseline: middle; }
+/* What a change did (docs/CHANGES.md §8, docair-zrr.22): parts filled, outlined, and tagged new, gone or code; lines outlined as before. */
+:root { --ch-added-bg: #dafbe1; --ch-removed-bg: #ffebe9; --ch-changed-bg: #fff8c5; }
+@media (prefers-color-scheme: dark) { :root { --ch-added-bg: #173b23; --ch-removed-bg: #4a1a1d; --ch-changed-bg: #3d3108; } }
 .docair-pic .ch-added > .sh, .docair-pic .ch-added > .ln { stroke: #1a7f37; stroke-width: 3; }
 .docair-pic .ch-removed > .sh, .docair-pic .ch-removed > .ln { stroke: #cf222e; stroke-width: 3; stroke-dasharray: 6 4; }
+.docair-pic .ch-changed > .sh { stroke: #bf8700; stroke-width: 2; }
+.docair-pic .ch-changed > .ln { stroke: #bf8700; stroke-width: 3; }
+.docair-pic .part.ch-added > .sh { fill: var(--ch-added-bg); }
+.docair-pic .part.ch-removed > .sh { fill: var(--ch-removed-bg); }
+.docair-pic .part.ch-changed > .sh { fill: var(--ch-changed-bg); }
+/* An open box whose own block changed: its outline and its name, not its whole inside. */
+.docair-pic .box.ch-changed > .sh { stroke-width: 2.5; }
+.docair-pic .box.ch-changed > .bn { fill: #9a6700; font-weight: 650; }
+.docair-pic .ch-same { opacity: 0.3; }
+.docair-pic .ch-tag rect { stroke-width: 1; }
+.docair-pic .ch-tag text { font-weight: 650; fill: #fff; }
+.docair-pic .ch-tag-new rect { fill: #1a7f37; stroke: #1a7f37; }
+.docair-pic .ch-tag-gone rect { fill: #cf222e; stroke: #cf222e; }
+.docair-pic .ch-tag-code rect { fill: #bf8700; stroke: #bf8700; }
 #details .changes-list li { margin: 6px 0; }
 .badge.ch-new { color: #1a7f37; }
 .badge.ch-gone { color: #cf222e; }
+/* A line's words that sit on other lines wait until the zoom makes them readable (docair-702.35); those of the selected part's lines, a picked line and a walk's step show anyway. */
+.docair-pic .words.crowded.far:not(.hl):not(.sel):not(.flow-on) { visibility: hidden; }
+/* A change in a walk's step keeps its own colours; the step only widens its outline (docair-zrr.22). */
+#pic .part.flow-current.ch-added > .sh { fill: var(--ch-added-bg); stroke: #1a7f37; stroke-width: 4.5; }
+#pic .part.flow-current.ch-removed > .sh { fill: var(--ch-removed-bg); stroke: #cf222e; stroke-width: 4.5; }
+#pic .part.flow-current.ch-changed > .sh { fill: var(--ch-changed-bg); stroke: #bf8700; stroke-width: 4; }

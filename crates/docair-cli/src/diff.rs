@@ -38,10 +38,10 @@ pub fn cmd_diff(
 }
 
 /***
- * `docair explain <A> [<B>]`: the changes of `docair diff`, explained by the AI: links, what each changed flow now does, and workflows before and after; kept in `[explain] store` (`docs/changes/<A>..<B>.json`), so the next run asks only about what is new and never about what a human wrote; a pull request comment on stdout (`--json`: the findings).
+ * `docair explain <A> [<B>]`: the changes of `docair diff`, explained by the AI: links, what each changed flow now does, and words on each of its change steps; kept in `[explain] store` (`docs/changes/<A>..<B>.json`), so the next run asks only about what is new and never about what a human wrote; a pull request comment on stdout (`--json`: the findings).
  *
  * @calls docair-server.commits.compare "compares the commits"
- * @calls docair-ai.explain.explain "explains the changed flows"
+ * @calls docair-ai.explain.explain_with "explains the changed flows, at most 3 requests at once"
  * @calls docair-ai.explain.comment "writes the comment"
  ***/
 pub fn cmd_explain(
@@ -67,13 +67,23 @@ pub fn cmd_explain(
     let max = settings
         .max_requests
         .unwrap_or(docair_ai::explain::MAX_REQUESTS);
-    let explained = docair_ai::explain::explain(
+    // Each answered request is said on stderr, so a long run shows it is working.
+    let said = std::sync::atomic::AtomicUsize::new(0);
+    let explained = docair_ai::explain::explain_with(
         &ai,
         &compared.a,
         &compared.b,
         &compared.changes,
         kept.as_ref(),
         max,
+        &|p| {
+            if p.answered > said.swap(p.answered, std::sync::atomic::Ordering::SeqCst) {
+                eprintln!(
+                    "docair explain: {} of {} requests answered",
+                    p.answered, p.requests
+                );
+            }
+        },
     )?;
     std::fs::create_dir_all(&store)?;
     std::fs::write(&file, serde_json::to_string_pretty(&explained)? + "\n")?;

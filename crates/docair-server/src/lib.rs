@@ -56,6 +56,8 @@ pub struct Config {
     pub uploads: Arc<project::KeptUploads>,
     /// More than one server pod: this pod's address and the name of all of them (docs/SLICES.md §8).
     pub peers: Option<peers::Peers>,
+    /// The explain jobs of the project it serves (docs/EXPLAIN.md §8).
+    pub explains: Arc<project::ExplainJobs>,
     asking: Arc<Semaphore>,
 }
 
@@ -69,6 +71,7 @@ impl Default for Config {
             project: None,
             uploads: Arc::default(),
             peers: None,
+            explains: Arc::default(),
             asking: Arc::new(Semaphore::new(ASKING_AT_ONCE)),
         }
     }
@@ -123,7 +126,8 @@ impl Config {
  * @calls   docair-server.project.apply (POST /api/apply) -> ServeApplied
  * @calls   docair-server.project.tidy_list (GET /api/tidy) -> ServeTidy
  * @calls   docair-server.project.tidy_apply (POST /api/tidy: tags) -> ServeApplied
- * @calls   docair-server.project.explain (POST /api/explain: a, b) -> ChangeFindings
+ * @calls   docair-server.project.explain (POST /api/explain: a, b) -> ExplainJob
+ * @calls   docair-server.project.explain_job (GET /api/explain/<job>) -> ExplainJob
  * @calls   docair-server.ask (POST /api/ask: question, graph, history) -> Reply
  * @calls   docair-server.patch (POST /api/patch: changes, files) -> PatchAnswer
  * @calls   docair-server.word (POST /api/word: graph, scope) -> Reply
@@ -148,7 +152,8 @@ pub fn router(config: Config) -> Router {
                 "/api/tidy",
                 get(project::tidy_list).post(project::tidy_apply),
             )
-            .route("/api/explain", post(project::explain));
+            .route("/api/explain", post(project::explain))
+            .route("/api/explain/{job}", get(project::explain_job));
     }
     let mut app = upload_router(config.clone()).merge(
         routes
@@ -202,6 +207,7 @@ fn project_routes(config: Config) -> Router {
             get(project::tidy_list).post(project::tidy_apply),
         )
         .route("/api/explain", post(project::explain))
+        .route("/api/explain/{job}", get(project::explain_job))
         .route("/api/ask", post(ask))
         .route("/api/word", post(word))
         .route("/api/glossary", post(glossary))

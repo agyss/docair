@@ -48,11 +48,11 @@ function reply(messages) {
     const input = JSON.parse(user.slice(user.indexOf('{')));
     const flows = (input.flows || []).map((f) => {
       const part = (f.changed || [])[0] || (f.parts_added || [])[0];
-      const added = (f.parts_added || [])[0];
       return {
         seed: f.seed,
         explanation: part ? `\`${part.id}\` changed, so this flow ${f.how === 'new' ? 'is new' : 'goes another way'}.` : 'This flow changed.',
-        ...(added ? { workflow: { title: `use ${f.seed}`, before: [], after: [{ title: `reaches ${added.name}`, nodes: [added.id] }] } } : {}),
+        // Words on each change step, by docair's step id (docair-8l6.12).
+        steps: Object.fromEntries((f.steps || []).map((s) => [s.id, `Here the flow ${s.added?.length ? 'now reaches ' + s.added.map((p) => '`' + p.id + '`').join(', ') : 'changed'}.`])),
       };
     });
     const removed = input['removed at A'] || [];

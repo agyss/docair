@@ -836,6 +836,27 @@ impl<'g> PanelGraph<'g> {
                 crate::svg::tf_swatch(),
                 "declared in Terraform (.tf)",
             ),
+            // A change between two versions (docs/CHANGES.md §8): only in the pictures that show one.
+            (
+                ".ch-added",
+                crate::svg::kind_swatch("function", " ch-added"),
+                "green: only after, what the change added",
+            ),
+            (
+                ".ch-removed",
+                crate::svg::kind_swatch("function", " ch-removed"),
+                "red and dashed: only before, what it removed",
+            ),
+            (
+                ".ch-changed",
+                crate::svg::kind_swatch("function", " ch-changed"),
+                "amber: in both, changed inside",
+            ),
+            (
+                ".ch-same",
+                crate::svg::kind_swatch("function", " ch-same"),
+                "faded: in both, as it was",
+            ),
         ];
         for (shows, mark, says) in forms {
             row(&mut out, shows, mark, says);

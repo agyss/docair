@@ -489,7 +489,7 @@ pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Cha
             walk_steps.insert(s.addr.clone(), steps.clone());
         }
     }
-    // An explained workflow is walked through like any walk, on its side of the change.
+    // A changed flow opens on a walk over its changes, walked like any walk (docair-zrr.22).
     for c in view.iter().flat_map(|v| &v.pictures) {
         if let Some(w) = &c.walk {
             walk_steps.insert(c.addr.clone(), w.clone());

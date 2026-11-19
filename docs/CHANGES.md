@@ -81,9 +81,8 @@ is a false alarm, and false alarms teach reviewers to stop reading.
   true when B is the working tree, not a commit, so asking about the pair
   again leaves B out.
 * **Markdown:** a short summary, one line per changed flow.
-* **The HTML:** a changes section. Each changed flow at A and at B side by
-  side; the parts that stayed keep their positions (SLICES.md §5, positions
-  from before).
+* **The HTML:** a changes section. Each changed flow as one picture of
+  before and after (§8).
 
 **Built** (docair-zrr.2 to zrr.6, zrr.8): `SourceRef.end`;
 `docair_core::diff` (`fingerprint`, `fingerprints`, `diff`);
@@ -94,11 +93,11 @@ takes 9 s with both graphs scanned. The changes section of the page
 `crates/docair-viewer/src/page_changes.rs`: the header's **Δ Changes · n**
 opens the list of changed flows (new, gone or changed, uncertain ones marked,
 the moves apart), and each flow opens at `#changes/<seed>` as one picture of
-its slice at A and at B side by side, drawn like any slice, what it now goes
-through marked green at B and what it no longer does red at A. Both versions are
-laid out as one picture (docair-zrr.17): a part both have is in the same
-place on both sides, and a part only one side has leaves its room empty on
-the other.
+its slice before and after (§8, docair-zrr.18), drawn like any slice. Both
+versions are laid out as one (docair-zrr.17), and since zrr.18 drawn once
+too: `merged` adds to B's graph and picture what only A has, A's moved parts
+under their ids at B; `marks_of` marks each part and line `ch-added`,
+`ch-removed`, `ch-changed` or `ch-same`; `draw_one` lays it out and draws it.
 `docair serve --changes <A>` serves the same page and writes it again with
 each change; the comparison is shared by the CLI and the server
 (`docair_server::commits`).
@@ -115,6 +114,8 @@ each change; the comparison is shared by the CLI and the server
 | 5 | docair-zrr.6 | changed parts and the slices through them, compared; JSON and Markdown |
 | 6 | docair-zrr.7 | the changes section in the HTML |
 | 7 | docair-zrr.8 | a fixture repository with two commits: a rename, a new step, a rerouted request, a changed Helm value |
+| 8 | docair-zrr.18 | one picture of before and after per changed flow (§8) |
+| 9 | docair-zrr.19, zrr.22 | the changes only: marks by kind, the list in order, and a walk over the changes, one step per change (§8) |
 
 Step 5 also needs the slices (docair-702.1), step 6 the generated HTML
 (docair-702.5).
@@ -129,3 +130,80 @@ Step 5 also needs the slices (docair-702.1), step 6 the generated HTML
 | 4 | code indexers (SCIP) are slow; two commits double it | the graph of a commit is kept in the cache folder under the commit, docair's version and the `docair.toml` (`graphs/<key>.json`); the code index is kept by its sources already |
 | 5 | how far a flow reaches from a changed part | the slices whose parts hold a changed part, from `slice::all`, compared by seed |
 | 6 | (new) the changes section in the HTML | a picture per changed flow at A and at B, drawn by docair like every slice; built in the page's files (the other session's), from the JSON this epic writes |
+
+## 8. One picture of before and after (docair-zrr.18, zrr.19, zrr.22)
+
+**Why.** On docair's own commit ba6ddf0, against the one before it (30
+changed flows, 251 parts added, 316 changed), the changes could not be
+found:
+
+| What the reader saw | Why |
+|---------------------|-----|
+| each flow twice, side by side | the eye compares two copies; in *ask* the change is two red boxes on the left and two green ones on the right |
+| *Datum graph*: 82 parts per side, words about 5 px high | the change drowns in the flow |
+| 7 of 30 flows *changed*, with no mark at all | only their parts' insides changed, and nothing draws that |
+
+**One picture.** Each changed flow is one picture: the union both versions
+are already laid out as (docair-zrr.17), drawn once.
+
+| A part or line … | is drawn |
+|------------------|----------|
+| only after (at B) | filled green, thick, tagged *new* |
+| only before (at A) | filled red, dashed, tagged *gone* |
+| in both, its code changed (`body`, `kind`, `route` or `part_of`) | filled light amber, tagged *code*; an open box whose own block changed gets an amber outline and name (docair-zrr.23) |
+| in both, only its words changed (`summary`, `tags`, `name`) | not marked; listed apart, as §2 says |
+| in both, unchanged | as usual, faded (opacity 0.3) |
+| moved or renamed (the same fingerprint) | once, under its name at B, not marked; its details say what it was called |
+
+Unchanged parts stay in the picture (docair-zrr.20), so the reader sees
+where in the system the change sits. A new flow is all green, a flow that is
+gone all red.
+
+Where the path differs, the lines before and the lines after leave the same
+part and meet at the same part again. The picture forks and rejoins by
+itself, because a shared part is drawn once:
+
+```
+            ┌ ─ ─ ► turn ─ ─ ► ask ─ ─ ─ ┐        red, dashed: only before
+cmd_ask ────┤                            ├──► chat
+            └────► explain ────► load ───┘        green: only after
+```
+
+**How it is built** (built, docair-zrr.18). `merged()` (`page_changes.rs`)
+gives one graph and one picture; first, A's ids of moved parts are replaced
+by B's (docair-zrr.21). The
+drawer gets a merged graph, B's plus A's own nodes and edges, for names and
+kinds, and marks with several classes at once (`ChangeMarks` in `svg.rs`):
+`ch-same`, `ch-changed`, `ch-removed`, `ch-added`. The legend says what
+before, after and changed inside look like.
+
+**The changes only (docair-zrr.19, zrr.22).** A changed flow opens on its
+changes, not on the whole flow: its picture is a walk over its changes
+(`changes_walk`, docair-zrr.24), one step per change, each step's camera on
+it at a size to read, its card (*change 2 of 5*, Back, Next) above the
+flow's details; Fit shows the whole flow. A new or gone flow has no walk:
+the whole picture is the change.
+
+| A step is … | Its card says |
+|-------------|---------------|
+| a stretch of the path: new and gone parts joined by new or gone lines, with the shared parts it forks off and rejoins at | *Now goes through `a` and `b`; no longer through `c`, at `x`* |
+| a line alone, new or gone, between two shared parts | *A new line `x` → `y`* |
+| the parts of one box whose code changed | *Code changed in `a` and `b` (in `box`)* |
+| an open box whose own block changed | *`browser` itself changed, not the parts drawn in it* |
+
+A shared part is only an end, never a joint: two changes that touch one
+shared part stay two steps. A gone stretch and a new stretch that share an
+end are one step, the fork. A stretch with more than 8 new or gone parts is
+told box by box; a card names at most 8 parts (docair-zrr.25). Path steps
+come first, then code steps, each in reading order.
+
+**The list** puts the flows whose path changed first, then *same path · 4
+parts changed in their code: …*, then, apart, the flows whose words or tags
+alone changed. A flow's details list *Now goes through*, *No longer goes
+through*, *Changed in their code* and *Only their words or tags changed*.
+
+On docair's own commit ba6ddf0 against the one before: every changed flow
+opens on its first change with its parts 24 to 47 px high (5 to 17 px
+before); *ask* opens on one step, *Now goes through `load` and
+`explain_with`; no longer through `turn` and `ask`*; *open* shows its one
+change, the box `browser`; *Datum graph* is 50 steps of at most 10 parts.
