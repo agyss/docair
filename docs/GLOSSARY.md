@@ -456,7 +456,9 @@ See: docair-core.review.intent
 
 What was meant, beside what changed: the commit messages between two
 versions, the changed Markdown docs, and the doc blocks whose words
-changed. The AI reads it to say why a change was made.
+changed. The AI reads it to say why a change was made. With it goes all
+of what changed, to read: each changed part's whole text before and
+after, comments with it, and the changed files that hold no part.
 
 ## other edit
 

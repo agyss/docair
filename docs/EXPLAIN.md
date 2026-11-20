@@ -225,25 +225,45 @@ and says which flows it touches. A changed part no flow goes through
 becomes a piece of its box, so nothing changed is missing. Each piece goes
 in a few words: its id, its kind, its new, gone and edited parts and its
 ends (id, kind, name, summary, signature), its new and gone lines, the
-flows it touches.
+flows it touches; and its parts' whole texts (below).
 
 **The intent** (docair-server `commits::intent`). The commit messages from A
 to B (subject and body; for the working tree as B, the commits up to `HEAD`
 and a note that the rest is not committed); the changed Markdown files, as
 their added and removed lines; the doc blocks whose words alone changed,
 their summary before and after. Each source has an id the AI cites:
-`commit:<short sha>`, `doc:<path>`, the part's id. Code goes as signatures
-and summaries, never as bodies (docair-8l6.29).
+`commit:<short sha>`, `doc:<path>`, `file:<path>`, the part's id.
+
+**All of what changed, to read** (docair-8l6.46, decision 8l6.47; it
+replaces 8l6.29, signatures and summaries only). Each new, gone and edited
+part's whole text, at A and at B: its source range with the doc block,
+comments and attributes right above it (docair-core `review::part_texts`),
+read from the commits with `git show`, or from the working tree. A piece
+carries its parts' texts as `source`: `{"<part>": {"before": …, "after":
+…}}`. The files that changed but hold no part (a stylesheet, a Dockerfile, a
+config) go as their changed lines, `files` (`commits::other_files`);
+Markdown goes as docs, and lock files, the beads export, the review store
+and binary files not at all. The model reads the texts to say what an edit
+does.
 
 | Input | Cut at |
 |-------|--------|
 | a commit message's body | 2,000 characters |
 | a Markdown file's changed lines | 2,000 characters |
 | all Markdown files together | 12,000 characters |
+| a part's text, one version | 4,000 characters |
+| a piece's texts together | 20,000 characters, then *n more parts not shown* |
+| a changed file no part holds | 2,000 characters; all together 10,000 |
 | a request, everything together | 60,000 characters (docair-8l6.8) |
 
 A review too big for one request is asked in parts, the pieces in their
-order, the intent with each part (docair-8l6.31).
+order, the intent with each part. Asked in more than one, the same change
+can come back from two parts, so a last small request gets every change by
+number, with its title, why and what its pieces do, and answers which are one:
+`{"same": [[1, 4]]}`. docair merges each group into its first change: the
+pieces in order, the sources and disagreements without repeats; a group that
+names no two changes, or one twice, is left apart and said
+(`explain::merge_same`, docair-8l6.48, decision 8l6.50, replacing 8l6.31).
 
 ### 9.3 What the AI gives back
 
@@ -289,6 +309,15 @@ then what docair put with it (docair-8l6.43). Its details say the same in the
 same order, then the flows it touches and who wrote it. Without findings the
 review says the AI makes it, with the command, and, served, a button.
 
+**Down to the code** (docair-8l6.49, decision 8l6.51). Each piece, on its
+card, in the details' *How* and among the other edits, has a fold, *The code
+· n parts*: each of its new, gone and edited parts, by id (a link to the
+part), with its file and line and its whole text as a line diff, the lines
+both versions keep, removed lines struck, added ones marked. These are the
+texts the AI read (`Changed::code`, `page_changes::piece_code`), so the page
+grows by the change's code, not by the code base's. A flow's change steps
+have the same fold.
+
 ### 9.6 `docair explain` and the comment
 
 `docair explain <A> [<B>]` asks, stores and prints the review: each change
@@ -302,11 +331,18 @@ Rust: the pieces of two flows that share one change are one piece; the
 intent of a two-commit repository (messages, a README section, a doc
 block's words); bind (unknown piece, unknown id, unknown source, a piece in
 two changes) and cover (other edits); the store asked again when it does not
-cover. The fake AI groups the path pieces into one change and leaves the
-code edits as other edits. e2e: a shop with two commits whose messages say
-what they do and a README section that changes; the review lists the
-change, opens it on its picture with Before and After and its explanation,
-lists other edits; no findings gives the notice.
+cover; a part's text holds its comments (`a_parts_text_holds_its_comments`);
+the intent holds a changed function's text before and after and a changed
+stylesheet's lines; a piece in the request carries its texts; changes that
+came back twice are merged, a bad group left apart
+(`changes_that_came_back_twice_are_merged`); a line diff; the page's fold
+with the diff, on the card and in the details. The fake AI groups the path
+pieces into one change and leaves the code edits as other edits. e2e: a shop
+with two commits whose messages say what they do and a README section that
+changes; the review lists the change, opens it on its picture with Before
+and After and its explanation, lists other edits with the cart's code, 100
+struck and 120 added, and the new step's code on its card; no findings gives
+the notice.
 
 ### 9.8 Built (docair-8l6.18 to 8l6.24)
 
@@ -340,3 +376,11 @@ pieces of a change; a change opened on its first piece under *This change*.
 On the same work (`02ffe98` to the working tree), asking for every piece
 in its change left 9 other edits of 46 pieces, and docair's module rule put
 5 of them with their change: 4 remain.
+
+**All of the code, and down to it** (docair-8l6.46 to 8l6.51). The model got
+each changed part's whole text: on the shop example, where it had said only
+that the cart's code changed, it now says the total is 120 cents an item
+instead of 100, and that the commit, which speaks of audits only, does not
+say so. On `fac7aa8` to `c1364fd` the input took two requests, and two of
+five changes came back twice; the merge request made them three changes, no
+other edits, in three requests.

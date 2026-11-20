@@ -444,6 +444,8 @@ pub struct Changed<'a> {
     pub changes: &'a docair_core::changes::Changes,
     /// The stored findings (`docair_ai::explain::ChangeFindings` as JSON), when there are any.
     pub findings: Option<&'a Value>,
+    /// Each changed part's whole text before and after, comments with it: the review's pieces show their code (docair-8l6.49).
+    pub code: &'a [docair_core::review::PartText],
 }
 
 /// As `render_page_keeping`, with the changes section when `changed` is given (`docair build

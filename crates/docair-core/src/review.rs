@@ -12,6 +12,14 @@ use crate::layer_view::{LayerPicture, slice_picture};
 use crate::model::Graph;
 use crate::slice::{SeedKind, Slice, SliceLine, SliceSeed};
 
+/// A changed part's text goes to the AI cut at this many characters a version (docair-8l6.47).
+pub const MAX_PART_TEXT: usize = 4_000;
+/// A piece's parts' texts go cut at this many characters together, then the rest is counted.
+pub const MAX_PIECE_TEXT: usize = 20_000;
+/// A changed file no part covers goes as its changed lines, cut at this many characters a file.
+pub const MAX_FILE: usize = 2_000;
+/// All such files together go cut at this many characters.
+pub const MAX_FILES: usize = 10_000;
 /// A commit message's body goes to the AI cut at this many characters (docs/EXPLAIN.md §9.2).
 pub const MAX_BODY: usize = 2_000;
 /// A Markdown file's changed lines go cut at this many characters.
@@ -256,7 +264,17 @@ pub struct WordsChange {
     pub after: String,
 }
 
-/// What was meant, beside what changed (docs/EXPLAIN.md §9.2): the commit messages, the changed docs, the doc blocks whose words changed.
+/// A changed part's whole text, its doc block and comments with it, before and after (docair-8l6.47): none at A for a new part, none at B for a gone one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartText {
+    pub part: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+/// What was meant, beside what changed (docs/EXPLAIN.md §9.2): the commit messages, the changed docs, the doc blocks whose words changed; and all of what changed, to read: each changed part's whole text, and the files no part covers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Intent {
     pub commits: Vec<CommitNote>,
@@ -265,6 +283,12 @@ pub struct Intent {
     pub uncommitted: bool,
     pub docs: Vec<DocChange>,
     pub words: Vec<WordsChange>,
+    /// Every new, gone and changed part's text before and after (docair-8l6.47).
+    #[serde(default)]
+    pub code: Vec<PartText>,
+    /// The files that changed but hold no part, as their changed lines: `file:<path>`.
+    #[serde(default)]
+    pub files: Vec<DocChange>,
 }
 
 impl Intent {
@@ -274,6 +298,7 @@ impl Intent {
             .iter()
             .map(|c| c.id.as_str())
             .chain(self.docs.iter().map(|d| d.id.as_str()))
+            .chain(self.files.iter().map(|d| d.id.as_str()))
             .collect()
     }
 }
@@ -288,6 +313,93 @@ pub fn cut(text: &str, max: usize) -> String {
         end -= 1;
     }
     format!("{}…", &text[..end])
+}
+
+/// Is this line a comment, a doc line or an attribute that belongs to the part below it?
+fn leads_into(line: &str) -> bool {
+    let t = line.trim_start();
+    [
+        "///", "//!", "//", "/*", "*", "#[", "#!", "@", "<!--", "-->", "#",
+    ]
+    .iter()
+    .any(|k| t.starts_with(k))
+}
+
+/***
+ * A part's whole text in a file (docair-8l6.47): its source range, from its doc block (or its first line) to its last, with the comments, doc lines and attributes right above it; none without a known end.
+ ***/
+pub fn part_text(text: &str, node: &crate::model::Node) -> Option<String> {
+    let src = node.source.as_ref()?;
+    let end = src.end?;
+    let lines: Vec<&str> = text.lines().collect();
+    if src.line == 0 || end > lines.len() || end < src.line {
+        return None;
+    }
+    let mut start = src.line - 1;
+    while start > 0
+        && src.line - start < 40
+        && leads_into(lines[start - 1])
+        && !lines[start - 1].trim().is_empty()
+    {
+        start -= 1;
+    }
+    Some(lines[start..end].join("\n"))
+}
+
+/***
+ * Every new, gone and changed part's text before and after (docair-8l6.47), the files read with `read_a` and `read_b` (a path relative to the project → its text at A, at B): a gone part at A only, a new part at B only, a moved one under its id at B with its text at A; each version cut at `MAX_PART_TEXT`.
+ ***/
+pub fn part_texts(
+    a: &Graph,
+    b: &Graph,
+    changes: &Changes,
+    read_a: &dyn Fn(&str) -> Option<String>,
+    read_b: &dyn Fn(&str) -> Option<String>,
+) -> Vec<PartText> {
+    let g = &changes.graph;
+    let back: HashMap<&str, &str> = g
+        .moved
+        .iter()
+        .map(|m| (m.to.as_str(), m.from.as_str()))
+        .collect();
+    let mut files_a: HashMap<String, Option<String>> = HashMap::new();
+    let mut files_b: HashMap<String, Option<String>> = HashMap::new();
+    let at = |graph: &Graph,
+              id: &str,
+              files: &mut HashMap<String, Option<String>>,
+              read: &dyn Fn(&str) -> Option<String>| {
+        let n = graph.nodes.iter().find(|n| n.id == id)?;
+        let file = n.source.as_ref()?.file.clone();
+        let text = files.entry(file.clone()).or_insert_with(|| read(&file));
+        text.as_deref()
+            .and_then(|t| part_text(t, n))
+            .map(|t| cut(&t, MAX_PART_TEXT))
+    };
+    let mut ids: Vec<&str> = g
+        .added
+        .iter()
+        .chain(&g.removed)
+        .chain(g.changed.iter().map(|c| &c.id))
+        .chain(g.moved.iter().map(|m| &m.to))
+        .map(String::as_str)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let system = [a.system.as_str(), b.system.as_str()];
+    let mut out = Vec::new();
+    for id in ids.into_iter().filter(|id| !system.contains(id)) {
+        let old = back.get(id).copied().unwrap_or(id);
+        let before = at(a, old, &mut files_a, read_a);
+        let after = at(b, id, &mut files_b, read_b);
+        if before.is_some() || after.is_some() {
+            out.push(PartText {
+                part: id.to_string(),
+                before,
+                after,
+            });
+        }
+    }
+    out
 }
 
 /// The doc blocks whose words alone changed (`summary`, `tags`, `name`; docair-zrr.23): each part with its summary at A and at B.
@@ -505,6 +617,28 @@ mod tests {
         assert!(all.contains(&"orders.list".to_string()), "{ps:#?}");
         assert!(all.contains(&"shop-ui.cart.total".to_string()), "{ps:#?}");
         assert!(ps.iter().all(|p| p.flows.is_empty()));
+    }
+
+    /// docair-8l6.47: a part's whole text: its range and the comments, doc lines and attributes
+    /// right above it, not the blank line or the code before those.
+    #[test]
+    fn a_parts_text_holds_its_comments() {
+        let text = "fn other() {}\n\n/// Total the cart.\n/// In cents.\n#[inline]\npub fn total() -> u32 {\n    // every item costs 100\n    1 * 100\n}\nfn after() {}\n";
+        let mut n: crate::model::Node = serde_json::from_value(serde_json::json!({
+            "id": "x.total", "kind": "function", "name": "total", "summary": "", "description": "",
+            "source": { "file": "src/lib.rs", "line": 6, "end": 9 }, "docs": [], "tags": [], "origin": "discovered"
+        }))
+        .unwrap();
+        let t = part_text(text, &n).unwrap();
+        assert!(
+            t.starts_with("/// Total the cart.")
+                && t.contains("#[inline]")
+                && t.contains("// every item costs 100"),
+            "{t}"
+        );
+        assert!(!t.contains("fn other") && !t.contains("fn after"), "{t}");
+        n.source.as_mut().unwrap().end = None;
+        assert_eq!(part_text(text, &n), None, "no end, no text");
     }
 
     /// docair-8l6.19: the words of a doc block that changed, before and after.

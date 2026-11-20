@@ -583,3 +583,13 @@ code.node-ref:hover, code.node-ref:focus-visible { background: var(--accent-soft
 .open-step { margin: 2px 0 6px; border-color: var(--flow); color: var(--flow); }
 .card-back { font-size: 12px; margin: 4px 0 0; }
 .hop-inside { font-size: 12px; color: var(--muted); margin: 4px 0 0 6px; }
+/* Down to the code: a piece's parts, their text before and after as a line diff (docair-8l6.49). */
+.piece-code { margin: 6px 0 2px; font-size: 12px; }
+.piece-code > summary { cursor: pointer; color: var(--muted); }
+.code-part { margin: 6px 0 0; }
+.code-head { margin-bottom: 2px; }
+.code-diff { margin: 0; padding: 4px 0; max-height: 420px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; font-family: var(--mono); font-size: 11.5px; line-height: 1.4; white-space: pre; }
+.code-diff > span { display: block; padding: 0 6px; min-width: max-content; }
+.code-diff > .add { background: var(--ch-added-bg, #dafbe1); }
+.code-diff > .del { background: var(--ch-removed-bg, #ffebe9); text-decoration: line-through; text-decoration-color: rgba(127, 127, 127, .5); }
+.code-diff > .same { color: var(--muted); }

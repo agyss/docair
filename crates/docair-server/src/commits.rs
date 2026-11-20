@@ -227,6 +227,22 @@ fn compare_inner(
     );
     let mut intent = intent(&top, &range, &prefix)?;
     intent.words = docair_core::review::words_changed(&at_a.graph, &at_b.graph, &changes);
+    // All of what changed, to read (docair-8l6.47): each changed part's whole text at A and at B,
+    // and the files that changed but hold no part.
+    let at_commit =
+        |sha: &str, path: &str| git(&top, &["show", &format!("{sha}:{prefix}{path}")]).ok();
+    let read_b = |path: &str| match range.get(1) {
+        Some(sha_b) => at_commit(sha_b, path),
+        None => std::fs::read_to_string(root.join(path)).ok(),
+    };
+    intent.code = docair_core::review::part_texts(
+        &at_a.graph,
+        &at_b.graph,
+        &changes,
+        &|path| at_commit(&sha_a, path),
+        &read_b,
+    );
+    intent.files = other_files(&top, &range, &prefix, (&at_a.graph, &at_b.graph))?;
     Ok(CommitPair {
         root,
         a: at_a.graph,
@@ -316,7 +332,82 @@ pub fn intent(top: &Path, range: &[String], prefix: &str) -> Result<docair_core:
         uncommitted: range.len() == 1,
         docs,
         words: Vec::new(),
+        code: Vec::new(),
+        files: Vec::new(),
     })
+}
+
+/// Files of the change the AI reads as lines, never: the docs go as docs, the rest is not the system's own text.
+fn not_for_the_ai(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".lock")
+        || lower.ends_with("package-lock.json")
+        || lower.ends_with(".jsonl")
+        || lower.starts_with("docs/changes/")
+        || [
+            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".wasm", ".pdf", ".woff", ".woff2",
+        ]
+        .iter()
+        .any(|e| lower.ends_with(e))
+}
+
+/***
+ * The files that changed between two commits (or a commit and the working tree) and hold no part in either graph (docair-8l6.47): a stylesheet, a Dockerfile, a config; as their added and removed lines, `file:<path>`, cut at `MAX_FILE` a file and `MAX_FILES` together. Markdown goes as docs; lock files, the beads export, the review store and binary files not at all.
+ ***/
+pub fn other_files(
+    top: &Path,
+    range: &[String],
+    prefix: &str,
+    (a, b): (&Graph, &Graph),
+) -> Result<Vec<docair_core::review::DocChange>> {
+    use docair_core::review::{DocChange, MAX_FILE, MAX_FILES, cut};
+    let held: std::collections::HashSet<&str> = a
+        .nodes
+        .iter()
+        .chain(&b.nodes)
+        .filter_map(|n| n.source.as_ref().map(|s| s.file.as_str()))
+        .collect();
+    let scope = if prefix.is_empty() {
+        ".".to_string()
+    } else {
+        prefix.to_string()
+    };
+    let mut args: Vec<&str> = vec!["diff", "--name-only", "--no-color"];
+    args.extend(range.iter().map(String::as_str));
+    args.extend(["--", scope.as_str()]);
+    let names = git(top, &args)?;
+    let mut out = Vec::new();
+    let mut room = MAX_FILES;
+    for path in names.lines().map(str::trim).filter(|p| !p.is_empty()) {
+        let rel = path.strip_prefix(prefix).unwrap_or(path);
+        if held.contains(rel) || not_for_the_ai(rel) || room == 0 {
+            continue;
+        }
+        let mut args: Vec<&str> = vec!["diff", "-U0", "--no-color", "--no-ext-diff"];
+        args.extend(range.iter().map(String::as_str));
+        args.extend(["--", path]);
+        let unified = git(top, &args)?;
+        let lines: Vec<&str> = unified
+            .lines()
+            .filter(|l| {
+                (l.starts_with('+') || l.starts_with('-'))
+                    && !l.starts_with("+++")
+                    && !l.starts_with("---")
+            })
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+        let text = cut(&cut(&lines.join("\n"), MAX_FILE), room);
+        room = room.saturating_sub(text.len());
+        out.push(DocChange {
+            id: format!("file:{rel}"),
+            path: rel.to_string(),
+            lines: text,
+        });
+    }
+    Ok(out)
 }
 
 /// Where `docair explain` keeps the findings for this pair: in `[explain] store` (default `docs/changes`), `<key>.json`.
@@ -342,6 +433,7 @@ pub fn changes_page(pair: &CommitPair) -> String {
         before: &pair.a,
         changes: &pair.changes,
         findings: findings.as_ref(),
+        code: &pair.intent.code,
     };
     docair_viewer::doc_page::render_page_with(
         &pair.b,
@@ -380,6 +472,7 @@ mod tests {
         };
         w("docair.toml", "system = \"shop\"\n");
         w("README.md", "# shop\n\nThe shop sells things.\n");
+        w("ui/style.css", "body { color: black; }\n");
         let lib = |summary: &str| {
             format!("/***\n * {summary}\n *\n * @id shop.buy\n ***/\npub fn buy() {{}}\n")
         };
@@ -392,6 +485,7 @@ mod tests {
             "# shop\n\nThe shop sells things.\n\nEvery order is audited.\n",
         );
         w("src/lib.rs", &lib("Buy the cart, and audit the order."));
+        w("ui/style.css", "body { color: red; }\n");
         run(
             dir.path(),
             &[
@@ -428,6 +522,42 @@ mod tests {
             i.words
         );
         assert!(i.sources().contains("doc:README.md"));
+        // docair-8l6.47: the changed part's whole text before and after, its doc block with it;
+        // the changed file that holds no part, as its lines.
+        let buy = i
+            .code
+            .iter()
+            .find(|t| t.part == "shop.buy")
+            .expect("shop.buy changed");
+        let (before, after) = (
+            buy.before.as_deref().unwrap(),
+            buy.after.as_deref().unwrap(),
+        );
+        assert!(
+            before.contains("Buy the cart.") && before.contains("pub fn buy()"),
+            "{before}"
+        );
+        assert!(
+            after.contains("audit the order") && after.contains("pub fn buy()"),
+            "{after}"
+        );
+        let css = i
+            .files
+            .iter()
+            .find(|f| f.path == "ui/style.css")
+            .expect("the stylesheet changed");
+        assert_eq!(css.id, "file:ui/style.css");
+        assert!(
+            css.lines.contains("+body { color: red; }")
+                && css.lines.contains("-body { color: black; }"),
+            "{}",
+            css.lines
+        );
+        assert!(
+            i.files.iter().all(|f| !f.path.ends_with(".md")),
+            "Markdown goes as docs"
+        );
+        assert!(i.sources().contains("file:ui/style.css"));
         // The working tree as B: the commits up to HEAD, and what is not committed said.
         let work = compare(dir.path(), "HEAD~1", None, false).unwrap();
         assert!(work.intent.uncommitted && work.intent.commits.len() == 1);

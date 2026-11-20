@@ -225,8 +225,8 @@ why = "everyday word for what a step is given; meanings::Input and docair-layout
 
 [intent]
 from = "docair-core.review.intent"
-checked = "3913838c"
-why = "the review's word for what was meant beside what changed: the commit messages, the changed docs, the doc blocks whose words changed (docs/EXPLAIN.md §9.2)"
+checked = "314dbf2b"
+why = "the review's word for what was meant beside what changed: the commit messages, the changed docs, the doc blocks whose words changed (docs/EXPLAIN.md §9.2); with it the changed parts' whole texts and the changed files no part holds (docair-8l6.47)"
 
 [item]
 from = "docair-lang-rust.item"

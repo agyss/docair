@@ -95,6 +95,7 @@ test.describe('what changed since a commit', () => {
    * @part-of e2e.changes
    * @covers  docair-viewer.page_changes.review_view "checks the review's change opens on its picture with its why and other edits"
    * @covers  docair-viewer.page_changes.changes_walk "checks the model's words show on the change's piece"
+   * @covers  docair-viewer.page_changes.piece_code "checks a piece's code shows, before and after"
    ***/
   test('a reviewed change opens on its own picture, with why and other edits', async ({ page }) => {
     test.skip(!withFakeAi, 'needs the fake model');
@@ -116,6 +117,13 @@ test.describe('what changed since a commit', () => {
       return !!f && !!o && !!(f.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING) && !o.hasAttribute('open');
     });
     expect(flowsFirst).toBe(true);
+    // Down to the code (docair-8l6.49): the cart's edit, its whole text before and after, folded.
+    await page.getByTestId('other-edits-box').locator('summary').first().click();
+    const cartCode = page.getByTestId('other-edits').getByTestId('piece-code').filter({ hasText: 'shop-ui.cart.total' }).first();
+    await cartCode.locator('summary').click();
+    await expect(cartCode).toContainText('ui/src/cart.ts');
+    await expect(cartCode.locator('.code-diff .del', { hasText: '* 100' })).toHaveCount(1);
+    await expect(cartCode.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
     await page.getByTestId('review-change').first().click();
     await expect(page).toHaveURL(/#review\/1$/);
     // It opens on what was done and why, headed by the change's title (docair-8l6.43) ...
@@ -127,6 +135,11 @@ test.describe('what changed since a commit', () => {
     await expect(page.getByTestId('step-card')).toContainText('How · 1 of 2');
     await expect(page.getByTestId('step-words')).toContainText('now reaches');
     await expect(page.getByTestId('route-after')).toContainText('audit');
+    // The new step's code on its card: the whole function with its doc block, all of it new.
+    const auditCode = page.getByTestId('step-card').getByTestId('piece-code');
+    await auditCode.locator('summary').click();
+    await expect(auditCode.locator('.code-diff .add', { hasText: 'Keep an audit entry of the order.' })).toBeVisible();
+    await expect(auditCode.locator('.code-diff .add', { hasText: 'pub fn audit()' })).toHaveCount(1);
     await expect(page.locator('#pic g.part.flow-current[data-id="orders.audit"]')).toHaveCount(1);
     await expect(page.locator('#details > [data-test="review-why"], #details h2 ~ [data-test="review-why"]').first()).toContainText('The commit says: Audit every order.');
     await expect(page.locator('[data-test="review-sources"]').first()).toContainText('doc:README.md');

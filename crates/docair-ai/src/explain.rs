@@ -5,14 +5,14 @@
 //! against the two graphs, the pieces and the sources: what names nothing is dropped and said, and
 //! every piece no change holds is an other edit.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use docair_core::changes::Changes;
 use docair_core::model::Graph;
-use docair_core::review::{Intent, Piece};
+use docair_core::review::{Intent, PartText, Piece};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -40,7 +40,7 @@ pub struct ExplainProgress {
     pub left: usize,
 }
 
-const REVIEW_PROMPT: &str = r#"You help a reviewer understand what changed between two versions of a software system. You get: the pieces of the change that docair found, each with an id (new, gone and edited parts and lines, the parts where it forks off and rejoins, the flows it touches); the commit messages between the versions; the changed Markdown docs; and the doc blocks whose words changed. Group the pieces into changes. A change is one difference in what the app does: behaviour added, removed or adjusted, with every piece that works together for it. Make each change easy to understand for someone who does not know the code. Answer as JSON:
+const REVIEW_PROMPT: &str = r#"You help a reviewer understand what changed between two versions of a software system. You get: the pieces of the change that docair found, each with an id (new, gone and edited parts and lines, their whole text before and after, the parts where it forks off and rejoins, the flows it touches); the commit messages between the versions; the changed Markdown docs; the doc blocks whose words changed; and the changed files that hold no part. Group the pieces into changes. A change is one difference in what the app does: behaviour added, removed or adjusted, with every piece that works together for it. Make each change easy to understand for someone who does not know the code. Answer as JSON:
 {"changes": [{"title": "<what the app does differently: one plain sentence, from the user's side>",
               "how": [{"piece": "<a piece id, as given>", "words": "<one plain sentence: what this piece does for the change>"}],
               "why": "<why it was done, from the commit messages and the docs: one or two plain sentences>",
@@ -51,8 +51,12 @@ const REVIEW_PROMPT: &str = r#"You help a reviewer understand what changed betwe
 "how": the change's pieces in the order they work together; each piece in one change at most. Put every piece into the change it is part of, also the small ones (a new type, a constant, an edited helper); leave a piece out only when it belongs to no change.
 "links": a part removed at A that is the same as a part added at B (renamed and changed); only from "removed at A" and "added at B", and only when sure.
 "sources": the ids only there, never in the title, the why or the words.
-For a piece whose code changed you see only that it changed, not how: do not say what the edit does unless a commit message, a doc or a summary you were given says it; then say where you have it from.
+A piece's "source" gives each of its parts' whole text, comments and doc block with it: "before" at the version before, "after" at the version after. Read them: say what an edit does from what its text shows, and why from the commits and docs. Where a text is cut (…) or not shown, say only what you can see. "files" are changed files that hold no part (a stylesheet, a config), as their changed lines; put them into the change they belong to by naming them in its sources.
 Name parts by their ids in backticks. Name only ids you were given. Make as many changes as there are."#;
+
+const MERGE_PROMPT: &str = r#"You get the changes a review of two versions of a software system found, each by number: its title, why, and what its pieces do. The review was asked in parts, so the same change may have come back more than once, from different parts. Answer as JSON:
+{"same": [[<number>, <number>]]}
+Each group: the numbers of changes that are one and the same difference in what the app does. A number in one group at most. Leave out every change that stands on its own; when unsure, leave them apart."#;
 
 /// Who wrote a finding, with what and when.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,8 +153,8 @@ fn part_line(g: &Graph, id: &str) -> String {
     }
 }
 
-/// A piece for the model, compact (docair-8l6.34): its id and kind, its new and gone parts in a line each (at most 12), its edited parts by id (at most 16), its ends (8) and box by id, its lines with + or - (12), and up to four flows it touches.
-fn piece_json(a: &Graph, b: &Graph, p: &Piece) -> Value {
+/// A piece for the model (docair-8l6.34, 8l6.47): its id and kind, its new and gone parts in a line each (at most 12), its edited parts by id (at most 16), its ends (8) and box by id, its lines with + or - (12), up to four flows it touches, and its parts' whole texts before and after.
+fn piece_json(a: &Graph, b: &Graph, p: &Piece, texts: &HashMap<&str, &PartText>) -> Value {
     let s = &p.step;
     let lines = |g: &Graph, ids: &[String]| ids.iter().map(|x| part_line(g, x)).collect::<Vec<_>>();
     let mut out = json!({ "id": s.id, "kind": format!("{:?}", s.kind).to_lowercase() });
@@ -191,6 +195,37 @@ fn piece_json(a: &Graph, b: &Graph, p: &Piece) -> Value {
     if let Some(x) = &s.in_box {
         out["in"] = json!(x);
     }
+    // Its parts' whole texts before and after, comments with them, so the model can read what
+    // changed (docair-8l6.47); at most MAX_PIECE_TEXT a piece, then how many more.
+    let mut room = docair_core::review::MAX_PIECE_TEXT;
+    let mut source = serde_json::Map::new();
+    let mut more = 0;
+    for id in s.added.iter().chain(&s.removed).chain(&s.code) {
+        let Some(t) = texts.get(id.as_str()) else {
+            continue;
+        };
+        let size =
+            t.before.as_ref().map_or(0, String::len) + t.after.as_ref().map_or(0, String::len);
+        if size > room {
+            more += 1;
+            continue;
+        }
+        room -= size;
+        let mut v = serde_json::Map::new();
+        if let Some(x) = &t.before {
+            v.insert("before".into(), json!(x));
+        }
+        if let Some(x) = &t.after {
+            v.insert("after".into(), json!(x));
+        }
+        source.insert(id.clone(), Value::Object(v));
+    }
+    if !source.is_empty() {
+        out["source"] = Value::Object(source);
+    }
+    if more > 0 {
+        out["source not shown"] = json!(format!("{more} more parts, too long for this request"));
+    }
     out
 }
 
@@ -207,13 +242,16 @@ pub fn digest(
     intent: &Intent,
     with_unlinked: bool,
 ) -> String {
+    let texts: HashMap<&str, &PartText> =
+        intent.code.iter().map(|t| (t.part.as_str(), t)).collect();
     let mut out = json!({
         "system": b.system,
         "from": changes.a, "to": changes.b,
-        "pieces": pieces.iter().map(|p| piece_json(a, b, p)).collect::<Vec<_>>(),
+        "pieces": pieces.iter().map(|p| piece_json(a, b, p, &texts)).collect::<Vec<_>>(),
         "commits": intent.commits,
         "docs": intent.docs,
         "words changed": intent.words,
+        "files": intent.files,
     });
     if intent.uncommitted {
         out["not committed"] =
@@ -470,13 +508,14 @@ pub fn bind(
 }
 
 /***
- * Review the changes (docs/EXPLAIN.md §9): the pieces no stored change or other edit holds go to the model with the intent, in requests of at most `MAX_CHARS` (the pieces in their order, the intent with each; docair-8l6.31), at most `max_requests` of them and at most `AT_ONCE` at a time; the answers are bound in the requests' order and joined with what the store had. A change a human wrote is kept and its pieces are not asked about; a store of another schema is asked again. A request that fails leaves its pieces; when none answers, the error is returned.
+ * Review the changes (docs/EXPLAIN.md §9): the pieces no stored change or other edit holds go to the model with the intent, in requests of at most `MAX_CHARS` (the pieces in their order, the intent with each; docair-8l6.31), at most `max_requests` of them and at most `AT_ONCE` at a time; the answers are bound in the requests' order; asked in more than one, a last request says which changes are one, and they are merged (docair-8l6.50); then joined with what the store had. A change a human wrote is kept and its pieces are not asked about; a store of another schema is asked again. A request that fails leaves its pieces; when none answers, the error is returned.
  *
  * @id    docair-ai.explain.explain
  * @calls docair-core.review.pieces "the pieces of the whole change"
  * @calls docair-ai.explain.digest "sends the pieces and the intent"
  * @calls docair-ai.client.chat_with (the pieces, the commit messages, the changed docs; not reasoning first) -> changes, links
  * @calls docair-ai.explain.bind "keeps only what binds"
+ * @calls docair-ai.explain.merge_same "merges what came back more than once"
  ***/
 pub fn explain(
     cfg: &AiConfig,
@@ -625,6 +664,9 @@ pub fn explain_with(
     answers.sort_by_key(|(k, _)| *k);
     let mut failed: Option<anyhow::Error> = None;
     let mut read = 0;
+    // The changes this run made, from which request each: asked in parts, one may come back twice.
+    let fresh = out.changes.len();
+    let mut from: HashSet<usize> = HashSet::new();
     for (k, reply) in answers {
         let batch = &batches[k];
         let content = match reply {
@@ -654,13 +696,47 @@ pub fn explain_with(
                 out.links.push(l);
             }
         }
+        if !found.is_empty() {
+            from.insert(k);
+        }
         out.changes.extend(found);
         out.problems.extend(problems);
+    }
+    // Asked in parts: one more request says which changes are one (docair-8l6.50).
+    let mut merged = 0;
+    if from.len() > 1 {
+        {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.requests += 1;
+            p.started += 1;
+            on(&p);
+        }
+        let messages = [
+            Message::system(MERGE_PROMPT),
+            Message::user(merge_digest(&out.changes[fresh..])),
+        ];
+        let reply = chat_with(cfg, &messages, true, false).map(|r| r.content);
+        {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.answered += 1;
+            on(&p);
+        }
+        merged = 1;
+        match reply.ok().as_deref().and_then(reply_json) {
+            Some(v) => {
+                let mut mine = out.changes.split_off(fresh);
+                out.problems.extend(merge_same(&mut mine, &v));
+                out.changes.extend(mine);
+            }
+            None => out.problems.push(
+                "the request that merges repeated changes failed; a change may show twice".into(),
+            ),
+        }
     }
     for batch in &batches[sent..] {
         out.left.extend(batch.iter().map(|p| p.id().to_string()));
     }
-    out.requests = sent;
+    out.requests = sent + merged;
     if read == 0
         && let Some(e) = failed
     {
@@ -679,6 +755,93 @@ pub fn explain_with(
         out.other = k.other.clone();
     }
     Ok(out)
+}
+
+/// The changes for the merge request (docair-8l6.50): each by number, from 1, with its title, why and what its pieces do (at most 8).
+fn merge_digest(changes: &[ReviewChange]) -> String {
+    let list: Vec<Value> = changes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            json!({
+                "number": i + 1,
+                "title": c.title,
+                "why": c.why,
+                "pieces do": c.how.iter().take(8).map(|h| h.words.as_str()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&json!({ "changes": list })).unwrap_or_default()
+}
+
+/***
+ * Merge what the model says is one change (docair-8l6.50): `{"same": [[1, 4], …]}`, numbers from 1 into `changes`. Each group goes into its first change: the pieces in order without repeats, the sources and disagreements without repeats, the first title, why and check that are not empty. A group that names no change, only one, or a change already in another group is left out and said. Returns what was left out.
+ ***/
+pub fn merge_same(changes: &mut Vec<ReviewChange>, answer: &Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for g in answer["same"].as_array().into_iter().flatten() {
+        let nums: Vec<Option<usize>> = g
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|n| n.as_u64().map(|n| n as usize))
+            .collect();
+        let mut group: Vec<usize> = Vec::new();
+        for n in nums.iter().flatten() {
+            if !group.contains(n) {
+                group.push(*n);
+            }
+        }
+        let fine = nums.iter().all(Option::is_some)
+            && group.len() >= 2
+            && group
+                .iter()
+                .all(|n| (1..=changes.len()).contains(n) && !used.contains(n));
+        if !fine {
+            problems.push(format!("the model's merge {g} names no two changes of this review, or one twice; left apart"));
+            continue;
+        }
+        used.extend(group.iter().copied());
+        groups.push(group.into_iter().map(|n| n - 1).collect());
+    }
+    let mut gone: HashSet<usize> = HashSet::new();
+    for group in &groups {
+        let (first, rest) = (group[0], &group[1..]);
+        for &i in rest {
+            let other = changes[i].clone();
+            let into = &mut changes[first];
+            for h in other.how {
+                if !into.how.iter().any(|x| x.piece == h.piece) {
+                    into.how.push(h);
+                }
+            }
+            for x in other.sources {
+                if !into.sources.contains(&x) {
+                    into.sources.push(x);
+                }
+            }
+            for x in other.disagrees {
+                if !into.disagrees.contains(&x) {
+                    into.disagrees.push(x);
+                }
+            }
+            if into.why.is_empty() {
+                into.why = other.why;
+            }
+            if into.check.is_empty() {
+                into.check = other.check;
+            }
+            gone.insert(i);
+        }
+    }
+    let mut i = 0;
+    changes.retain(|_| {
+        i += 1;
+        !gone.contains(&(i - 1))
+    });
+    problems
 }
 
 /// A piece in a few words, for a reader: its new, gone and edited parts by name.
@@ -864,6 +1027,8 @@ mod tests {
                 lines: "+The API stores the order.".into(),
             }],
             words: vec![],
+            code: vec![],
+            files: vec![],
         };
         (before, after, changes, intent)
     }
@@ -897,6 +1062,37 @@ mod tests {
                 && sent.contains("commit:abc1234")
                 && sent.contains("doc:README.md")
         );
+        // docair-8l6.47: a piece carries its parts' whole texts, before and after; files as lines.
+        let mut with_text = intent.clone();
+        with_text.code.push(docair_core::review::PartText {
+            part: "shop-ui.cart.total".into(),
+            before: Some("/// Total of the cart.\ntotal() { return n * 100; }".into()),
+            after: Some("/// Total of the cart.\ntotal() { return n * 120; }".into()),
+        });
+        with_text.files.push(DocChange {
+            id: "file:ui/style.css".into(),
+            path: "ui/style.css".into(),
+            lines: "+body { color: red; }".into(),
+        });
+        let sent = digest(&changes, &before, &after, &refs, &with_text, true);
+        let v: Value = serde_json::from_str(&sent).unwrap();
+        let piece = v["pieces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == code.id())
+            .unwrap();
+        assert_eq!(
+            piece["source"]["shop-ui.cart.total"]["after"],
+            "/// Total of the cart.\ntotal() { return n * 120; }"
+        );
+        assert!(
+            piece["source"]["shop-ui.cart.total"]["before"]
+                .as_str()
+                .unwrap()
+                .contains("n * 100")
+        );
+        assert_eq!(v["files"][0]["id"], "file:ui/style.css");
         let reply = json!({ "changes": [
             { "title": "A placed order is now kept in the orders table.",
               "how": [ { "piece": write.id(), "words": "`orders.create` now writes the order to `orders-db`." },
@@ -963,6 +1159,58 @@ mod tests {
 
     /// docair-8l6.21: a store that covers every piece is not asked again; one of another schema, or
     /// one that misses a piece, is; a human's change is kept and its pieces are not asked about.
+    /// docair-8l6.50: what the model says is one change is merged into the first; a bad group is
+    /// left apart and said.
+    #[test]
+    fn changes_that_came_back_twice_are_merged() {
+        let c = |title: &str, why: &str, pieces: &[&str], sources: &[&str]| ReviewChange {
+            title: title.into(),
+            how: pieces
+                .iter()
+                .map(|p| HowStep {
+                    piece: p.to_string(),
+                    words: format!("does {p}"),
+                })
+                .collect(),
+            why: why.into(),
+            sources: sources.iter().map(|x| x.to_string()).collect(),
+            check: String::new(),
+            disagrees: vec![],
+            recorded: rec(),
+        };
+        let mut changes = vec![
+            c("Orders are audited", "", &["p1", "p2"], &["commit:a"]),
+            c("The cart costs more", "a price change", &["p3"], &[]),
+            c(
+                "Every order gets an audit entry",
+                "auditors asked",
+                &["p2", "p4"],
+                &["doc:README.md", "commit:a"],
+            ),
+        ];
+        let sent = merge_digest(&changes);
+        assert!(
+            sent.contains("\"number\": 3") && sent.contains("does p4"),
+            "{sent}"
+        );
+        let problems = merge_same(&mut changes, &json!({"same": [[1, 3], [2, 9], [3, 2]]}));
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        let audit = &changes[0];
+        assert_eq!(audit.title, "Orders are audited");
+        assert_eq!(audit.pieces().collect::<Vec<_>>(), ["p1", "p2", "p4"]);
+        assert_eq!(audit.sources, ["commit:a", "doc:README.md"]);
+        assert_eq!(
+            audit.why, "auditors asked",
+            "the first why that is not empty"
+        );
+        assert_eq!(changes[1].title, "The cart costs more");
+        assert_eq!(
+            problems.len(),
+            2,
+            "9 is no change; 3 is already merged: {problems:?}"
+        );
+    }
+
     #[test]
     fn the_store_is_asked_again_only_when_it_does_not_cover() {
         let (before, after, changes, intent) = two_changes();

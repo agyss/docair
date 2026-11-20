@@ -585,6 +585,7 @@ fn a_changed_flow_shows_before_and_after() {
         before: &before,
         changes: &changes,
         findings: None,
+        code: &[],
     };
     let page = docair_viewer::doc_page::render_page_with(&after, None, Some(&changed));
     assert!(page.contains(r#"data-test="changes-button""#) && page.contains("Δ Changes · 1"));
@@ -695,11 +696,21 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
         }],
         "problems": [], "left": [], "requests": 1
     });
+    // docair-8l6.49: the changed part's whole text before and after, to get down to the code.
+    let code = vec![docair_core::review::PartText {
+        part: "orders.create".to_string(),
+        before: Some("/// Place an order.\npub fn create() {\n    store();\n}".to_string()),
+        after: Some(
+            "/// Place an order.\npub fn create() {\n    check_cart();\n    store();\n}"
+                .to_string(),
+        ),
+    }];
     let render = |findings: Option<&Value>| {
         let changed = docair_viewer::doc_page::Changed {
             before: &before,
             changes: &changes,
             findings,
+            code: &code,
         };
         docair_viewer::doc_page::render_page_with(&after, None, Some(&changed))
     };
@@ -779,6 +790,19 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     assert!(
         details.contains("<code>commit:abc1234</code>")
             && details.contains("by fake-model · 2026-11-19")
+    );
+    // Down to the code: the piece's part, its file and line, its text as a line diff, folded.
+    assert!(
+        details.contains(r#"data-test="piece-code"><summary>The code · 1 part</summary>"#)
+            && details.contains(r#"<span class="same">  /// Place an order.</span>"#)
+            && details.contains(r#"<span class="add">+     check_cart();</span>"#)
+            && !details.contains(r#"class="del""#),
+        "{details}"
+    );
+    let card = steps[1]["card"].as_str().unwrap();
+    assert!(
+        card.contains(r#"data-test="piece-code""#) && card.contains("check_cart();"),
+        "the walk's card has it too: {card}"
     );
     let at = |t: &str| details.find(&format!(r#"data-test="{t}""#)).unwrap();
     assert!(
