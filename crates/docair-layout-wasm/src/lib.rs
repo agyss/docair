@@ -10,11 +10,9 @@ use std::collections::HashMap;
 use docair_layout::{Input, Layout, PartMove, move_part};
 use serde::Deserialize;
 
-/// The module built for the page, and the code version it was built from.
+/// The module built for the page, by this crate's build script from the code as it is (docair-702.42).
 #[cfg(not(target_arch = "wasm32"))]
-pub const MODULE: &[u8] = include_bytes!("../layout.wasm");
-#[cfg(not(target_arch = "wasm32"))]
-pub const BUILT_FROM: &str = include_str!("../layout.wasm.version");
+pub const MODULE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/layout.wasm"));
 
 /// A part put down elsewhere, as the page asks.
 #[derive(Deserialize)]
@@ -101,39 +99,15 @@ pub unsafe extern "C" fn move_part_json(ptr: *mut u8, len: usize) -> u64 {
     (at << 32) | n
 }
 
-/// The version the module must be built from: the layout code's and this crate's.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn wanted_version() -> String {
-    let mut h = docair_layout::code_version();
-    for b in include_str!("lib.rs").bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{h:016x}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use docair_layout::{Line, Options, Part, lay_out};
 
-    /// The module kept in the repository was built from the code as it is now.
+    /// The module is built for the page from this code (docair-702.42).
     #[test]
-    fn the_kept_module_is_built_from_this_code() {
-        assert_eq!(
-            BUILT_FROM.trim(),
-            wanted_version(),
-            "the layout code changed since layout.wasm was built: run scripts/build-layout-wasm.sh"
-        );
+    fn the_module_is_webassembly() {
         assert!(MODULE.starts_with(b"\0asm"), "a WebAssembly module");
-    }
-
-    /// Writes the version file; scripts/build-layout-wasm.sh runs it after building the module.
-    #[test]
-    #[ignore]
-    fn write_the_version() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/layout.wasm.version");
-        std::fs::write(path, format!("{}\n", wanted_version())).unwrap();
     }
 
     #[test]

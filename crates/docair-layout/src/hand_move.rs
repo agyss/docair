@@ -47,13 +47,11 @@ pub struct MoveOutcome {
 }
 
 /***
- * Move a part by hand: it and what it holds shift, every box around it grows to hold it again
- * (with the room a box keeps around what it holds), and every line with an end in what moved is
- * routed again around all the parts, and its words placed again. `width(line)` is how wide each
- * line is drawn, for its arrow.
- *
- * The lines that stay are not obstacles for the moved ones: a moved line may run along a line
- * that stayed (docair-702 decision, see the issue).
+ * Move a part by hand: it and what it holds shift; every box around it grows to hold it again
+ * (with the room a box keeps around what it holds), and shrinks where the part was what held its
+ * side out (docair-702.41); every line with an end in what moved, or inside a box that shrank, is
+ * routed again around all the parts and around the lines that stay (docair-702.40), and its words
+ * placed again. `width(line)` is how wide each line is drawn, for its arrow.
  *
  * @calls docair-layout.route "routes the moved lines around every part"
  ***/
@@ -89,8 +87,30 @@ pub fn move_part(
         placement.parts[i].y += m.dy;
     }
     let mut changed: Vec<usize> = moved.clone();
-    // Each box around it grows to hold what it holds, keeping its room around them.
+    let mut shrunk: Vec<usize> = Vec::new();
+    // Each box around it grows to hold what it holds, keeping its room around them; a side its kids
+    // drew back from follows them by as much, so it never ends tighter than the layout made it
+    // (docair-702.41).
     let room: Padding = crate::Options::default().padding;
+    let extent = |at: &[Rect], kids: &[usize]| {
+        kids.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(l, t, r, b), &k| {
+                let c = at[k];
+                (
+                    l.min(c.x - c.w / 2.0),
+                    t.min(c.y - c.h / 2.0),
+                    r.max(c.x + c.w / 2.0),
+                    b.max(c.y + c.h / 2.0),
+                )
+            },
+        )
+    };
     let mut cur = input.parts[m.part].parent.filter(|&q| q < n);
     while let Some(b) = cur {
         let s = placement.scale.get(b).copied().unwrap_or(1.0);
@@ -98,22 +118,24 @@ pub fn move_part(
             .filter(|&i| input.parts[i].parent == Some(b))
             .collect();
         let mut r = placement.parts[b];
-        let (mut x1, mut y1, mut x2, mut y2) = (
+        let before = (
             r.x - r.w / 2.0,
             r.y - r.h / 2.0,
             r.x + r.w / 2.0,
             r.y + r.h / 2.0,
         );
-        let before = (x1, y1, x2, y2);
-        for &k in &kids {
-            let c = placement.parts[k];
-            x1 = x1.min(c.x - c.w / 2.0 - room.left * s);
-            y1 = y1.min(c.y - c.h / 2.0 - room.top * s);
-            x2 = x2.max(c.x + c.w / 2.0 + room.right * s);
-            y2 = y2.max(c.y + c.h / 2.0 + room.bottom * s);
-        }
-        if (x1, y1, x2, y2) == before {
+        let (l0, t0, r0, b0) = extent(&layout.placement.parts, &kids);
+        let (l1, t1, r1, b1) = extent(&placement.parts, &kids);
+        let x1 = (before.0 + (l1 - l0).max(0.0)).min(l1 - room.left * s);
+        let y1 = (before.1 + (t1 - t0).max(0.0)).min(t1 - room.top * s);
+        let x2 = (before.2 + (r1 - r0).min(0.0)).max(r1 + room.right * s);
+        let y2 = (before.3 + (b1 - b0).min(0.0)).max(b1 + room.bottom * s);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        if near(x1, before.0) && near(y1, before.1) && near(x2, before.2) && near(y2, before.3) {
             break;
+        }
+        if x1 > before.0 || y1 > before.1 || x2 < before.2 || y2 < before.3 {
+            shrunk.push(b);
         }
         r = Rect {
             x: (x1 + x2) / 2.0,
@@ -125,15 +147,34 @@ pub fn move_part(
         changed.push(b);
         cur = input.parts[b].parent.filter(|&q| q < n);
     }
-    // The lines with an end in what moved, routed again around every part.
+    // The lines with an end in what moved, or inside a box that shrank (its border may now cut
+    // them), routed again around every part and around the lines that stay (docair-702.40).
+    let in_shrunk = |i: usize| {
+        let mut c = input.parts[i].parent.filter(|&q| q < n);
+        while let Some(b) = c {
+            if shrunk.contains(&b) {
+                return true;
+            }
+            c = input.parts[b].parent.filter(|&q| q < n);
+        }
+        false
+    };
     let touched: Vec<usize> = (0..input.lines.len())
-        .filter(|&j| moved.contains(&input.lines[j].from) || moved.contains(&input.lines[j].to))
+        .filter(|&j| {
+            let l = &input.lines[j];
+            moved.contains(&l.from) || moved.contains(&l.to) || in_shrunk(l.from) || in_shrunk(l.to)
+        })
+        .collect();
+    let stay: Vec<Vec<(f64, f64)>> = (0..input.lines.len())
+        .filter(|j| !touched.contains(j))
+        .filter_map(|j| layout.routes.lines.get(j).cloned())
+        .filter(|pts| pts.len() > 1)
         .collect();
     let sub = Input {
         parts: input.parts.clone(),
         lines: touched.iter().map(|&j| input.lines[j].clone()).collect(),
     };
-    let routes = router::grid_lines(&sub, &placement, router::PRICES);
+    let routes = router::grid_lines_around(&sub, &placement, router::PRICES, &stay);
     let words = word_spots::place_words(&sub, &placement, &routes);
     let mut next = Layout {
         placement,
@@ -262,5 +303,79 @@ mod tests {
             }
             assert!(l.drawn.is_some());
         }
+    }
+
+    /// docair-702.41: moved back, a part takes its box back to where it was; the lines inside the box
+    /// that shrank are routed again.
+    #[test]
+    fn a_box_shrinks_back_when_its_part_comes_back() {
+        let input = Input {
+            parts: vec![
+                part("box", None),
+                part("a", Some(0)),
+                part("b", Some(0)),
+                part("c", None),
+            ],
+            lines: vec![line("0", 1, 2), line("1", 2, 3), line("2", 1, 3)],
+        };
+        let laid = lay_out(&input, &Options::default());
+        let away = move_part(
+            &input,
+            &laid,
+            PartMove {
+                part: 2,
+                dx: 0.0,
+                dy: 300.0,
+            },
+            &|_| 1.4,
+        );
+        assert!(away.layout.placement.parts[0].h > laid.placement.parts[0].h + 100.0);
+        let back = move_part(
+            &input,
+            &away.layout,
+            PartMove {
+                part: 2,
+                dx: 0.0,
+                dy: -300.0,
+            },
+            &|_| 1.4,
+        );
+        let (was, now) = (laid.placement.parts[0], back.layout.placement.parts[0]);
+        for (x, y) in [
+            (was.x, now.x),
+            (was.y, now.y),
+            (was.w, now.w),
+            (was.h, now.h),
+        ] {
+            assert!(
+                (x - y).abs() < 0.01,
+                "the box is as laid out again: {was:?} {now:?}"
+            );
+        }
+        let rerouted: Vec<&str> = back.lines.iter().map(|l| l.id.as_str()).collect();
+        assert!(
+            rerouted.contains(&"2"),
+            "a -> c, inside the box that shrank: {rerouted:?}"
+        );
+    }
+
+    /// docair-702.40: a line routed around lines that stay keeps off them: with a staying line on
+    /// its straight way, it takes another track.
+    #[test]
+    fn a_line_keeps_off_the_lines_that_stay() {
+        let input = Input {
+            parts: vec![part("a", None), part("b", None)],
+            lines: vec![line("0", 0, 1)],
+        };
+        let laid = lay_out(&input, &Options::default());
+        let alone = laid.routes.lines[0].clone();
+        assert!(alone.len() >= 2);
+        let around = crate::router::grid_lines_around(
+            &input,
+            &laid.placement,
+            crate::router::PRICES,
+            std::slice::from_ref(&alone),
+        );
+        assert_ne!(around.lines[0], alone, "not along the line that stays");
     }
 }

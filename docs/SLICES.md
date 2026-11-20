@@ -229,13 +229,17 @@ Its budget is 1,050 lines, checked by a test (1,000 until docair-702.37: showing
 
 **Moving a part by hand** (docair-9qv). The page carries docair-layout's move
 of a part built to WebAssembly (`crates/docair-layout-wasm`, about 90 kB
-gzipped, kept built in the repository with the code version it was built
-from, so no build needs a wasm32 target). While the reader holds a part,
+gzipped). The crate's build script builds it for wasm32 whenever docair is
+built, so it is always the code as it is and nothing built is kept in the
+repository; a build needs the wasm32 target (docair-702.42). While the reader holds a part,
 each time it has moved a whole track (8 px), and when they drop it, the
 script hands the module the picture's layout input, its layout and how far
 the part moved; the module shifts the part and what it holds, grows the boxes
-around it, routes the lines that touch it again around every part, places
-their words, and answers with each line ready to draw (`d` and the arrow, as
+around it, and shrinks a box where the part was what held its side out, its
+side following the part by as much (docair-702.41); it routes again the lines
+that touch the part, and those inside a box that shrank, around every part and
+around the lines that stay, which count as used tracks so a moved line keeps
+off them (docair-702.40); it places their words, and answers with each line ready to draw (`d` and the arrow, as
 the SVG writes them). While held, the lines follow and the words wait; on
 the drop they take their place. The router is the one `docair build` lays
 out with; the script only sets attributes. A move lasts until the page is

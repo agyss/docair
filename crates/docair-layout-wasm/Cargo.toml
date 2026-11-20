@@ -3,10 +3,9 @@
 # (docs/SLICES.md §7): the page asks it where a moved part's lines go, and
 # the router that answers is the one `docair build` lays out with.
 #
-# The built module is kept in the repository (`layout.wasm`, with the code
-# version it was built from), so a build needs no wasm32 target;
-# `scripts/build-layout-wasm.sh` builds it again, and a test fails when the
-# layout code moved on.
+# The module is not kept in the repository: build.rs builds it for wasm32
+# whenever this crate is built for the host, so it is always built from the
+# code as it is (docair-702.42); a build needs the wasm32 target.
 #
 # @id      docair-layout-wasm
 # @kind    module

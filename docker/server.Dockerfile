@@ -15,7 +15,8 @@ FROM rust:1.99-slim-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked -p docair-server
+# The page's WebAssembly module is built with it (docair-layout-wasm's build.rs).
+RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -p docair-server
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /src/target/release/docair-server /usr/local/bin/docair-server

@@ -883,6 +883,24 @@ impl<'a> Grid<'a> {
             }
     }
 
+    /// A line already drawn, as its corner points, counted as using the tracks it runs along.
+    fn occupy_points(&mut self, pts: &[(f64, f64)]) {
+        let nx = self.nx;
+        for w in pts.windows(2) {
+            let (ia, ja) = (nearest(&self.x, w[0].0), nearest(&self.y, w[0].1));
+            let (ib, jb) = (nearest(&self.x, w[1].0), nearest(&self.y, w[1].1));
+            if ja == jb {
+                for i in ia.min(ib)..ia.max(ib) {
+                    self.h_use[ja * nx + i] += 1;
+                }
+            } else if ia == ib {
+                for j in ja.min(jb)..ja.max(jb) {
+                    self.v_use[j * nx + ia] += 1;
+                }
+            }
+        }
+    }
+
     fn occupy(&mut self, way: &GridWay, sign: i32) {
         let nd = &way.nodes;
         let nx = self.nx;
@@ -964,6 +982,30 @@ fn corner(a: &Rect, b: &Rect) -> Vec<(f64, f64)> {
 
 /// Draw the lines of a placed picture: each line the cheapest way, given all the others.
 pub(crate) fn grid_lines(input: &Input, placed: &Placement, p: Prices) -> Routes {
+    grid_lines_around(input, placed, p, &[])
+}
+
+/// The track nearest `v`.
+fn nearest(arr: &[f64], v: f64) -> usize {
+    let i = arr.partition_point(|&a| a < v);
+    match (i.checked_sub(1), arr.get(i)) {
+        (Some(k), Some(&a)) if (v - arr[k]).abs() <= (a - v).abs() => k,
+        (Some(k), None) => k,
+        _ => i.min(arr.len().saturating_sub(1)),
+    }
+}
+
+/***
+ * As `grid_lines`, with lines already drawn that stay where they are (docair-702.40): their
+ * tracks are among the router's tracks and count as used before the new lines are routed, so the new lines
+ * keep off them as they keep off each other; the staying lines themselves are not moved.
+ ***/
+pub(crate) fn grid_lines_around(
+    input: &Input,
+    placed: &Placement,
+    p: Prices,
+    stay: &[Vec<(f64, f64)>],
+) -> Routes {
     let n_parts = input.parts.len();
     let mut is_box = vec![false; n_parts];
     for part in &input.parts {
@@ -1067,6 +1109,11 @@ pub(crate) fn grid_lines(input: &Input, placed: &Placement, p: Prices) -> Routes
         hard_y.extend([b.t - c, b.b + c]);
         soft_x.push(placed.parts[b.part].x);
         soft_y.push(placed.parts[b.part].y);
+    }
+    // The staying lines' tracks are tracks too, so their use can be counted (docair-702.40).
+    for &(px, py) in stay.iter().flatten() {
+        soft_x.push(px);
+        soft_y.push(py);
     }
     let mut pitch = p.pitch;
     let mut x = tracks(&hard_x, &soft_x, min_x, max_x, pitch, p.merge);
@@ -1364,6 +1411,10 @@ pub(crate) fn grid_lines(input: &Input, placed: &Placement, p: Prices) -> Routes
             a
         })
         .collect();
+    // The lines that stay use their tracks: the new ones pay to run along them (docair-702.40).
+    for pts in stay {
+        grid.occupy_points(pts);
+    }
     // Short lines first: they have the fewest ways to choose from.
     let span = |k: usize| {
         let l = &input.lines[k];

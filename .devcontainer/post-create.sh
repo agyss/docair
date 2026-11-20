@@ -6,6 +6,8 @@ set -euo pipefail
 sudo chown -R "$(id -u):$(id -g)" /usr/local/cargo/registry "${CLAUDE_CONFIG_DIR}" || true
 
 rustup component add clippy rustfmt
+# The page's WebAssembly module is built with docair (docair-layout-wasm's build.rs).
+rustup target add wasm32-unknown-unknown
 
 # beads issue tracker (https://github.com/gastownhall/beads)
 npm install -g @beads/bd

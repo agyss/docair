@@ -58,7 +58,7 @@ similar = "3.2.1"
 notify = "=8.2.1"
 ureq = { version = "3.5.2", features = ["json"] }
 
-# The page's WebAssembly module (scripts/build-layout-wasm.sh): small over fast.
+# The page's WebAssembly module (docair-layout-wasm's build.rs): small over fast.
 [profile.wasm]
 inherits = "release"
 opt-level = "z"
