@@ -426,13 +426,15 @@ impl<'g> PanelGraph<'g> {
             .graph
             .edges
             .iter()
-            .filter(|e| e.to == n.id && e.kind != EdgeKind::Cover)
+            .filter(|e| e.to == n.id && e.kind != EdgeKind::Cover && e.kind.drawn())
             .collect();
         let outs: Vec<&Edge> = self
             .graph
             .edges
             .iter()
-            .filter(|e| e.from == n.id && (e.kind != EdgeKind::Cover || n.kind == "test"))
+            .filter(|e| {
+                e.from == n.id && (e.kind != EdgeKind::Cover || n.kind == "test") && e.kind.drawn()
+            })
             .collect();
         for (title, es, other) in [("Incoming", &ins, true), ("Outgoing", &outs, false)] {
             if es.is_empty() {
@@ -461,6 +463,7 @@ impl<'g> PanelGraph<'g> {
             }
             out.push_str("</ul>");
         }
+        out.push_str(&self.uses(&n.id));
         let mut flows = String::new();
         for f in &self.graph.flows {
             for s in f.steps.iter().filter(|s| s.nodes.contains(&n.id)) {
@@ -483,6 +486,39 @@ impl<'g> PanelGraph<'g> {
         out
     }
 
+    /// Who uses a type and how, and the types a part uses: listed, not drawn (docs/ADAPTERS.md §5.8).
+    fn uses(&self, id: &str) -> String {
+        let mut out = String::new();
+        for (title, by) in [("Used by", true), ("Uses", false)] {
+            let es: Vec<&Edge> = self
+                .graph
+                .edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Use && if by { e.to == id } else { e.from == id })
+                .collect();
+            if es.is_empty() {
+                continue;
+            }
+            let _ = write!(
+                out,
+                r#"<h3 class="sec">{title} ({})</h3><ul class="edges" data-test="{}">"#,
+                es.len(),
+                if by { "used-by" } else { "uses" }
+            );
+            for e in es {
+                let _ = write!(
+                    out,
+                    r#"<li title="{}">{}<span class="badge">{}</span></li>"#,
+                    escape_text(&format!("{} · {}:{}", e.tag, e.source.file, e.source.line)),
+                    self.link(if by { &e.from } else { &e.to }),
+                    escape_text(&edge_text(&self.g, e))
+                );
+            }
+            out.push_str("</ul>");
+        }
+        out
+    }
+
     /// For a box: every part outside it that something inside it talks to, and what they exchange.
     fn talks_to(&self, id: &str) -> String {
         let inside = self.inside(id);
@@ -490,7 +526,7 @@ impl<'g> PanelGraph<'g> {
         let mut order: Vec<(bool, String)> = Vec::new();
         let mut peers: HashMap<(bool, String), (Vec<String>, bool)> = HashMap::new();
         for e in &self.graph.edges {
-            if e.kind == EdgeKind::Cover {
+            if e.kind == EdgeKind::Cover || !e.kind.drawn() {
                 continue;
             }
             let from_inside = inside.contains(e.from.as_str());
@@ -1036,11 +1072,13 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
             parents.insert(n.id.clone(), Value::String(p.to_string()));
         }
     }
-    // Each line's tip, by the key the pictures name it with (svg::edge_key).
+    // Each line's tip, by the key the pictures name it with (svg::edge_key); a type's uses are
+    // not drawn, so they have none (docs/ADAPTERS.md §5.8).
     let lines: Map<String, Value> = graph
         .edges
         .iter()
         .enumerate()
+        .filter(|(_, e)| e.kind.drawn())
         .map(|(i, e)| {
             (
                 crate::svg::edge_key(graph, i),

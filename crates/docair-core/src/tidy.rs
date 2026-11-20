@@ -16,6 +16,7 @@ use crate::resolve::{resolve_ref, split_payload};
 /// The tags that make lines, as authors write them; `@covers` is intent, not code.
 const LINES: &[&str] = &[
     "calls", "in", "out", "reads", "writes", "emits", "consumes", "creates", "routes", "selects",
+    "uses",
 ];
 
 /// One hand-written tag the code repeats.

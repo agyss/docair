@@ -174,6 +174,51 @@ fn the_layers_are_links_and_the_same_graph_gives_the_same_page() {
     assert!(first == page && kept == page, "kept layouts change nothing");
 }
 
+/// A type's details say who uses it and how, and a function's the types it uses (docs/ADAPTERS.md §5.8).
+#[test]
+fn a_types_details_say_who_uses_it() {
+    let dir = std::env::temp_dir().join(format!("docair-type-uses-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/lib.rs"),
+        "pub struct Cli {\n    pub command: Command,\n}\n\npub enum Command {\n    Build,\n}\n\npub fn run() {\n    let cli = Cli { command: Command::Build };\n    match cli.command {\n        Command::Build => {}\n    }\n}\n",
+    )
+    .unwrap();
+    let g = scan(&dir, docair_adapters::all(), &Options::default()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let page = docair_viewer::doc_page::render_page_keeping(&g, None);
+    let ix = script(&page, "docair-index");
+    let packed = script(&page, "docair-packed");
+    let panels: Value = serde_json::from_str(&unpack(
+        packed[ix["panels"].as_u64().unwrap() as usize]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    let id = |name: &str| {
+        g.nodes
+            .iter()
+            .find(|n| n.name == name)
+            .map(|n| n.id.clone())
+            .unwrap_or_else(|| panic!("{name} is a part: {:?}", g.nodes))
+    };
+    let command = panels["details"][&id("Command")].as_str().unwrap();
+    assert!(
+        command.contains("Used by (2)") && command.contains("makes, matches"),
+        "run makes and matches Command, Cli holds it: {command}"
+    );
+    let run = panels["details"][&id("run")].as_str().unwrap();
+    assert!(run.contains("Uses (2)"), "run uses Cli and Command: {run}");
+    assert!(
+        !panels["lines"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.contains("-use->")),
+        "a use is not drawn, so it has no tip"
+    );
+}
+
 #[test]
 fn the_panels_say_what_the_viewer_said() {
     let (g, page) = page_of("shop");
@@ -229,9 +274,15 @@ fn the_panels_say_what_the_viewer_said() {
     assert!(api.contains("Talks to ("), "a box says what it talks to");
     // Every line of the graph has its tip; the search words hold names.
     let tips = panels["lines"].as_object().unwrap();
-    assert_eq!(tips.len(), g.edges.len());
+    assert_eq!(
+        tips.len(),
+        g.edges.iter().filter(|e| e.kind.drawn()).count()
+    );
     assert!(
-        g.edges.iter().all(|e| tips.contains_key(&e.id)),
+        g.edges
+            .iter()
+            .filter(|e| e.kind.drawn())
+            .all(|e| tips.contains_key(&e.id)),
         "each line's tip goes by its id"
     );
     assert!(

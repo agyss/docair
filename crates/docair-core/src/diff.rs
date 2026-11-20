@@ -335,8 +335,18 @@ pub fn diff(
         }
     }
     crate::ids::edge_ids(&mut a_lines);
-    let la: BTreeMap<&str, &Edge> = a_lines.iter().map(|e| (e.id.as_str(), e)).collect();
-    let lb: BTreeMap<&str, &Edge> = b.edges.iter().map(|e| (e.id.as_str(), e)).collect();
+    // A type's uses are not drawn, so they are no change of a picture (docs/ADAPTERS.md §5.8).
+    let la: BTreeMap<&str, &Edge> = a_lines
+        .iter()
+        .filter(|e| e.kind.drawn())
+        .map(|e| (e.id.as_str(), e))
+        .collect();
+    let lb: BTreeMap<&str, &Edge> = b
+        .edges
+        .iter()
+        .filter(|e| e.kind.drawn())
+        .map(|e| (e.id.as_str(), e))
+        .collect();
     out.lines_removed = la
         .keys()
         .filter(|id| !lb.contains_key(*id))

@@ -20,6 +20,7 @@ pub const KNOWN_TAGS: &[&str] = &[
     "http",
     "flow",
     "creates",
+    "uses",
     "covers",
     "routes",
     "selects",

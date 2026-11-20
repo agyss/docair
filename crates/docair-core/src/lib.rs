@@ -120,6 +120,12 @@ pub mod slice;
  ***/
 pub mod test_results;
 /***
+ * How a part uses a type, in the words of a `@uses` tag: makes, takes, returns, holds, implements, matches, reads and sets fields.
+ *
+ * @doc ../../../docs/ADAPTERS.md
+ ***/
+pub mod type_uses;
+/***
  * Tidy: the hand-written tags that only repeat what the code says, and the edits that remove them (docs/ADAPTERS.md §6.1).
  ***/
 pub mod tidy;

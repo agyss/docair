@@ -58,6 +58,7 @@ fn verb(kind: EdgeKind) -> &'static str {
         EdgeKind::Select => "selects",
         EdgeKind::Create => "creates",
         EdgeKind::Cover => "tests",
+        EdgeKind::Use => "uses",
     }
 }
 
@@ -83,6 +84,10 @@ pub(crate) fn describe_edge(g: &GraphLookup, e: &Edge) -> String {
     }
     if e.kind == EdgeKind::Cover {
         return format!("tests {}", g.name(&e.to).unwrap_or(&e.to));
+    }
+    // How the part uses the type: "makes, reads command" (docs/ADAPTERS.md §5.8).
+    if e.kind == EdgeKind::Use {
+        return e.payload.clone().unwrap_or_else(|| "uses".to_string());
     }
     let reply = e
         .reply

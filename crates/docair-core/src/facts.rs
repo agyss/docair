@@ -196,6 +196,8 @@ pub enum Verb {
     Routes,
     Selects,
     Covers,
+    /// A part uses a type: makes, takes, returns, holds, matches it, or reads its fields (docs/ADAPTERS.md §5.8).
+    Uses,
 }
 
 impl Verb {
@@ -212,6 +214,7 @@ impl Verb {
             Verb::Routes => "routes",
             Verb::Selects => "selects",
             Verb::Covers => "covers",
+            Verb::Uses => "uses",
         }
     }
 }

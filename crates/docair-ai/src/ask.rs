@@ -51,7 +51,7 @@ Change rules (doc blocks, the format docair reads from the code):
   Kinds: system service module component function endpoint store topic external job workload config host cluster namespace network gateway container release test.
 - Refer only to ids from the graph or ids you add in the same reply.
 - Asked to document a node marked "undocumented", give a "summary" (one sentence: what it does) and the tags that say how data flows.
-- A node whose "item" is a struct, an enum, an interface or a type is data the lines carry, not a part that sends or takes it: never give it "@in", "@out" or "@calls". Who makes, takes or holds it shows only in the graph's edges and what they "carry".
+- A node whose "item" is a struct, an enum, an interface or a type is data the lines carry, not a part that sends or takes it: never give it "@in", "@out" or "@calls". Its "used_by" says who uses it and how: makes, takes, returns, holds, matches, implements, reads or sets which fields. A part with no "used_by" is used by nothing the graph knows.
 - "why" says in one sentence why the edit is right.
 
 Code and data:
@@ -118,6 +118,17 @@ fn is_data_item(n: &docair_core::model::Node) -> bool {
  * @out     digest: JSON
  ***/
 pub fn digest(graph: &Graph) -> String {
+    let mut used_by: std::collections::HashMap<&str, Map<String, Value>> = Default::default();
+    for e in graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == docair_core::model::EdgeKind::Use)
+    {
+        used_by.entry(e.to.as_str()).or_default().insert(
+            e.from.clone(),
+            json!(e.payload.as_deref().unwrap_or("uses")),
+        );
+    }
     let mut nodes = Vec::new();
     for n in &graph.nodes {
         let mut o = Map::new();
@@ -169,11 +180,16 @@ pub fn digest(graph: &Graph) -> String {
         if let Some(t) = &n.test {
             o.insert("result".into(), json!(t.status));
         }
+        // Who uses a type, and how, on the type itself: shorter than one edge each (docs/ADAPTERS.md §5.8).
+        if let Some(by) = used_by.remove(n.id.as_str()) {
+            o.insert("used_by".into(), Value::Object(by));
+        }
         nodes.push(Value::Object(o));
     }
     let edges: Vec<Value> = graph
         .edges
         .iter()
+        .filter(|e| e.kind != docair_core::model::EdgeKind::Use)
         .map(|e| {
             let mut o = Map::new();
             o.insert("from".into(), json!(e.from));

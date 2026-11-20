@@ -298,7 +298,7 @@ impl<'g> Index<'g> {
         // A part a doc block is about, and every box around one.
         let told = loud.clone();
         for e in &self.graph.edges {
-            if !self.is_data(&e.from) && !self.is_data(&e.to) {
+            if !self.is_data(&e.from) && !self.is_data(&e.to) && e.kind.drawn() {
                 raise(self, &mut loud, e.from.as_str());
                 raise(self, &mut loud, e.to.as_str());
             }
@@ -602,7 +602,7 @@ impl<'g> Index<'g> {
                         .any(|a| focus.contains(a) && !holds.contains(a))
             };
             for e in &self.graph.edges {
-                if kinds.is_some_and(|k| !k.contains(&e.kind)) {
+                if kinds.is_some_and(|k| !k.contains(&e.kind)) || !e.kind.drawn() {
                     continue;
                 }
                 for (x, y) in [
@@ -995,6 +995,7 @@ impl<'g> Index<'g> {
                 || self.hidden_node(&e.to)
                 || self.is_data(&e.from)
                 || self.is_data(&e.to)
+                || !e.kind.drawn()
             {
                 continue;
             }

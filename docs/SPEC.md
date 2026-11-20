@@ -869,7 +869,8 @@ into `docair.html`:
   until the page reloads.
 * The panels are the CLI's, as the viewer wrote them: each part's details
   (Overview, Docs, Tags; what a box talks to, the tests that cover a part,
-  its lines in and out, the flows it is in, every other part a link
+  its lines in and out, who uses a type and how (*Used by*) and the types a
+  part uses (*Uses*, docair-4wk.35), the flows it is in, every other part a link
   `#part/<id>`), the tips of parts and lines (a line's: the first 8 lines of
   the graph it stands for), the tree, the legend, the diagnostics and the
   tests switch. Details, tips and search words are packed like the pictures.
@@ -1155,6 +1156,7 @@ write these words.
 | `@consumes`  | `topic:<name> [-> event]`     | `topic → this` (`consume`) | the event received |
 | `@creates`   | `<ref> [(how)]`               | `this → ref` (`create`) | how it is created: `helm install …`, `docker run …` |
 | `@covers`    | `<ref> [(what)]`              | `this → ref` (`cover`) | what the test checks (§12) |
+| `@uses`      | `<ref> [(how)]`               | `this → ref` (`use`) | how this part uses the type `<ref>`: `makes, takes, returns, holds, implements, matches, reads <fields>, sets <fields>` (docs/ADAPTERS.md §5.8); listed in the details, not drawn |
 | `@routes`    | `<ref> [(how)]`               | `this → ref` (`route`) | where a gateway sends requests: `HTTP /api, port 80` (§6.1) |
 | `@selects`   | `<ref> [(how)]`               | `this → ref` (`select`) | which workload a Service sends to: `port 8080` (§6.1) |
 | `@in`        | `name: Type [from <ref>]`     | `ref → this` (`data`) | `name: Type` |
@@ -1182,7 +1184,8 @@ to a call or by returning it from one. Write that on `@calls`; the walkthrough
 `@in … from` and `@out … to` are for data that arrives without a modelled
 call: a framework callback, a queue, a file drop. Without `from`/`to` they only
 document the node's inputs and outputs (details panel). Two edges between the
-same nodes in the same direction are merged, and their payloads are joined.
+same nodes in the same direction are merged, and their payloads are joined;
+a `use` edge stays apart from them, since it is not drawn (docair-4wk.35).
 
 > **Viewer mock: edge styles.** Calls are thin and labelled `(args) → result`.
 > Reads and writes always end at a store node, a file or a table (§4.3), so
@@ -1238,6 +1241,11 @@ members apart, and its arrow says the way:
 | storage | `write`, `read`; `create` | amber `#c98500` | solid; dashed |
 | events | `emit`, `consume` | magenta `#d55181` | dotted |
 | tests | `cover` | light grey `#a3a49c` / `#6b6c66` | dotted |
+
+`use` lines are not drawn: on docair they are 2,625 against 2,240 calls, and
+drawn they took the Code layer's layout from 21 s to 343 s (docs/ADAPTERS.md
+§5.8). A type's details list them instead, and slices, changes and the
+parts a picture pulls in leave them out.
 
 Three hues are as many as a picture can keep apart in every pair, for every
 reader: blue, amber and magenta pass the colour-vision checks in both themes
@@ -1790,8 +1798,10 @@ vLLM or Ollama, and others speak it.
 1. **Digest.** docair runs stages 1–6 and sends the graph without the source
    code: for each node its id, kind, name, parent, summary, description
    (shortened), file and line, HTTP route, its code item when it has one
-   (`struct Cli`, `fn main`; docair-d9o); for each edge its ends, kind,
-   label and payload; for each scenario its steps. Source code never leaves
+   (`struct Cli`, `fn main`; docair-d9o), and for a type who uses it and how
+   (`"used_by": {"docair-cli.main": "makes, reads command"}`, docair-4wk.35);
+   for each other edge its ends, kind, label and payload; for each scenario
+   its steps. Source code never leaves
    the machine; summaries, descriptions and file paths do.
 2. **Prompt.** The system prompt fixes the rules: use only ids from the
    graph; walk in the order things happen and say why that order; name the

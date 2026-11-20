@@ -166,6 +166,7 @@ pub(crate) fn edge_kind(kind: EdgeKind) -> &'static str {
         EdgeKind::Select => "select",
         EdgeKind::Create => "create",
         EdgeKind::Cover => "cover",
+        EdgeKind::Use => "use",
     }
 }
 

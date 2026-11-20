@@ -353,6 +353,16 @@ pub enum EdgeKind {
     Create,
     /// A test exercises the target (SPEC §12).
     Cover,
+    /// A part uses a type: makes, takes, returns, holds, matches it, or reads its fields (docs/ADAPTERS.md §5.8).
+    Use,
+}
+
+impl EdgeKind {
+    /// Whether pictures, slices and changes draw lines of this kind: a type's uses are listed in
+    /// its details and the AI's digest, not drawn (docs/ADAPTERS.md §5.8, docair-4wk.35).
+    pub fn drawn(self) -> bool {
+        self != EdgeKind::Use
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

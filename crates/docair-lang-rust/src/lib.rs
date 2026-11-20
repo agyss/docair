@@ -12,6 +12,7 @@ use docair_core::facts::{
 use docair_core::ids::slug;
 use docair_core::model::{Diagnostic, Signature, SourceFile};
 use docair_core::signature::simplify_type;
+use docair_core::type_uses::{TypeUse as How, TypeUses};
 use docair_rules::{About, Fact, Found, Grammar, RuleSet};
 use docair_scip::Index;
 use tree_sitter::{Node, Parser};
@@ -157,6 +158,10 @@ struct Site {
     /// The type of an impl or trait the item is written in.
     owner: Option<String>,
     is_fn: bool,
+    /// A struct, enum, union, trait or type alias.
+    is_type: bool,
+    /// A function's return type as written (`Self`, `Result<Index, String>`); empty without one.
+    returns: String,
     start: usize,
     end: usize,
 }
@@ -185,6 +190,24 @@ pub struct FileRead {
     flows: Vec<Flow>,
     /// axum `.nest("/prefix", …)` in this file (docair-4wk.9).
     nests: Vec<Nest>,
+    /// The names of types, variants and fields, and how the code uses each (docs/ADAPTERS.md §5.8).
+    mentions: Vec<TypeMention>,
+}
+
+/// A name of a type, a variant or a field in the code, and how the code around it uses it.
+#[derive(Debug, Clone)]
+struct TypeMention {
+    line: usize,
+    col: usize,
+    /// The name as written: `Cli`, `Build`, `command`.
+    text: String,
+    /// The type the syntax takes it for: `Command` of `Command::Build`; empty for a field.
+    ty: String,
+    how: How,
+    /// `Type::f(…)`: the function called, where its name is (line, column), and its name.
+    via: Option<(usize, usize, String)>,
+    /// `impl Trait for Type`: where the type's name is, and the name.
+    implementor: Option<(usize, usize, String)>,
 }
 
 /// An axum router nested under a prefix: `.nest("/api", api())` or `.nest("/admin", admin)`.
@@ -245,6 +268,7 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
         calls: Vec::new(),
         flows: Vec::new(),
         nests: Vec::new(),
+        mentions: Vec::new(),
     };
     let mut parser = Parser::new();
     parser
@@ -345,6 +369,8 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             name: it.name.clone(),
             owner: owner.clone(),
             is_fn: it.keyword == "fn",
+            is_type: matches!(it.keyword, "struct" | "enum" | "union" | "trait" | "type"),
+            returns: text_of(item.child_by_field_name("return_type"), src),
             start: line,
             end: item.end_position().row + 1,
         });
@@ -376,7 +402,232 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
     read.calls = syntax_calls(tree.root_node(), src);
     read.nests = nests_of(tree.root_node(), src);
     read.flows = data_flows(tree.root_node(), src);
+    read.mentions = type_mentions(tree.root_node(), src);
     read
+}
+
+/// Whether a name is a type's: it starts with a capital letter.
+fn capital(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// The type's name in a type written out: `Vec` of `Vec<T>`, `Graph` of `model::Graph`.
+fn type_name_node(n: Node) -> Node {
+    match n.kind() {
+        "generic_type" => n.child_by_field_name("type").map_or(n, type_name_node),
+        "scoped_type_identifier" => n.child_by_field_name("name").unwrap_or(n),
+        "reference_type" => n.child_by_field_name("type").map_or(n, type_name_node),
+        _ => n,
+    }
+}
+
+/***
+ * Every name of a type, a variant or a field in a file, and how the code around it uses it (docs/ADAPTERS.md §5.8).
+ *
+ * The nearest telling place around the name decides: a pattern matches, a
+ * struct expression or `Type::f(…)` makes, a parameter takes, the return
+ * type returns, a field's type holds, `impl Trait for T` implements, a field
+ * after a dot reads or, left of `=`, sets. `use` lines, attributes, comments
+ * and the type's own definition name it without using it.
+ ***/
+fn type_mentions(root: Node, src: &[u8]) -> Vec<TypeMention> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        let children: Vec<Node> = n.named_children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+        let text = text_of(Some(n), src);
+        let field = match n.kind() {
+            "field_identifier" | "shorthand_field_identifier" => true,
+            "identifier"
+                if n.parent()
+                    .is_some_and(|p| p.kind() == "shorthand_field_initializer") =>
+            {
+                true
+            }
+            "type_identifier" | "identifier" if capital(&text) => false,
+            _ => continue,
+        };
+        let Some(how) = how_of(n, field, src) else {
+            continue;
+        };
+        // `Command::Build`: the variant's type is the path before it.
+        let ty = if field {
+            String::new()
+        } else {
+            n.parent()
+                .filter(|p| {
+                    matches!(p.kind(), "scoped_identifier" | "scoped_type_identifier")
+                        && p.child_by_field_name("name")
+                            .is_some_and(|c| c.id() == n.id())
+                })
+                .and_then(|p| p.child_by_field_name("path"))
+                .map(|path| {
+                    let last = match path.kind() {
+                        "scoped_identifier" => path.child_by_field_name("name").unwrap_or(path),
+                        _ => path,
+                    };
+                    text_of(Some(last), src)
+                })
+                .filter(|t| capital(t))
+                .unwrap_or_else(|| text.clone())
+        };
+        // `Type::f(…)`: f decides whether it makes the type.
+        let via = (how == How::Makes && !field)
+            .then(|| {
+                let p = n.parent()?;
+                (p.kind() == "scoped_identifier"
+                    && p.child_by_field_name("path")
+                        .is_some_and(|c| c.id() == n.id()))
+                .then_some(())?;
+                let call = p.parent().filter(|c| c.kind() == "call_expression")?;
+                call.child_by_field_name("function")
+                    .is_some_and(|f| f.id() == p.id())
+                    .then_some(())?;
+                let f = p.child_by_field_name("name")?;
+                (!capital(&text_of(Some(f), src))).then(|| {
+                    (
+                        f.start_position().row + 1,
+                        f.start_position().column,
+                        text_of(Some(f), src),
+                    )
+                })
+            })
+            .flatten();
+        let implementor = (how == How::Implements)
+            .then(|| {
+                let mut p = n.parent();
+                while let Some(q) = p {
+                    if q.kind() == "impl_item" {
+                        let t = type_name_node(q.child_by_field_name("type")?);
+                        return Some((
+                            t.start_position().row + 1,
+                            t.start_position().column,
+                            text_of(Some(t), src),
+                        ));
+                    }
+                    p = q.parent();
+                }
+                None
+            })
+            .flatten();
+        out.push(TypeMention {
+            line: n.start_position().row + 1,
+            col: n.start_position().column,
+            text,
+            ty,
+            how,
+            via,
+            implementor,
+        });
+    }
+    out
+}
+
+/// How the code around a name uses it; none where it only names it (a `use`, the definition).
+fn how_of(n: Node, field: bool, src: &[u8]) -> Option<How> {
+    let mut child = n;
+    let mut cur = n.parent();
+    while let Some(p) = cur {
+        let is = |name: &str| {
+            p.child_by_field_name(name)
+                .is_some_and(|c| c.id() == child.id())
+        };
+        // A path used as a value: `Reach::Certain`, `CandidateLimit::DEFAULT`.
+        if child.kind() == "scoped_identifier"
+            && !matches!(
+                p.kind(),
+                "scoped_identifier" | "use_declaration" | "scoped_use_list" | "use_as_clause"
+            )
+            && !(p.kind() == "call_expression" && is("function"))
+            && !p.kind().ends_with("pattern")
+            && !(p.kind() == "binary_expression" && is_comparison(p, src))
+        {
+            return Some(How::Makes);
+        }
+        match p.kind() {
+            "use_declaration"
+            | "attribute_item"
+            | "inner_attribute_item"
+            | "macro_definition"
+            | "mod_item" => return None,
+            "token_tree" => return Some(How::Uses),
+            k if k.ends_with("pattern") => return Some(How::Matches),
+            "binary_expression" if is_comparison(p, src) => return Some(How::Matches),
+            "struct_expression" | "field_initializer" | "shorthand_field_initializer" => {
+                return Some(How::Makes);
+            }
+            "call_expression" if is("function") => return Some(How::Makes),
+            "generic_function" if is("type_arguments") => return Some(How::Uses),
+            "field_expression" if field && is("field") => {
+                let left = p.parent().is_some_and(|q| {
+                    matches!(
+                        q.kind(),
+                        "assignment_expression" | "compound_assignment_expr"
+                    ) && q
+                        .child_by_field_name("left")
+                        .is_some_and(|l| l.id() == p.id())
+                });
+                return Some(if left { How::Sets } else { How::Reads });
+            }
+            "parameter" => {
+                let closure = p.parent().is_some_and(|q| q.kind() == "closure_parameters");
+                return Some(if closure { How::Uses } else { How::Takes });
+            }
+            "self_parameter" => return None,
+            "function_item" | "function_signature_item" => {
+                if is("return_type") {
+                    return Some(How::Returns);
+                }
+                if is("type_parameters") || child.kind() == "where_clause" {
+                    return Some(How::Takes);
+                }
+                return if is("name") { None } else { Some(How::Uses) };
+            }
+            "let_declaration" if is("type") => return Some(How::Uses),
+            "field_declaration" => return if is("name") { None } else { Some(How::Holds) },
+            "ordered_field_declaration_list" => return Some(How::Holds),
+            "enum_variant" if is("name") => return None,
+            "type_item" | "struct_item" | "enum_item" | "union_item" | "trait_item" => {
+                return if is("name") { None } else { Some(How::Holds) };
+            }
+            "const_item" | "static_item" => {
+                return match () {
+                    _ if is("type") => Some(How::Holds),
+                    _ if is("value") => Some(How::Makes),
+                    _ => None,
+                };
+            }
+            "impl_item" => {
+                return match () {
+                    _ if is("trait") => {
+                        // The trait itself; a type in its arguments (`From<X>`) is only used.
+                        let t = type_name_node(p.child_by_field_name("trait")?);
+                        Some(if t.id() == n.id() {
+                            How::Implements
+                        } else {
+                            How::Uses
+                        })
+                    }
+                    _ if is("type") => None,
+                    _ => Some(How::Uses),
+                };
+            }
+            "source_file" | "declaration_list" | "block" => return Some(How::Uses),
+            _ => {}
+        }
+        child = p;
+        cur = p.parent();
+    }
+    Some(How::Uses)
+}
+
+/// `a == b`, `a != b`.
+fn is_comparison(binary: Node, src: &[u8]) -> bool {
+    binary
+        .child_by_field_name("operator")
+        .is_some_and(|o| matches!(text_of(Some(o), src).as_str(), "==" | "!="))
 }
 
 /// HTTP client crates and the methods that send a request.
@@ -1726,6 +1977,174 @@ fn data_of(
         .collect()
 }
 
+/// The type a name in the code names, without a code index: in the same file, else the only one of that name in the crate.
+fn named_type<'a>(files: &'a [FileRead], at: usize, name: &str) -> Option<&'a Site> {
+    let types = |f: &'a FileRead| f.items.iter().filter(move |i| i.is_type && i.name == name);
+    if let Some(one) = only(types(&files[at])) {
+        return Some(one);
+    }
+    let krate = files[at].krate.as_ref()?;
+    only(
+        files
+            .iter()
+            .filter(|f| f.krate.as_ref() == Some(krate))
+            .flat_map(types),
+    )
+}
+
+/// The name a code index's symbol of a type, a variant or a field is written with: `Cli`, `Build`, `command`.
+fn written_name(symbol: &str) -> &str {
+    let s = symbol.trim_end_matches(['#', '.']);
+    s.rsplit(['#', '/', ']', ' ']).next().unwrap_or(s)
+}
+
+/***
+ * The uses of types in one file: who makes, takes, returns, holds, matches or implements each, and which fields it reads and sets, as `@uses type (makes, reads command)` (docs/ADAPTERS.md §5.8).
+ *
+ * With a code index, every name the index gives a type of the project
+ * counts, and the syntax there says how; without one, a type's name
+ * is matched in the file, else in the crate, and fields are left out. A
+ * type's own code, and `Type::f(…)` calling a function of the project that
+ * returns something else, count nothing.
+ ***/
+fn uses_of(
+    files: &[FileRead],
+    at: usize,
+    index: Option<&Index>,
+    keys: &HashMap<(&str, usize), &str>,
+    sites: &HashMap<&str, &Site>,
+) -> Vec<Relation> {
+    let file = &files[at];
+    // (user, type) → how it uses it, and where it is first used.
+    let mut uses: Vec<((String, String), TypeUses, Evidence)> = Vec::new();
+    let mut add = |user: &Site, ty: &Site, m: &TypeMention, why: String| {
+        if user.key == ty.key || user.id.starts_with(&format!("{}.", ty.id)) {
+            return;
+        }
+        let pair = (user.key.clone(), ty.key.clone());
+        let i = match uses.iter().position(|(p, ..)| *p == pair) {
+            Some(i) => i,
+            None => {
+                uses.push((pair, TypeUses::default(), Evidence::new(m.line, why)));
+                uses.len() - 1
+            }
+        };
+        uses[i].1.add(m.how, &m.text);
+    };
+    // `Type::f(…)` makes the type unless f is the project's and returns something else.
+    let makes = |m: &TypeMention, ty: &Site| {
+        let Some((line, col, f)) = &m.via else {
+            return true;
+        };
+        let call = CallAt {
+            line: *line,
+            col: *col,
+            name: f.clone(),
+            callee: Some(Callee::Path(vec![m.ty.clone(), f.clone()])),
+            text: format!("{}::{f}", m.ty),
+        };
+        match reached(files, at, index, keys, &call) {
+            Some(key) => sites.get(key.as_str()).is_none_or(|f| {
+                f.returns
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|w| w == "Self" || w == ty.name)
+            }),
+            None => true,
+        }
+    };
+    let user_of = |m: &TypeMention, ty: Option<&Site>| -> Option<&Site> {
+        match &m.implementor {
+            Some((line, col, name)) => match index.filter(|i| i.covers(&file.rel)) {
+                Some(index) => index
+                    .uses(&file.rel)
+                    .iter()
+                    .filter(|r| r.line == *line)
+                    .min_by_key(|r| r.col.abs_diff(*col))
+                    .and_then(|r| docair_scip::type_of(&r.symbol))
+                    .and_then(|(t, _)| index.definition(&t))
+                    .and_then(|(p, l)| keys.get(&(p, l)))
+                    .and_then(|k| sites.get(k).copied()),
+                None => named_type(files, at, name),
+            },
+            None => file
+                .at(&About::Within(m.line))
+                .filter(|u| ty.is_none_or(|t| u.key != t.key)),
+        }
+    };
+    match index.filter(|i| i.covers(&file.rel)) {
+        Some(index) => {
+            for r in index.uses(&file.rel) {
+                let Some((ty, member)) = docair_scip::type_of(&r.symbol) else {
+                    continue;
+                };
+                let Some(ty) = index
+                    .definition(&ty)
+                    .and_then(|(p, l)| keys.get(&(p, l)))
+                    .and_then(|k| sites.get(k).copied())
+                    .filter(|s| s.is_type)
+                else {
+                    continue;
+                };
+                // The syntax at the name: the one at its column, else the nearest of its name on its line.
+                let name = written_name(&r.symbol);
+                let Some(m) = file
+                    .mentions
+                    .iter()
+                    .find(|m| m.line == r.line && m.col == r.col)
+                    .or_else(|| {
+                        file.mentions
+                            .iter()
+                            .filter(|m| m.line == r.line && m.text == name)
+                            .min_by_key(|m| m.col.abs_diff(r.col))
+                    })
+                else {
+                    continue;
+                };
+                // A field read or set is named by the field; a variant's field counts as using the type.
+                let plain_field = member.as_deref().is_some_and(|f| !f.contains('#'));
+                if matches!(m.how, How::Reads | How::Sets) && !plain_field {
+                    continue;
+                }
+                if m.how == How::Makes && !makes(m, ty) {
+                    continue;
+                }
+                let Some(user) = user_of(m, Some(ty)) else {
+                    continue;
+                };
+                add(
+                    user,
+                    ty,
+                    m,
+                    format!("rust-analyzer: {}", docair_scip::short(&r.symbol)),
+                );
+            }
+        }
+        None => {
+            for m in &file.mentions {
+                if matches!(m.how, How::Reads | How::Sets) || m.ty.is_empty() {
+                    continue;
+                }
+                let Some(ty) = named_type(files, at, &m.ty) else {
+                    continue;
+                };
+                if m.how == How::Makes && !makes(m, ty) {
+                    continue;
+                }
+                let Some(user) = user_of(m, Some(ty)) else {
+                    continue;
+                };
+                add(user, ty, m, format!("tree-sitter: {}", m.text));
+            }
+        }
+    }
+    uses.into_iter()
+        .map(|((user, ty), ways, evidence)| Relation {
+            from: user,
+            ..Relation::new(Verb::Uses, Target::Symbol(ty), evidence).payload(Some(ways.words()))
+        })
+        .collect()
+}
+
 /***
  * Turn what the rules found and the calls into facts: each fact on the symbol it belongs to, names linked to their functions.
  *
@@ -1735,6 +2154,7 @@ fn data_of(
  * `config::load()`).
  *
  * @calls docair-lang-rust.calls_of "finds the calls between functions"
+ * @calls docair-lang-rust.uses_of "finds who uses each type"
  ***/
 pub fn link_with(files: Vec<FileRead>, index: Option<&Index>, guesses: CandidateLimit) -> Facts {
     let mut out = Facts::default();
@@ -1753,6 +2173,14 @@ pub fn link_with(files: Vec<FileRead>, index: Option<&Index>, guesses: Candidate
     }
     for at in 0..files.len() {
         out.relations.extend(data_of(&files, at, index, &keys));
+    }
+    let sites: HashMap<&str, &Site> = files
+        .iter()
+        .flat_map(|f| f.items.iter().map(|i| (i.key.as_str(), i)))
+        .collect();
+    for at in 0..files.len() {
+        out.relations
+            .extend(uses_of(&files, at, index, &keys, &sites));
     }
     let (prefix_by_fn, prefix_by_lines) = route_prefixes(&files);
     for (at, file) in files.iter().enumerate() {
@@ -2255,18 +2683,23 @@ mod tests {
                 .requests
                 .iter()
                 .map(|r| format!("requests {} by {}", r.at, shown(&r.by)));
-            let relations = facts.relations.iter().map(|r| {
-                let to = match &r.to {
-                    Target::Symbol(k) => shown(k),
-                    Target::Ref(id) => id.clone(),
-                };
-                let payload = r
-                    .payload
-                    .as_deref()
-                    .map(|p| format!(" ({p})"))
-                    .unwrap_or_default();
-                format!("{} {to} from {}{payload}", r.verb.tag(), shown(&r.from))
-            });
+            // A fixture tests its rule; who uses which type is the adapter's, tested on its own.
+            let relations = facts
+                .relations
+                .iter()
+                .filter(|r| r.verb != Verb::Uses)
+                .map(|r| {
+                    let to = match &r.to {
+                        Target::Symbol(k) => shown(k),
+                        Target::Ref(id) => id.clone(),
+                    };
+                    let payload = r
+                        .payload
+                        .as_deref()
+                        .map(|p| format!(" ({p})"))
+                        .unwrap_or_default();
+                    format!("{} {to} from {}{payload}", r.verb.tag(), shown(&r.from))
+                });
             Ok(serves.chain(requests).chain(relations).collect())
         });
         assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -2319,6 +2752,51 @@ mod tests {
             .collect();
         out.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
         out
+    }
+
+    /// Who uses a type and how, read by the syntax without an index (docs/ADAPTERS.md §5.8).
+    #[test]
+    fn the_syntax_says_who_uses_a_type() {
+        let src = "struct Cli {\n    command: Command,\n}\nenum Command {\n    Build { root: String },\n    Check,\n}\ntrait Adapter {}\nstruct RustAdapter;\nimpl Adapter for RustAdapter {}\nstruct Graph;\nimpl Graph {\n    fn new() -> Self { Graph }\n    fn size(&self) -> usize { 0 }\n}\nfn draw(g: &Graph) -> Option<Cli> {\n    let _ = Graph::size(g);\n    None\n}\nfn main() {\n    let cli = Cli::parse();\n    match cli.command {\n        Command::Build { root } => {}\n        Command::Check => {}\n    }\n    let g = Graph::new();\n}\nuse self::Graph as G;\n";
+        let facts = facts_with(&rust_file("src/lib.rs", src), rules());
+        let shown = |key: &str| {
+            facts
+                .symbols
+                .iter()
+                .find(|s| s.key == key)
+                .and_then(|s| s.name.clone())
+                .unwrap_or_default()
+        };
+        let mut uses: Vec<String> = facts
+            .relations
+            .iter()
+            .filter(|r| r.verb == Verb::Uses)
+            .map(|r| {
+                let Target::Symbol(k) = &r.to else {
+                    panic!("{r:?}")
+                };
+                format!(
+                    "{} {} ({})",
+                    shown(&r.from),
+                    shown(k),
+                    r.payload.clone().unwrap_or_default()
+                )
+            })
+            .collect();
+        uses.sort();
+        assert_eq!(
+            uses,
+            [
+                "Cli Command (holds)",
+                "RustAdapter Adapter (implements)",
+                "draw Cli (returns)",
+                "draw Graph (takes)",
+                "main Cli (makes)",
+                "main Command (matches)",
+                "main Graph (makes)",
+            ],
+            "Graph::size returns no Graph: that is a call, not a use; Graph's own methods and the `use` count nothing; fields need the index"
+        );
     }
 
     /// Without an index, only the calls the syntax makes certain (docs/ADAPTERS.md §5.4).

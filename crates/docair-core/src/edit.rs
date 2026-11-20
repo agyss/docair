@@ -261,7 +261,8 @@ pub fn unknown_refs(change: &Change, known: &dyn Fn(&str) -> bool) -> Vec<String
 fn ref_of<'a>(name: &str, value: &'a str) -> Option<&'a str> {
     let first = || value.split_whitespace().next();
     let r = match name {
-        "calls" | "reads" | "writes" | "creates" | "covers" | "part-of" | "deployed-as" => first(),
+        "calls" | "reads" | "writes" | "creates" | "uses" | "covers" | "part-of"
+        | "deployed-as" => first(),
         "in" => value
             .split(" from ")
             .nth(1)

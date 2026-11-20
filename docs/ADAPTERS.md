@@ -494,6 +494,87 @@ docair's own stores say their paths, though its code builds them at run time
 `const` tables (`LANGUAGES`); what Dockerfiles and `local-exec` read and write (they are read for the program a Service reaches, §7). On
 docair: `@reads` 12 of 20 confirmed and 1 behind a call, `@writes` 5 of 7.
 
+### 5.8 Types: who makes, takes and holds them
+
+docair-4wk.35. Structs, enums, traits, type aliases and TypeScript interfaces
+are parts, but on 2026-11-19 nothing said who uses them: 226 of docair's 227
+structs had no line. `docair-scip` kept only references to functions. Asked
+what `Cli` is, the AI read the source, said `main` uses it, and so contradicted
+the graph.
+
+**Which uses count.** A use is a name of a project type in another part's code.
+The code around the name says how it is used:
+
+| Use | Rust | TypeScript |
+|-----|------|------------|
+| makes | `Cli { … }`, `Cli::parse()`, `Command::Build { … }` as a value, `Reach::Certain` | `{ … } as T`, `new T(…)`, `const x: T = { … }` |
+| takes | a parameter's type: `g: &Graph`, `impl Adapter`, a generic bound | a parameter's type |
+| returns | the return type: `-> Option<Graph>` | the return type |
+| holds | a field's type, a variant's fields, a type alias, a `const`'s type | a property's type, a type alias |
+| matches | a pattern: `Command::Build { root, .. } =>`, `if let`, `x == Kind::A` | — |
+| implements | `impl Adapter for RustAdapter`: the type uses the trait | `class A implements B`, `extends` |
+| reads, sets | a field: `cli.command`, `x.end = …` (named: *reads command*) | a property |
+| uses | anything else: a `let`'s type, a cast, inside a macro | anything else |
+
+`Type::f(…)` makes the type when `f` is outside the project (`Cli::parse()`
+comes from clap's derive) or returns it (`Self`, `T`, `Result<T, …>`); else the
+call is a call line already, and the name adds nothing. `use` lines, doc
+comments, `impl T { … }` headers and a type's own code (its methods) count
+nothing: they name the type without using it.
+
+**From the index, else the syntax.** The code index names the type behind every
+name (`rust-analyzer cargo docair-cli 0.1.0 Cli#`, `Cli#command.`,
+`Command#Build#`; the type is the descriptor up to its first `#`), also through
+`use` renames, `Self` and macros. The syntax tree there says how.
+Without an index, a type name is matched like a function's (§5.4): in the same
+file, else the only one of that name in the crate; fields are left out, since
+only the index knows whose they are.
+
+**One line per user and type**, as `@uses <type> (makes, reads command)`:
+`this → type`, kind `use`. Like every other tag it can be written by hand; the
+code's tag merges with it.
+
+**How it shows.** Three ways, measured on docair's Code layer before choosing:
+
+1. a line per user and type, drawn like the others;
+2. folded into what lines carry: §5.6's data lines already name a type
+   (`blocks: Vec<RawBlock>`); a type no data line names stays alone;
+3. a list in the type's details (*made by main · read by main*), no line drawn.
+
+**Built (docair-4wk.35, 2026-11-20), and how it shows: 3.** Measured on
+docair's own graph with the code index:
+
+| | Code layer | Its layout | All pictures |
+|---|---|---|---|
+| before | 729 parts, 1,723 lines | 21.2 s | 31.9 s |
+| 1. a line per use | 887 parts, 2,834 lines, 384,577 crossings | 342.7 s | 370.0 s |
+| 2. folded into data lines | unchanged | unchanged | unchanged; only 99 of 312 types are named by a data line, so `Cli` stays alone |
+| 3. listed, not drawn | 743 parts, 1,764 lines (the code of this step) | 21.3 s | 32.5 s |
+
+There are 2,625 uses, more than the 2,240 calls: `Graph` alone has 160
+users. So a type's details list them (*Used by*: `main` · makes, reads
+command; and a part's *Uses*), and the AI's digest puts them on the type
+(`"used_by"`). Pictures, slices, the parts a picture pulls in, and the lines
+two versions differ in (CHANGES.md) leave them out: they are not lines on
+the page, and have no tip. A use and a call between the same two parts stay
+two edges. The lists make docair's page 0.8 MB bigger (11.0 to 11.8 MB), and
+the digest 14% (1.02 to 1.16 MB), on the type as `"used_by": {"docair-cli.main":
+"makes, reads command"}` rather than one edge each.
+
+Of docair's 318 types (structs, enums, traits, type aliases, TypeScript
+interfaces and classes), 310 have users. Of the 8 without: 1 nothing refers
+to (`type Value` of a serde visitor); 7 lose their uses because another item
+has their id (the adapters in `static ALL`, whose id `all` is also `fn
+all`'s, and `KeptUploads` and `ExplainJobs`, held by `struct Config`, whose
+id a block gives to `Config::from_env`), docair-4wk.38. The words come out
+as: reads 1,315, takes 757, makes 627, holds 304, returns 303, matches 158,
+sets 80, uses 45, implements 6. TypeScript reads uses from scip-typescript
+where it indexed the file, else from the syntax: a type's name in the file,
+else through its imports (`ServedCopy` from `./helpers`).
+
+**The AI** reads a type part's uses in its digest, like its calls, so a question
+about a type is answered from the graph.
+
 ---
 
 ## 6. Merging code and blocks
@@ -736,7 +817,7 @@ crates/
   docair-lang-ts        TS/JS: symbols, classes, decorators, imports, calls; rules/: angular, http-client, fetch, playwright, …
   docair-lang-infra     Terraform, Helm, Kubernetes (today's core/src/infra.rs)
   docair-lang-generic   keyword guesses for languages without an adapter (today's adapter::fallback)
-  docair-scip           reads SCIP indexes (any language) into call relations; runs the installed indexers
+  docair-scip           reads SCIP indexes (any language) into calls and the names of types; runs the installed indexers
   docair-adapters       the registry: all()
 ```
 

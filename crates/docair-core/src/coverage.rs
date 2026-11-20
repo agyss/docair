@@ -10,6 +10,7 @@ use crate::route::{Fit, Route};
 /// The tags that make lines, as authors write them; `@covers` is intent, not code, so it is left out.
 const LINES: &[&str] = &[
     "calls", "in", "out", "reads", "writes", "emits", "consumes", "creates", "routes", "selects",
+    "uses",
 ];
 
 /// How far a chain of lines is followed for a shortcut or a request.

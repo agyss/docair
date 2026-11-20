@@ -29,6 +29,8 @@ pub struct Reference {
 pub struct Index {
     /// References to functions and methods, by file, in source order.
     refs: HashMap<String, Vec<Reference>>,
+    /// References to types and their fields and variants, by file, in source order (docs/ADAPTERS.md §5.8).
+    uses: HashMap<String, Vec<Reference>>,
     /// Where each function or method is defined: file and line.
     defs: HashMap<String, (String, usize)>,
     /// (trait, method) → the methods that implement it.
@@ -63,6 +65,54 @@ fn last(symbol: &str) -> &str {
 /// Whether a symbol is a function or method: its last descriptor is a method (`name().`).
 pub fn callable(symbol: &str) -> bool {
     !symbol.starts_with("local ") && symbol.ends_with(").")
+}
+
+/// The type a symbol belongs to, and the member it names (docs/ADAPTERS.md §5.8):
+/// `… Cli#` → (`… Cli#`, none), `… Cli#command.` → (`… Cli#`, `command`),
+/// `… Command#Build#root.` → (`… Command#`, `Build#root`),
+/// `… config/impl#[CandidateLimit]DEFAULT.` → (`… config/CandidateLimit#`, `DEFAULT`).
+/// None for functions and methods, locals, modules, macros and what no type holds.
+pub fn type_of(symbol: &str) -> Option<(String, Option<String>)> {
+    if symbol.starts_with("local ") || callable(symbol) {
+        return None;
+    }
+    let d = descriptors(symbol);
+    let head = &symbol[..symbol.len() - d.len()];
+    // The namespaces before the type: `model/` of `model/Graph#nodes.`.
+    let mut depth = 0i32;
+    let mut start = 0;
+    let mut hash = None;
+    for (i, c) in d.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            '/' if depth == 0 && hash.is_none() => start = i + 1,
+            '#' if depth == 0 && hash.is_none() => hash = Some(i),
+            _ => {}
+        }
+    }
+    let rest = &d[start..];
+    let member = |m: &str| {
+        let m = m.trim_end_matches(['.', '#']);
+        (!m.is_empty()).then(|| m.to_string())
+    };
+    if let Some(inner) = rest.strip_prefix("impl#[") {
+        // A constant or type written in an impl: its type is the one in brackets.
+        let (ty, m) = inner.split_once(']')?;
+        if ty.contains(['`', '<', ' ']) || m.starts_with('[') {
+            return None;
+        }
+        return Some((format!("{head}{}{ty}#", &d[..start]), member(m)));
+    }
+    let hash = hash?.checked_sub(start)?;
+    let ty = &rest[..=hash];
+    if ty.contains(['[', '(']) {
+        return None;
+    }
+    Some((
+        format!("{head}{}{ty}", &d[..start]),
+        member(&rest[hash + 1..]),
+    ))
 }
 
 fn method_name(descriptor: &str) -> Option<&str> {
@@ -135,7 +185,24 @@ impl Index {
             let path = doc.relative_path.clone();
             out.docs.insert(path.clone());
             for o in doc.occurrences {
-                if !callable(&o.symbol) || o.range.is_empty() {
+                if o.range.is_empty() {
+                    continue;
+                }
+                if !callable(&o.symbol) {
+                    // A type, its fields and variants: where each type is, and every name of one.
+                    if o.symbol_roles & DEFINITION != 0 {
+                        if o.symbol.ends_with('#') && type_of(&o.symbol).is_some() {
+                            out.defs
+                                .entry(o.symbol)
+                                .or_insert((path.clone(), o.range[0] as usize + 1));
+                        }
+                    } else if type_of(&o.symbol).is_some() {
+                        out.uses.entry(path.clone()).or_default().push(Reference {
+                            line: o.range[0] as usize + 1,
+                            col: o.range.get(1).map_or(0, |c| *c as usize),
+                            symbol: o.symbol,
+                        });
+                    }
                     continue;
                 }
                 let line = o.range[0] as usize + 1;
@@ -161,6 +228,9 @@ impl Index {
         for (path, refs) in other.refs {
             self.refs.entry(path).or_default().extend(refs);
         }
+        for (path, uses) in other.uses {
+            self.uses.entry(path).or_default().extend(uses);
+        }
         for (symbol, def) in other.defs {
             self.defs.entry(symbol).or_insert(def);
         }
@@ -179,6 +249,7 @@ impl Index {
         let at = |p: String| format!("{}/{p}", prefix.trim_end_matches('/'));
         Index {
             refs: self.refs.into_iter().map(|(p, r)| (at(p), r)).collect(),
+            uses: self.uses.into_iter().map(|(p, r)| (at(p), r)).collect(),
             defs: self
                 .defs
                 .into_iter()
@@ -199,7 +270,12 @@ impl Index {
         self.refs.get(path).map_or(&[], Vec::as_slice)
     }
 
-    /// Where a function or method is defined: its file and line (1-based).
+    /// The names of types, their fields and variants in a file (not their definitions), in source order.
+    pub fn uses(&self, path: &str) -> &[Reference] {
+        self.uses.get(path).map_or(&[], Vec::as_slice)
+    }
+
+    /// Where a function, method or type is defined: its file and line (1-based).
     pub fn definition(&self, symbol: &str) -> Option<(&str, usize)> {
         self.defs.get(symbol).map(|(p, l)| (p.as_str(), *l))
     }
@@ -467,6 +543,59 @@ mod tests {
         assert_eq!(short(TRAIT), "Adapter::file");
         assert_eq!(short(IMPL), "RustAdapter::file");
         assert_eq!(short(INHERENT), "Facts::extend");
+    }
+
+    /// A name of a type, a field or a variant gives the type it belongs to (docs/ADAPTERS.md §5.8).
+    #[test]
+    fn a_name_gives_its_type() {
+        let cli = "rust-analyzer cargo docair-cli 0.1.0 Cli#";
+        let of = |s: &str| type_of(s).map(|(t, m)| (t, m.unwrap_or_default()));
+        assert_eq!(of(cli), Some((cli.to_string(), String::new())));
+        assert_eq!(
+            of("rust-analyzer cargo docair-cli 0.1.0 Cli#command."),
+            Some((cli.to_string(), "command".into()))
+        );
+        assert_eq!(
+            of("rust-analyzer cargo docair-cli 0.1.0 Command#Build#root."),
+            Some((
+                "rust-analyzer cargo docair-cli 0.1.0 Command#".into(),
+                "Build#root".into()
+            ))
+        );
+        assert_eq!(
+            of("rust-analyzer cargo docair-core 0.1.0 model/Graph#nodes."),
+            Some((
+                "rust-analyzer cargo docair-core 0.1.0 model/Graph#".into(),
+                "nodes".into()
+            ))
+        );
+        assert_eq!(
+            of("rust-analyzer cargo docair-core 0.1.0 config/impl#[CandidateLimit]DEFAULT."),
+            Some((
+                "rust-analyzer cargo docair-core 0.1.0 config/CandidateLimit#".into(),
+                "DEFAULT".into()
+            ))
+        );
+        assert_eq!(type_of(FREE), None, "a function");
+        assert_eq!(type_of(INHERENT), None, "a method");
+        assert_eq!(type_of("local 3"), None);
+        assert_eq!(
+            type_of("rust-analyzer cargo docair-cli 0.1.0 tidy/"),
+            None,
+            "a module"
+        );
+        assert_eq!(
+            type_of("rust-analyzer cargo docair-core 0.1.0 config/DEFAULT_STORE."),
+            None,
+            "a constant of no type"
+        );
+        assert_eq!(
+            of("scip-typescript npm docair-web 0.0.0 src/app/`progress-line.ts`/Progress#phase."),
+            Some((
+                "scip-typescript npm docair-web 0.0.0 src/app/`progress-line.ts`/Progress#".into(),
+                "phase".into()
+            ))
+        );
     }
 
     #[test]

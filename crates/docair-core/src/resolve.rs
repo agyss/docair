@@ -348,7 +348,8 @@ pub fn resolve(
         .map(|(i, n)| (n.id.clone(), i))
         .collect();
     let mut edges: Vec<Edge> = Vec::new();
-    let mut by_pair: HashMap<(String, String), usize> = HashMap::new();
+    // One line per pair of parts; a type's use stays apart, since it is not drawn (docs/ADAPTERS.md §5.8).
+    let mut by_pair: HashMap<(String, String, bool), usize> = HashMap::new();
     bind_open_refs(&mut nodes, &index);
 
     for i in 0..nodes.len() {
@@ -373,6 +374,7 @@ pub fn resolve(
                 }
                 "calls" => (EdgeKind::Call, None, tag.value.clone(), true),
                 "creates" => (EdgeKind::Create, None, tag.value.clone(), true),
+                "uses" => (EdgeKind::Use, None, tag.value.clone(), true),
                 "covers" => (EdgeKind::Cover, None, tag.value.clone(), true),
                 "routes" => (EdgeKind::Route, None, tag.value.clone(), true),
                 "selects" => (EdgeKind::Select, None, tag.value.clone(), true),
@@ -481,7 +483,7 @@ pub fn resolve(
             } else {
                 (resolved.id, node_id.clone())
             };
-            if let Some(&k) = by_pair.get(&(from.clone(), to.clone())) {
+            if let Some(&k) = by_pair.get(&(from.clone(), to.clone(), kind.drawn())) {
                 let e: &mut Edge = &mut edges[k];
                 // Code facts stay on the line, and an author's words add to them
                 // (docs/ADAPTERS.md §6); words that say the same show once.
@@ -505,7 +507,7 @@ pub fn resolve(
                 e.reply = e.reply.take().or(reply);
                 continue;
             }
-            by_pair.insert((from.clone(), to.clone()), edges.len());
+            by_pair.insert((from.clone(), to.clone(), kind.drawn()), edges.len());
             edges.push(Edge {
                 id: String::new(),
                 from,

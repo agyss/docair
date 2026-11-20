@@ -14,6 +14,7 @@ use docair_core::glossary::normalize;
 use docair_core::ids::slug;
 use docair_core::model::{Diagnostic, SourceFile};
 use docair_core::signature::ts_signature;
+use docair_core::type_uses::{TypeUse, TypeUses};
 use docair_rules::{About, Fact, Grammar, RuleSet};
 use tree_sitter::{Node, Parser};
 
@@ -211,6 +212,8 @@ struct Site {
     class: Option<String>,
     /// A function or method another one can call.
     callable: bool,
+    /// An interface, a type alias, an enum or a class (docs/ADAPTERS.md §5.8).
+    is_type: bool,
 }
 
 /// A class: where it is, the types of its fields (`http = inject(HttpClient)` makes `http` an HttpClient), and what Angular says about it.
@@ -289,6 +292,8 @@ pub struct FileRead {
     named: Vec<NamedCall>,
     /// `x.m(…)` on a value of no known type: (line, method, code) (docs/ADAPTERS.md §5.5).
     could: Vec<(usize, String, String)>,
+    /// Names of types and their members, and how the code uses each: (line, column, name, how) (docs/ADAPTERS.md §5.8).
+    mentions: Vec<(usize, usize, String, TypeUse)>,
 }
 
 struct Reader<'a> {
@@ -342,6 +347,7 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             listens: Vec::new(),
             named: Vec::new(),
             could: Vec::new(),
+            mentions: Vec::new(),
         };
     };
     // The project's root: the package of a file is never looked for above it.
@@ -397,7 +403,128 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
         listens: r.listens,
         named: r.named,
         could: r.could,
+        mentions: type_mentions(tree.root_node(), file.text.as_bytes()),
     }
+}
+
+/***
+ * Every name of a type or a member in a file, and how the code around it uses it (docs/ADAPTERS.md §5.8).
+ *
+ * The nearest telling place around the name decides, as in Rust: a
+ * parameter takes, the return type returns, a property's or an alias's type
+ * holds, `new T(…)` and an object literal's keys make, `implements` and
+ * `extends` implement, a member after a dot reads or, left of `=`, sets.
+ * Imports and the declaration's own name count nothing.
+ ***/
+fn type_mentions(root: Node, src: &[u8]) -> Vec<(usize, usize, String, TypeUse)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        let children: Vec<Node> = n.named_children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+        if !matches!(
+            n.kind(),
+            "type_identifier"
+                | "property_identifier"
+                | "shorthand_property_identifier"
+                | "identifier"
+        ) {
+            continue;
+        }
+        if let Some(how) = ts_how(n) {
+            out.push((
+                n.start_position().row + 1,
+                n.start_position().column,
+                n.utf8_text(src).unwrap_or("").to_string(),
+                how,
+            ));
+        }
+    }
+    out
+}
+
+/// How the code around a TypeScript name uses it; none where it only names it.
+fn ts_how(n: Node) -> Option<TypeUse> {
+    if n.kind() == "shorthand_property_identifier" {
+        return Some(TypeUse::Makes);
+    }
+    let mut child = n;
+    let mut cur = n.parent();
+    while let Some(p) = cur {
+        let is = |name: &str| {
+            p.child_by_field_name(name)
+                .is_some_and(|c| c.id() == child.id())
+        };
+        match p.kind() {
+            "import_statement" | "import_clause" | "import_specifier" | "export_clause"
+            | "export_specifier" | "comment" => return None,
+            "required_parameter" | "optional_parameter" => {
+                return if is("pattern") {
+                    None
+                } else {
+                    Some(TypeUse::Takes)
+                };
+            }
+            "function_declaration"
+            | "method_definition"
+            | "arrow_function"
+            | "function_expression"
+            | "method_signature"
+            | "function_signature" => {
+                return match () {
+                    _ if is("return_type") => Some(TypeUse::Returns),
+                    _ if is("name") => None,
+                    _ => Some(TypeUse::Uses),
+                };
+            }
+            "public_field_definition" | "property_signature" | "type_alias_declaration" => {
+                return if is("name") {
+                    None
+                } else {
+                    Some(TypeUse::Holds)
+                };
+            }
+            "extends_type_clause" | "class_heritage" | "implements_clause" | "extends_clause" => {
+                return Some(TypeUse::Implements);
+            }
+            "interface_declaration"
+            | "class_declaration"
+            | "abstract_class_declaration"
+            | "enum_declaration" => {
+                return if is("name") {
+                    None
+                } else {
+                    Some(TypeUse::Holds)
+                };
+            }
+            "new_expression" => return Some(TypeUse::Makes),
+            // `@Component({ imports: [ProgressLine] })`: the component uses another in its template.
+            "decorator" => return Some(TypeUse::Uses),
+            "pair" if is("key") => return Some(TypeUse::Makes),
+            "member_expression" if is("property") => {
+                let left = p.parent().is_some_and(|q| {
+                    matches!(
+                        q.kind(),
+                        "assignment_expression" | "augmented_assignment_expression"
+                    ) && q
+                        .child_by_field_name("left")
+                        .is_some_and(|l| l.id() == p.id())
+                });
+                return Some(if left { TypeUse::Sets } else { TypeUse::Reads });
+            }
+            "variable_declarator" if is("name") => return None,
+            "as_expression"
+            | "satisfies_expression"
+            | "statement_block"
+            | "program"
+            | "class_body" => return Some(TypeUse::Uses),
+            _ => {}
+        }
+        child = p;
+        cur = p.parent();
+    }
+    Some(TypeUse::Uses)
 }
 
 impl Reader<'_> {
@@ -456,13 +583,19 @@ impl Reader<'_> {
         let line = name_node.start_position().row + 1;
         let key = format!("ts:{}:{line}", self.file.rel);
         let name = self.text(name_node).to_string();
+        let is_type = matches!(
+            display.split(' ').next(),
+            Some("interface" | "type" | "enum" | "class")
+        );
         self.sites.push(Site {
             key: key.clone(),
-            start: node.start_position().row + 1,
+            // A type starts at its decorators (`@Component({ imports: [ProgressLine] })`), above `export`.
+            start: if is_type { anchor } else { node }.start_position().row + 1,
             end: node.end_position().row + 1,
             name: name.clone(),
             class: parent_line.and(parents.first().cloned()),
             callable: kind.value == "function",
+            is_type,
         });
         self.facts.symbols.push(Symbol {
             draw: Draw::Always,
@@ -733,6 +866,7 @@ impl Reader<'_> {
             name: String::new(),
             class: None,
             callable: false,
+            is_type: false,
         });
         self.facts.symbols.push(Symbol {
             display: Some(name.clone()),
@@ -759,6 +893,7 @@ impl Reader<'_> {
             name: String::new(),
             class: None,
             callable: false,
+            is_type: false,
         });
         // Tests keep the id the build derives from file and title (`levels-spec.every-line-has-words`).
         self.facts.symbols.push(Symbol {
@@ -1367,6 +1502,7 @@ pub fn link_with_index(
             }
         }
     }
+    extra.extend(uses_of(&files, index));
     let mut out = link_inner(files, html, limit);
     // The index's calls first: a call the syntax also found is the same line.
     let known: HashSet<(String, String)> = out
@@ -1380,10 +1516,136 @@ pub fn link_with_index(
         .collect();
     out.relations
         .extend(extra.into_iter().filter(|r| match &r.to {
-            Target::Symbol(t) => !known.contains(&(r.from.clone(), t.clone())),
+            // A type's use is no call: it stays beside the call (docs/ADAPTERS.md §5.8).
+            Target::Symbol(t) if r.verb == Verb::Calls => {
+                !known.contains(&(r.from.clone(), t.clone()))
+            }
             _ => true,
         }));
     out
+}
+
+/***
+ * Who uses each type of the project, and how: `@uses type (holds, reads phase)` (docs/ADAPTERS.md §5.8).
+ *
+ * In a file the code index read, every name it gives an interface, a type
+ * alias, an enum or a class counts, and the syntax there says how; in
+ * another file, a type's name is matched in the file, else through its
+ * imports, and members are left out. A type's own code counts nothing.
+ ***/
+fn uses_of(files: &[FileRead], index: Option<&docair_scip::Index>) -> Vec<Relation> {
+    let types: HashMap<&str, &Site> = files
+        .iter()
+        .flat_map(|f| f.sites.iter().filter(|s| s.is_type))
+        .map(|s| (s.key.as_str(), s))
+        .collect();
+    // The file a site is in: its key is `ts:<file>:<line>`.
+    let file_of = |s: &Site| s.key.rsplit_once(':').map_or("", |(k, _)| k).to_string();
+    let rels: HashMap<&str, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.rel.as_str(), i))
+        .collect();
+    let mut uses: Vec<((String, String), TypeUses, Evidence)> = Vec::new();
+    let mut add = |user: &Site, ty: &Site, how: TypeUse, text: &str, line: usize, why: String| {
+        // The type's own code, or a part inside it.
+        if user.key == ty.key
+            || (file_of(user) == file_of(ty) && ty.start <= user.start && user.end <= ty.end)
+        {
+            return;
+        }
+        let pair = (user.key.clone(), ty.key.clone());
+        let i = match uses.iter().position(|(p, ..)| *p == pair) {
+            Some(i) => i,
+            None => {
+                uses.push((pair, TypeUses::default(), Evidence::new(line, why)));
+                uses.len() - 1
+            }
+        };
+        uses[i].1.add(how, text);
+    };
+    fn user_at(f: &FileRead, line: usize) -> Option<&Site> {
+        f.sites
+            .iter()
+            .filter(|s| s.start <= line && line <= s.end)
+            .min_by_key(|s| s.end - s.start)
+    }
+    for (fi, f) in files.iter().enumerate() {
+        let Some(index) = index.filter(|i| i.covers(&f.rel)) else {
+            // No index for this file: a type's name, in the file or through its imports.
+            for (line, _, text, how) in &f.mentions {
+                if matches!(how, TypeUse::Reads | TypeUse::Sets)
+                    || !text.chars().next().is_some_and(char::is_uppercase)
+                {
+                    continue;
+                }
+                let named = |g: usize| files[g].sites.iter().find(|s| s.is_type && s.name == *text);
+                let Some(ty) =
+                    named(fi).or_else(|| imported_file(files, &rels, fi, text).and_then(named))
+                else {
+                    continue;
+                };
+                if let Some(user) = user_at(f, *line) {
+                    add(user, ty, *how, text, *line, format!("tree-sitter: {text}"));
+                }
+            }
+            continue;
+        };
+        for r in index.uses(&f.rel) {
+            let Some((ty, member)) = docair_scip::type_of(&r.symbol) else {
+                continue;
+            };
+            let Some(ty) = index
+                .definition(&ty)
+                .and_then(|(path, line)| types.get(format!("ts:{path}:{line}").as_str()))
+            else {
+                continue;
+            };
+            let Some(user) = user_at(f, r.line) else {
+                continue;
+            };
+            let name = r.symbol.trim_end_matches(['#', '.']);
+            let name = name.rsplit(['#', '/', ' ', '`']).next().unwrap_or(name);
+            let Some((_, _, text, how)) = f
+                .mentions
+                .iter()
+                .filter(|m| m.0 == r.line && m.2 == name)
+                .min_by_key(|m| m.1.abs_diff(r.col))
+            else {
+                continue;
+            };
+            let plain_field = member.as_deref().is_some_and(|m| !m.contains('#'));
+            if matches!(how, TypeUse::Reads | TypeUse::Sets) && !plain_field {
+                continue;
+            }
+            let why = format!("scip-typescript: {}", docair_scip::short(&r.symbol));
+            add(user, ty, *how, text, r.line, why);
+        }
+    }
+    uses.into_iter()
+        .map(|((user, ty), ways, evidence)| Relation {
+            from: user,
+            ..Relation::new(Verb::Uses, Target::Symbol(ty), evidence).payload(Some(ways.words()))
+        })
+        .collect()
+}
+
+/// The file an import names: `./app/app` from `web/src/main.ts` → `web/src/app/app.ts`.
+fn imported_file(
+    files: &[FileRead],
+    rels: &HashMap<&str, usize>,
+    fi: usize,
+    name: &str,
+) -> Option<usize> {
+    let spec = files[fi].imports.get(name)?;
+    if !spec.starts_with('.') {
+        return None;
+    }
+    let dir = files[fi].rel.rsplit_once('/').map_or("", |(d, _)| d);
+    let base = normalize(&Path::new(dir).join(spec))?;
+    ["", ".ts", ".tsx", ".js", ".mjs", "/index.ts", "/index.js"]
+        .iter()
+        .find_map(|ext| rels.get(format!("{base}{ext}").as_str()).copied())
 }
 
 fn link_inner(
@@ -1410,17 +1672,7 @@ fn link_inner(
         }
     }
     // The file an import names: `./app/app` from `web/src/main.ts` → `web/src/app/app.ts`.
-    let imported = |fi: usize, name: &str| -> Option<usize> {
-        let spec = files[fi].imports.get(name)?;
-        if !spec.starts_with('.') {
-            return None;
-        }
-        let dir = files[fi].rel.rsplit_once('/').map_or("", |(d, _)| d);
-        let base = normalize(&Path::new(dir).join(spec))?;
-        ["", ".ts", ".tsx", ".js", ".mjs", "/index.ts", "/index.js"]
-            .iter()
-            .find_map(|ext| rels.get(format!("{base}{ext}").as_str()).copied())
-    };
+    let imported = |fi: usize, name: &str| imported_file(&files, &rels, fi, name);
     let class_named = |fi: usize, name: &str| -> Option<(usize, usize)> {
         let at = |f: usize| {
             files[f]
@@ -2113,13 +2365,18 @@ mod tests {
                 .serves
                 .iter()
                 .map(|s| format!("serves {} by {}", s.at, shown(&s.by)));
-            let relations = facts.relations.iter().map(|r| {
-                let to = match &r.to {
-                    Target::Symbol(k) => shown(k),
-                    Target::Ref(id) => id.clone(),
-                };
-                format!("{} {to} from {}", r.verb.tag(), shown(&r.from))
-            });
+            // A fixture tests its rule; who uses which type is the adapter's, tested on its own.
+            let relations = facts
+                .relations
+                .iter()
+                .filter(|r| r.verb != Verb::Uses)
+                .map(|r| {
+                    let to = match &r.to {
+                        Target::Symbol(k) => shown(k),
+                        Target::Ref(id) => id.clone(),
+                    };
+                    format!("{} {to} from {}", r.verb.tag(), shown(&r.from))
+                });
             Ok(requests.chain(serves).chain(relations).collect())
         });
         assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -2276,11 +2533,34 @@ mod tests {
         let mut calls: Vec<String> = facts
             .relations
             .iter()
+            .filter(|r| r.verb != Verb::Uses)
             .filter_map(|r| match &r.to {
                 Target::Symbol(to) => Some(format!("{} -> {}", name(&r.from), name(to))),
                 Target::Ref(_) => None,
             })
             .collect();
+        let uses: Vec<String> = facts
+            .relations
+            .iter()
+            .filter(|r| r.verb == Verb::Uses)
+            .filter_map(|r| match &r.to {
+                Target::Symbol(to) => Some(format!(
+                    "{} {} ({})",
+                    name(&r.from),
+                    name(to),
+                    r.payload.as_deref().unwrap_or("")
+                )),
+                Target::Ref(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            uses,
+            [
+                "web.src.app.app.app web.src.app.scan-service.scan-service (holds)",
+                "bootstrapApplication web.src.app.app.app (uses)"
+            ],
+            "without an index, a type's name is found through the file's imports (docs/ADAPTERS.md §5.8)"
+        );
         calls.sort();
         assert_eq!(
             calls,
