@@ -122,6 +122,7 @@ unrequested_routes = true             # W118: a route nothing in the project req
 
 [code]                                # calls between functions (docs/ADAPTERS.md §5.4)
 run_indexers = true                   # run rust-analyzer and scip-typescript when installed, and read their indexes
+max_candidates = 5                    # could lines a call by a shared name may draw: -1 none, 0 all; more is E007
 scip = ["ci/rust.scip"]               # or read index files built elsewhere (CI), inside the root
 
 [explain]                             # docair explain (docs/EXPLAIN.md)
@@ -1624,6 +1625,7 @@ Flow {
 | `E004` | error / error   | free block without `@id` (except a `@scenario` block), or malformed id |
 | `E005` | error / error   | doc block is never closed |
 | `E006` | error / error   | malformed tag value (`@http` without a path, `@flow` without a step number) |
+| `E007` | error / error   | a call by a name more functions have than `[code] max_candidates` allows: no could line is drawn; raise it, set 0 for all, or -1 for none (docs/ADAPTERS.md §5.5) |
 | `W101` | warning         | unknown tag |
 | `W102` | warning         | unknown kind |
 | `W103` | warning         | block and code disagree (§6) |

@@ -72,6 +72,55 @@ pub struct CodeSettings {
     /// Never for an untrusted project (`Options::untrusted`): an indexer builds the code, and build scripts run.
     #[serde(default)]
     pub run_indexers: bool,
+    /// How many functions a call by a name several have may get could lines to (docair-4wk.36):
+    /// -1 none (no guesses), 0 every one, N at most N; default 5. A call with more is an error.
+    pub max_candidates: Option<i64>,
+}
+
+/// How many could lines a call by a name several functions have may draw (`[code] max_candidates`,
+/// docair-4wk.36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateLimit {
+    /// No could lines at all (-1).
+    Off,
+    /// One to every candidate, however many (0).
+    All,
+    /// To at most this many; a call with more is reported as an error.
+    AtMost(usize),
+}
+
+impl CandidateLimit {
+    /// The default: at most 5.
+    pub const DEFAULT: CandidateLimit = CandidateLimit::AtMost(5);
+
+    /// A call by a name more functions have than the limit allows: an error, so the limit is raised
+    /// or guesses turned off rather than the call silently left undrawn (docair-4wk.36).
+    pub fn too_many(
+        file: &str,
+        line: usize,
+        text: &str,
+        name: &str,
+        found: usize,
+        limit: usize,
+    ) -> crate::model::Diagnostic {
+        crate::model::Diagnostic::new(
+            "E007",
+            format!(
+                "the call `{text}(…)` could go to {found} functions named `{name}`, more than [code] max_candidates ({limit}) allows, so none is drawn: raise it, set 0 to draw them all, or -1 for no guesses"
+            ),
+        )
+        .at(file, line)
+    }
+
+    /// `[code] max_candidates` as a rule; the default when it says nothing.
+    pub fn of(code: Option<&CodeSettings>) -> CandidateLimit {
+        match code.and_then(|c| c.max_candidates) {
+            None => CandidateLimit::DEFAULT,
+            Some(0) => CandidateLimit::All,
+            Some(n) if n < 0 => CandidateLimit::Off,
+            Some(n) => CandidateLimit::AtMost(n as usize),
+        }
+    }
 }
 
 /***

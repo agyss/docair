@@ -408,8 +408,14 @@ tag.
   could lines to it. Without an index, that one true call is drawn as
   nothing; with an index, it is certain.
 * A path known in part matches only routes that fit every known segment.
-* A call with more candidates than `[code] max_candidates` (default 5) draws
-  no lines; the details panel lists them instead.
+* `[code] max_candidates` (default 5) says how many (docair-4wk.36): `-1`
+  draws no could lines at all, `0` draws one to every candidate, `N` to at
+  most N. A call with more than N draws none and is an error, `E007`, naming
+  the call, the name and how many fit, so the limit is raised or guesses
+  turned off rather than the call left out silently.
+* With a code index, a call the index resolves keeps its answer; one it does
+  not resolve on its line is read by the syntax, and gets could lines by its
+  name like a file without an index (docair-4wk.37).
 
 **Not could lines:**
 * A function handed over to a framework (`post(scan_upload)`) is certain

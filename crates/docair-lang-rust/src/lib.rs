@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use docair_core::adapter::{Adapter, Project};
+use docair_core::config::CandidateLimit;
 use docair_core::facts::{
     Draw, Evidence, Facts, Inferred, Meet, Reach, Relation, Request, Serve, Symbol, Target, Verb,
 };
@@ -83,7 +84,8 @@ impl Adapter for RustAdapter {
             .collect();
         let mut diags = Vec::new();
         let index = index_of(project, &mut diags);
-        let mut facts = link_with(read, index.as_ref());
+        let guesses = CandidateLimit::of(project.config.code.as_ref());
+        let mut facts = link_with(read, index.as_ref(), guesses);
         facts.diagnostics.extend(diags);
         facts
     }
@@ -1217,7 +1219,7 @@ fn syntax_calls(root: Node, src: &[u8]) -> Vec<(usize, Callee, String)> {
 
 /// The facts of one file on its own, names linked inside it only (fixtures, tests).
 pub fn facts_with(file: &SourceFile, rules: &RuleSet) -> Facts {
-    link_with(vec![read_file(file, rules)], None)
+    link_with(vec![read_file(file, rules)], None, CandidateLimit::DEFAULT)
 }
 
 impl FileRead {
@@ -1263,10 +1265,6 @@ fn only<'a>(mut it: impl Iterator<Item = &'a Site>) -> Option<&'a Site> {
         _ => None,
     }
 }
-
-/// The function a call the syntax writes reaches, when the syntax makes it certain.
-/// More candidates than this for a call by name: no could lines, the call is left to blocks.
-const MAX_CANDIDATES: usize = 5;
 
 /// Method names the standard library's types have too: a call by such a name is far more often
 /// theirs (docair: 166 of 167 `.is_empty()` calls), so it gets no could line.
@@ -1473,9 +1471,11 @@ fn calls_of(
     at: usize,
     index: Option<&Index>,
     keys: &HashMap<(&str, usize), &str>,
-) -> Vec<Relation> {
+    guesses: CandidateLimit,
+) -> (Vec<Relation>, Vec<Diagnostic>) {
     let file = &files[at];
     let mut out = Vec::new();
+    let mut diags = Vec::new();
     let mut net = Vec::new();
     let mut seen = HashSet::new();
     let mut push = |from: &str, to: &str, reach: Reach, line: usize, why: String| {
@@ -1491,14 +1491,18 @@ fn calls_of(
             });
         }
     };
-    match index.filter(|i| i.covers(&file.rel)) {
-        Some(index) => {
+    // The calls the index resolves, by line and name; the syntax reads the rest (docair-4wk.37).
+    let mut resolved: HashSet<(usize, String)> = HashSet::new();
+    let indexed = index.filter(|i| i.covers(&file.rel)).is_some();
+    if let Some(index) = index.filter(|i| i.covers(&file.rel)) {
+        {
             let key_of = |symbol: &str| {
                 index
                     .definition(symbol)
                     .and_then(|(path, line)| keys.get(&(path, line)).copied())
             };
             for r in index.calls(&file.rel) {
+                resolved.insert((r.line, symbol_name(&r.symbol)));
                 let Some(caller) = file.at(&About::Within(r.line)) else {
                     continue;
                 };
@@ -1537,40 +1541,78 @@ fn calls_of(
                 }
             }
         }
-        None => {
-            for (line, callee, text) in &file.calls {
-                let Some(caller) = file.at(&About::Within(*line)) else {
-                    continue;
-                };
-                if let Some(to) = called(files, at, caller, callee) {
-                    let to = to.key.clone();
+    }
+    // The calls the syntax writes: all of them without an index, else those the index does not
+    // resolve on their line, so they still get their could lines (docair-4wk.37).
+    for (line, callee, text) in &file.calls {
+        if indexed && resolved.contains(&(*line, called_name(callee).to_string())) {
+            continue;
+        }
+        let Some(caller) = file.at(&About::Within(*line)) else {
+            continue;
+        };
+        if !indexed && let Some(to) = called(files, at, caller, callee) {
+            let to = to.key.clone();
+            push(
+                &caller.key,
+                &to,
+                Reach::Certain,
+                *line,
+                format!("tree-sitter: {text}(…)"),
+            );
+        } else if let Callee::Method(m) = callee {
+            // The type is unknown: each method of that name could be the one (docs/ADAPTERS.md §5.5),
+            // as many as [code] max_candidates allows (docair-4wk.36).
+            let could = could_methods(files, at, m);
+            let draw = match guesses {
+                CandidateLimit::Off => false,
+                CandidateLimit::All => true,
+                CandidateLimit::AtMost(n) if could.len() > n => {
+                    diags.push(CandidateLimit::too_many(
+                        &file.rel,
+                        *line,
+                        text,
+                        m,
+                        could.len(),
+                        n,
+                    ));
+                    false
+                }
+                CandidateLimit::AtMost(_) => true,
+            };
+            if draw {
+                for to in could {
                     push(
                         &caller.key,
-                        &to,
-                        Reach::Certain,
+                        &to.key,
+                        Reach::Could,
                         *line,
-                        format!("tree-sitter: {text}(…)"),
+                        format!("tree-sitter: {text}(…), by its name"),
                     );
-                } else if let Callee::Method(m) = callee {
-                    // The type is unknown: each method of that name could be the one (docs/ADAPTERS.md §5.5).
-                    let could = could_methods(files, at, m);
-                    if (1..=MAX_CANDIDATES).contains(&could.len()) {
-                        for to in could {
-                            push(
-                                &caller.key,
-                                &to.key,
-                                Reach::Could,
-                                *line,
-                                format!("tree-sitter: {text}(…), by its name"),
-                            );
-                        }
-                    }
                 }
             }
         }
     }
     out.extend(net);
-    out
+    (out, diags)
+}
+
+/// The name a code index's symbol calls: `…/Type#save().` → `save`.
+fn symbol_name(symbol: &str) -> String {
+    let short = docair_scip::short(symbol);
+    short
+        .rsplit([':', '#', '.', '/'])
+        .find(|w| !w.is_empty())
+        .unwrap_or(&short)
+        .to_string()
+}
+
+/// The name a call writes: `load`, `save`, the last of a path.
+fn called_name(c: &Callee) -> &str {
+    match c {
+        Callee::Name(n) | Callee::SelfMethod(n) | Callee::Method(n) => n,
+        Callee::Path(p) => p.last().map_or("", String::as_str),
+    }
 }
 
 /// The function a call reaches: from the code index (the reference on that line with that name, the nearest one), else the syntax. None through a trait with several implementations.
@@ -1694,7 +1736,7 @@ fn data_of(
  *
  * @calls docair-lang-rust.calls_of "finds the calls between functions"
  ***/
-pub fn link_with(files: Vec<FileRead>, index: Option<&Index>) -> Facts {
+pub fn link_with(files: Vec<FileRead>, index: Option<&Index>, guesses: CandidateLimit) -> Facts {
     let mut out = Facts::default();
     let keys: HashMap<(&str, usize), &str> = files
         .iter()
@@ -1705,7 +1747,9 @@ pub fn link_with(files: Vec<FileRead>, index: Option<&Index>) -> Facts {
         })
         .collect();
     for at in 0..files.len() {
-        out.relations.extend(calls_of(&files, at, index, &keys));
+        let (relations, diags) = calls_of(&files, at, index, &keys, guesses);
+        out.relations.extend(relations);
+        out.diagnostics.extend(diags);
     }
     for at in 0..files.len() {
         out.relations.extend(data_of(&files, at, index, &keys));
@@ -2413,12 +2457,13 @@ mod tests {
         );
     }
 
-    /// With an index: calls through a trait reach one of its implementations; outside methods reach nothing.
+    /// With an index: calls through a trait reach one of its implementations; outside methods reach
+    /// nothing; a call the index does not resolve is read by the syntax, its could lines by name.
     #[test]
     fn calls_from_the_code_index() {
         use protobuf::Message;
         // One item per line: the adapter knows an item by the line it starts on.
-        let src = "pub trait Adapter {\n    fn file(&self);\n}\npub struct A;\nimpl Adapter for A {\n    fn file(&self) {}\n}\npub struct B;\nimpl Adapter for B {\n    fn file(&self) {}\n}\npub fn parse() {}\npub fn collect(a: &dyn Adapter, p: &mut Parser) {\n    a.file();\n    p.parse();\n    parse();\n}\n";
+        let src = "pub trait Adapter {\n    fn file(&self);\n}\npub struct A;\nimpl Adapter for A {\n    fn file(&self) {}\n}\npub struct B;\nimpl Adapter for B {\n    fn file(&self) {}\n}\npub fn parse() {}\npub fn collect(a: &dyn Adapter, p: &mut Parser) {\n    a.file();\n    p.parse();\n    parse();\n    a.tick();\n}\npub struct C;\nimpl C {\n    fn tick(&self) {}\n}\npub struct D;\nimpl D {\n    fn tick(&self) {}\n}\n";
         let sym = |d: &str| format!("rust-analyzer cargo k 0.1.0 {d}");
         let occ = |line: i32, symbol: String, def: bool| {
             let mut o = scip::types::Occurrence::new();
@@ -2447,13 +2492,16 @@ mod tests {
         index.documents = vec![doc];
         let index = Index::parse(&index.write_to_bytes().unwrap()).unwrap();
         let read = vec![read_file(&rust_file("src/lib.rs", src), rules())];
-        let facts = link_with(read, Some(&index));
+        let facts = link_with(read, Some(&index), CandidateLimit::DEFAULT);
         assert_eq!(
             calls(&facts),
             [
                 ("collect".into(), "file".into(), Reach::OneOf),
                 ("collect".into(), "file".into(), Reach::OneOf),
                 ("collect".into(), "parse".into(), Reach::Certain),
+                // docair-4wk.37: a call the index does not resolve still gets could lines, by its name.
+                ("collect".into(), "tick".into(), Reach::Could),
+                ("collect".into(), "tick".into(), Reach::Could),
             ]
         );
     }
@@ -2657,6 +2705,38 @@ async fn users() {}
                 .all(|(n, reach)| n.ends_with(".save") && *reach == Reach::Could),
             "{from_run:?}"
         );
+        // docair-4wk.36: the call with more than the limit is an error, not left out silently.
+        let e: Vec<&Diagnostic> = facts
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "E007")
+            .collect();
+        assert_eq!(e.len(), 1, "{:?}", facts.diagnostics);
+        assert!(
+            e[0].message
+                .contains("could go to 6 functions named `tick`")
+                && e[0].message.contains("max_candidates (5)")
+                && e[0].line == Some(9),
+            "{:?}",
+            e[0]
+        );
+        // 0 draws them all, -1 none.
+        let could = |limit: CandidateLimit| {
+            let facts = link_with(vec![read_file(&file, rules())], None, limit);
+            let n = facts
+                .relations
+                .iter()
+                .filter(|r| r.reach == Reach::Could)
+                .count();
+            (n, facts.diagnostics.iter().any(|d| d.code == "E007"))
+        };
+        assert_eq!(
+            could(CandidateLimit::All),
+            (8, false),
+            "save twice, tick six times"
+        );
+        assert_eq!(could(CandidateLimit::Off), (0, false), "no guesses");
+        assert_eq!(could(CandidateLimit::AtMost(6)), (8, false));
     }
 
     fn enrich(rel: &str, src: &str) -> Vec<RawBlock> {

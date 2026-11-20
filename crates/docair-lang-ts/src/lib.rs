@@ -116,7 +116,8 @@ impl Adapter for TsAdapter {
             .collect();
         let mut diags = Vec::new();
         let index = ts_index(project, &mut diags);
-        let mut facts = link_with_index(read, &html, index.as_ref());
+        let limit = docair_core::config::CandidateLimit::of(project.config.code.as_ref());
+        let mut facts = link_with_index(read, &html, index.as_ref(), limit);
         facts.diagnostics.extend(diags);
         facts
     }
@@ -1193,8 +1194,6 @@ impl Reader<'_> {
  * or function of that name in the project. A line through messages reaches
  * one of several parts when listeners in several files take that type.
  ***/
-/// More candidates than this for a call by name: no could lines.
-const MAX_CANDIDATES: usize = 5;
 
 /// Method names the platform's own objects have (arrays, strings, maps, promises, the DOM,
 /// observables, the console): a call by such a name is far more often theirs.
@@ -1306,7 +1305,12 @@ const JS_STD_METHODS: &[&str] = &[
 ];
 
 pub fn link(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
-    link_with_index(files, html, None)
+    link_with_index(
+        files,
+        html,
+        None,
+        docair_core::config::CandidateLimit::DEFAULT,
+    )
 }
 
 /***
@@ -1316,6 +1320,7 @@ pub fn link_with_index(
     files: Vec<FileRead>,
     html: &HashMap<String, String>,
     index: Option<&docair_scip::Index>,
+    limit: docair_core::config::CandidateLimit,
 ) -> Facts {
     let mut extra: Vec<Relation> = Vec::new();
     if let Some(index) = index {
@@ -1362,7 +1367,7 @@ pub fn link_with_index(
             }
         }
     }
-    let mut out = link_inner(files, html);
+    let mut out = link_inner(files, html, limit);
     // The index's calls first: a call the syntax also found is the same line.
     let known: HashSet<(String, String)> = out
         .relations
@@ -1381,7 +1386,13 @@ pub fn link_with_index(
     out
 }
 
-fn link_inner(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
+fn link_inner(
+    files: Vec<FileRead>,
+    html: &HashMap<String, String>,
+    limit: docair_core::config::CandidateLimit,
+) -> Facts {
+    use docair_core::config::CandidateLimit;
+    let mut too_many = Vec::new();
     let mut out = Facts::default();
     let rels: HashMap<&str, usize> = files
         .iter()
@@ -1579,7 +1590,17 @@ fn link_inner(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
                 .flatten()
                 .filter(|s| s.key != caller.key)
                 .collect();
-            if (1..=MAX_CANDIDATES).contains(&to.len()) {
+            // As many as [code] max_candidates allows; more is an error (docair-4wk.36).
+            let draw = match limit {
+                CandidateLimit::Off => false,
+                CandidateLimit::All => true,
+                CandidateLimit::AtMost(n) if to.len() > n => {
+                    too_many.push(CandidateLimit::too_many(&f.rel, *at, text, m, to.len(), n));
+                    false
+                }
+                CandidateLimit::AtMost(_) => !to.is_empty(),
+            };
+            if draw {
                 for site in to {
                     line(
                         &caller.key,
@@ -1595,6 +1616,7 @@ fn link_inner(files: Vec<FileRead>, html: &HashMap<String, String>) -> Facts {
         out.extend(f.facts);
     }
     out.relations.extend(lines);
+    out.diagnostics.extend(too_many);
     out
 }
 
