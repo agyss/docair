@@ -122,6 +122,78 @@ fn summary_and_description(docs: &str) -> (String, String) {
     (summary, rest.to_string())
 }
 
+/// The first word of a symbol, for an id: `fn`, `struct`, `static`.
+fn keyword(s: &Symbol) -> String {
+    let word = s
+        .display
+        .as_deref()
+        .and_then(|d| d.split_whitespace().next())
+        .unwrap_or("item");
+    crate::ids::slug(word.trim_end_matches('!'))
+}
+
+/// Whether a symbol is a type: a struct, an enum, a trait, a type alias, an interface or a class.
+fn is_type(s: &Symbol) -> bool {
+    matches!(
+        keyword(s).as_str(),
+        "struct" | "enum" | "union" | "trait" | "type" | "interface" | "class"
+    )
+}
+
+/***
+ * New ids for code items that would share one with another item of their file (docair-4wk.38).
+ *
+ * `static ALL` and `fn all` both slug to `all`; a block may give a method the
+ * id of its type (`@id docair-server.config` on `Config::from_env`). The one
+ * a block names keeps the id, else a type, else the first; the other gets
+ * its kind after it (`all-static`), or a number when both are of one kind
+ * (`foo-2`). Before, the other was left out with its lines.
+ ***/
+fn file_ids<'a>(blocks: &[RawBlock], p: &Placed<'a>) -> HashMap<&'a str, String> {
+    let mut taken: HashMap<String, &str> = HashMap::new();
+    let mut renamed: HashMap<&'a str, String> = HashMap::new();
+    for (b, syms) in blocks.iter().zip(&p.attached) {
+        let identity = syms.iter().copied().find(|s| s.has_identity());
+        if let (Some(id), Some(s)) = (block_id(b, identity), syms.first()) {
+            taken.entry(id).or_insert(&s.key);
+        }
+    }
+    let mut alone: Vec<&Symbol> = p.alone.clone();
+    alone.sort_by_key(|s| !is_type(s));
+    for s in alone {
+        let Some(id) = &s.id else {
+            continue;
+        };
+        let Some(&first) = taken.get(id.as_str()) else {
+            taken.insert(id.clone(), &s.key);
+            continue;
+        };
+        // A file's module stands for the node a block declares with its id (a TypeScript file).
+        if first == s.key || s.draw == Draw::Alone {
+            continue;
+        }
+        let same_kind = p
+            .alone
+            .iter()
+            .chain(p.attached.iter().flatten())
+            .find(|o| o.key == first)
+            .is_some_and(|o| keyword(o) == keyword(s));
+        let mut new = if same_kind {
+            format!("{id}-2")
+        } else {
+            format!("{id}-{}", keyword(s))
+        };
+        let mut n = 2;
+        while taken.contains_key(&new) {
+            n += 1;
+            new = format!("{id}-{n}");
+        }
+        taken.insert(new.clone(), &s.key);
+        renamed.insert(s.key.as_str(), new);
+    }
+    renamed
+}
+
 /// A node that no block documents, as a block of its own.
 fn discovered(s: &Symbol, by_key: &ByKey) -> RawBlock {
     let mut tags: Vec<Tag> = kind_tag(s).into_iter().collect();
@@ -138,7 +210,10 @@ fn discovered(s: &Symbol, by_key: &ByKey) -> RawBlock {
             line: s.line,
             text: String::new(),
         }),
-        hints: hints_of(s),
+        hints: Hints {
+            id: by_key.ids.get(s.key.as_str()).cloned().or(s.id.clone()),
+            ..hints_of(s)
+        },
         origin: Origin::Discovered,
     }
 }
@@ -222,21 +297,62 @@ pub fn merge(
             place(file_blocks, symbols)
         })
         .collect();
+    // A type that got a new id takes its methods along: their parent and ids were its old id.
+    let mut moved: HashMap<(&str, String), String> = HashMap::new();
+    let mut renamed: HashMap<&str, String> = HashMap::new();
     for (file_blocks, p) in blocks.iter().zip(&placed) {
+        let here = file_ids(file_blocks, p);
+        for s in &p.alone {
+            if let (Some(new), Some(old)) = (here.get(s.key.as_str()), &s.id)
+                && is_type(s)
+            {
+                moved.insert((s.file.as_str(), old.clone()), new.clone());
+            }
+        }
+        renamed.extend(here);
+        for s in p.alone.iter().chain(p.attached.iter().flatten()) {
+            let (Some(id), Some(parent)) = (&s.id, s.parents.first()) else {
+                continue;
+            };
+            if let Some(new) = moved.get(&(s.file.as_str(), parent.clone()))
+                && s.parent_line.is_some()
+                && let Some(rest) = id.strip_prefix(&format!("{parent}."))
+            {
+                renamed.insert(s.key.as_str(), format!("{new}.{rest}"));
+            }
+        }
         for (b, syms) in file_blocks.iter().zip(&p.attached) {
             let identity = syms.iter().copied().find(|s| s.has_identity());
-            if let Some(id) = block_id(b, identity) {
+            let authored = b
+                .tags
+                .iter()
+                .find(|t| t.name == "id" && t.origin == Origin::Authored)
+                .map(|t| t.value.clone());
+            let id = authored
+                .or_else(|| identity.and_then(|s| renamed.get(s.key.as_str()).cloned()))
+                .or_else(|| block_id(b, identity));
+            if let Some(id) = id {
                 for s in syms {
                     by_key.ids.insert(s.key.as_str(), id.clone());
                 }
             }
         }
         for s in &p.alone {
-            if let Some(id) = &s.id {
+            if let Some(id) = renamed.get(s.key.as_str()).or(s.id.as_ref()) {
                 by_key.ids.insert(s.key.as_str(), id.clone());
             }
         }
     }
+    let parents = |s: &Symbol| -> Vec<String> {
+        let mut ps = s.parents.clone();
+        if s.parent_line.is_some()
+            && let Some(first) = ps.first_mut()
+            && let Some(new) = moved.get(&(s.file.as_str(), first.clone()))
+        {
+            *first = new.clone();
+        }
+        ps
+    };
 
     blocks
         .into_iter()
@@ -244,7 +360,11 @@ pub fn merge(
         .map(|(mut file_blocks, p)| {
             for (b, syms) in file_blocks.iter_mut().zip(&p.attached) {
                 if let Some(s) = syms.iter().find(|s| s.has_identity()) {
-                    b.hints = hints_of(s);
+                    b.hints = Hints {
+                        id: renamed.get(s.key.as_str()).cloned().or(s.id.clone()),
+                        part_of: parents(s),
+                        ..hints_of(s)
+                    };
                     b.tags.extend(kind_tag(s));
                     if b.summary.is_empty()
                         && let Some(docs) = &s.docs
@@ -256,7 +376,11 @@ pub fn merge(
                     b.tags.extend(by_key.tags(&s.key));
                 }
             }
-            file_blocks.extend(p.alone.iter().map(|s| discovered(s, &by_key)));
+            file_blocks.extend(p.alone.iter().map(|s| {
+                let mut b = discovered(s, &by_key);
+                b.hints.part_of = parents(s);
+                b
+            }));
             file_blocks
         })
         .collect()

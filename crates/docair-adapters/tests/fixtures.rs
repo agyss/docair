@@ -921,3 +921,61 @@ fn two_graphs_differ_in_moves_changes_and_new_parts() {
         "run -> load is run -> read: {d:#?}"
     );
 }
+
+/// Two items of one file whose names give one id keep their own parts and lines: the one a block
+/// names keeps the id, else the type; the other gets its kind after it (docair-4wk.38).
+#[test]
+fn two_items_with_one_id_keep_their_own_parts() {
+    let dir = std::env::temp_dir().join(format!("docair-one-id-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/lib.rs"),
+        "pub struct Uploads;\n\npub struct Config {\n    pub uploads: Uploads,\n}\n\nimpl Config {\n    /***\n     * Read the settings.\n     *\n     * @id      lib.config\n     ***/\n    pub fn from_env() -> Config {\n        Config { uploads: Uploads }\n    }\n\n    pub fn size(&self) -> usize {\n        0\n    }\n}\n\npub enum Family {\n    Request,\n}\n\npub fn family() -> Family {\n    Family::Request\n}\n",
+    )
+    .unwrap();
+    let g = scan(&dir, docair_adapters::all(), &Options::default()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let node = |id: &str| {
+        g.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| {
+            panic!(
+                "{id}: {:?}",
+                g.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+            )
+        })
+    };
+    assert_eq!(
+        node("lib.config").symbol.as_deref(),
+        Some("fn from_env"),
+        "the block's id"
+    );
+    assert_eq!(
+        node("lib.config-struct").symbol.as_deref(),
+        Some("struct Config")
+    );
+    assert_eq!(
+        node("lib.config-struct.size").part_of.as_deref(),
+        Some("lib.config-struct"),
+        "its methods go along"
+    );
+    assert_eq!(
+        node("lib.family").symbol.as_deref(),
+        Some("enum Family"),
+        "the type keeps it"
+    );
+    assert_eq!(node("lib.family-fn").symbol.as_deref(), Some("fn family"));
+    let has = |from: &str, kind: &str, to: &str| {
+        g.edges
+            .iter()
+            .any(|e| e.from == from && e.to == to && format!("{:?}", e.kind).to_lowercase() == kind)
+    };
+    assert!(
+        has("lib.config-struct", "use", "lib.uploads"),
+        "Config keeps its lines: {:?}",
+        g.edges
+    );
+    assert!(
+        has("lib.family-fn", "use", "lib.family"),
+        "family returns a Family: {:?}",
+        g.edges
+    );
+}

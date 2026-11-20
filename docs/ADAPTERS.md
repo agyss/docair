@@ -562,11 +562,12 @@ the digest 14% (1.02 to 1.16 MB), on the type as `"used_by": {"docair-cli.main":
 "makes, reads command"}` rather than one edge each.
 
 Of docair's 318 types (structs, enums, traits, type aliases, TypeScript
-interfaces and classes), 310 have users. Of the 8 without: 1 nothing refers
-to (`type Value` of a serde visitor); 7 lose their uses because another item
-has their id (the adapters in `static ALL`, whose id `all` is also `fn
-all`'s, and `KeptUploads` and `ExplainJobs`, held by `struct Config`, whose
-id a block gives to `Config::from_env`), docair-4wk.38. The words come out
+interfaces and classes), 310 had users at first. Of the 8 without, 7 lost
+their uses because another item had their id (the adapters in `static ALL`,
+whose id `all` is also `fn all`'s, and `KeptUploads` and `ExplainJobs`, held
+by `struct Config`, whose id a block gives to `Config::from_env`). With every
+item keeping a part of its own (docair-4wk.38, SPEC §3.1), 327 of 328 have
+users; the one left is `type Value` of a serde visitor, which nothing refers to. The words come out
 as: reads 1,315, takes 757, makes 627, holds 304, returns 303, matches 158,
 sets 80, uses 45, implements 6. TypeScript reads uses from scip-typescript
 where it indexed the file, else from the syntax: a type's name in the file,
