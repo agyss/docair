@@ -55,7 +55,11 @@ impl ProjectSessionCli for ProjectSession {
         for p in &reply.problems {
             eprintln!("warning: {p} (left out)");
         }
-        let (pending, result) = self.take_reply(&reply, history.is_empty())?;
+        let (pending, result, replaced) = self.take_reply(&reply, history.is_empty())?;
+        // An edit merged into the one already waiting for its part says so (docair-b7e).
+        for node in &replaced {
+            println!("replaced  the edit waiting for {node}: this reply's edit holds both");
+        }
         if let Some(result) = result {
             print_patch(&result);
             println!("patch     {}", self.out.join("docair.patch").display());
@@ -71,6 +75,7 @@ impl ProjectSessionCli for ProjectSession {
         Ok(Turn {
             question: question.to_string(),
             answer: reply.answer,
+            context: Vec::new(),
         })
     }
 }

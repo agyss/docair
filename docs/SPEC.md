@@ -897,7 +897,12 @@ into `docair.html`:
   ✦ Ask about this in a part's details, a datum's page, a term's entry or a
   line's details (`part:<id>`, `data:<id>`, `term:<term>`, and a line's
   `edge:<id>` for each graph line it stands for).
-  The chat shows them as chips above the question; × takes one away. On a
+  The chat shows them as chips above the question; × takes one away. Sent,
+  the question keeps them as chips in its bubble, each opening its thing (the
+  part, the datum's page, the term's entry, the line when the picture draws
+  it), kept with the conversation; the chips put in leave the box above, the
+  selection's stays (decision docair-t2z). Each earlier turn carries its
+  refs, so a follow-up's input still says what it pointed at (docair-rgz). On a
   wide screen the open chat takes its own room beside the details. Word the
   lines and Explain the terms go to
   `/api/word` and `/api/glossary`. The server writes each reply as HTML
@@ -942,14 +947,18 @@ into `docair.html`:
   after the changes the flows, with how many of the system's flows changed
   and all of them folded, each to its picture,
   the model's links. There are no other edits: a piece the AI puts in no
-  change is a change of its own after the AI's, in docair's words and marked
-  so. Every piece, and every change step of a flow, folds out its code,
+  change, one the run did not reach and one newer than the review are each a
+  change of its own after the AI's, in docair's words and marked so; a review
+  older than the change says how many pieces it misses and, served, offers
+  *✦ Review again* (docair-8l6.67). Every piece, and every change step of a flow, folds out its code,
   *The code · n parts*: each new, gone and edited part's file and line and its
   whole text before and after, comments with it, as a line diff. Without a review the
   list says the AI writes it, with the command, and served with `docair serve
-  --changes <A>` a button that asks for it (`POST /api/explain`) and then says
-  how far the job is (`GET /api/explain/<job>`, its `text`, every 1.5 s)
-  until the page is written again.
+  --changes <A>` a button that asks for it (`POST /api/explain`) and then shows
+  under it how far the job is (`GET /api/explain/<job>`, its `html`, every
+  second): a bar of the requests answered with its `text`, and each change as
+  soon as it is made, its title, pieces, what was found off and why
+  (docair-8l6.65), until the page is written again and reloads.
 * Tidy (docs/ADAPTERS.md §6.1): the CLI counts the tags the code repeats
   (`docair_core::tidy::repeated`) and writes the header's **✂ Tidy · n**
   (**✂ Tidy ✓** when none), a banner under the header that a reader can
@@ -1768,13 +1777,16 @@ vLLM or Ollama, and others speak it.
 
 1. **Digest.** docair runs stages 1–6 and sends the graph without the source
    code: for each node its id, kind, name, parent, summary, description
-   (shortened), file and line, HTTP route; for each edge its ends, kind,
+   (shortened), file and line, HTTP route, its code item when it has one
+   (`struct Cli`, `fn main`; docair-d9o); for each edge its ends, kind,
    label and payload; for each scenario its steps. Source code never leaves
    the machine; summaries, descriptions and file paths do.
 2. **Prompt.** The system prompt fixes the rules: use only ids from the
    graph; walk in the order things happen and say why that order; name the
    concrete things (resources, files, ports, payloads); 3 to 12 steps; answer
-   in the language of the question; say so when the graph cannot answer. The
+   in the language of the question; say so when the graph cannot answer, and
+   say plainly when it holds no relation for what is asked, so a guess from
+   names is never stated as fact (docair-d9o). The
    reply format is the walkthrough JSON of §10.3, without `recorded`. The
    request asks for JSON output (`response_format: json_object`).
 3. **Bind.** The answer is parsed and bound to the graph (§10.3). If it is
@@ -1896,7 +1908,7 @@ question; the key stays with the server.
 | `GET /api/tidy` | → `{ tags, patch }`: the tags the code repeats (`node`, `tag`, `line`, `code_says`, `code_file`, `code_line`, `reason`) and the diff that removes them all |
 | `POST /api/tidy` | `{ tags?: [{ node, tag }] }` → `{ edited, regenerated, version }`: the picked tags removed (all when none are named), the documentation written again; 409 when no tag repeats |
 | `POST /api/explain` | `{ a, b? }` → 202 and an `ExplainJob` at once (docs/EXPLAIN.md §8): the job explains what the served project changes since commit `a` (or between `a` and `b`), the flows without stored findings sent to the model at most 3 requests at once and stored as `docair explain` stores them; a page served with `--changes` is written again with them. A second call while a job runs answers that job (the same commits) or 409 (others); 409 for a project without git history (an upload), 503 when AI is off |
-| `GET /api/explain/<job>` | `ExplainJob`: `job`, `a`, `b`, `running`, `phase` (`comparing`, `asking`, `done`, `failed`), `flows`, `requests`, `started`, `answered`, `left`, `asking` (the flows the model works on now), `seconds`, `error`, `text` (what the page shows, e.g. *The AI explains 30 flows in 5 requests · 2 answered · 1:12*), and at the end `findings` and the documentation's new `version`; kept 10 minutes after it ends, then 404 |
+| `GET /api/explain/<job>` | `ExplainJob`: `job`, `a`, `b`, `running`, `phase` (`comparing`, `asking`, `done`, `failed`), `flows`, `requests`, `started`, `answered`, `left`, `asking` (the flows the model works on now), `seconds`, `error`, `text` (what the page shows, e.g. *The AI explains 30 flows in 5 requests · 2 answered · 1:12*), `found` (the changes made so far, each bound as soon as the requests before it are; docair-8l6.65), `html` (the bar and those changes, as the page shows them), and at the end `findings` and the documentation's new `version`; kept 10 minutes after it ends, then 404 |
 
 An uploaded page asks the same routes under `/api/projects/<id>/` (§1.3):
 the server keeps the upload as a project, and answers any origin, since the
@@ -1922,6 +1934,14 @@ An **edit** changes one doc block. It names its node, and docair resolves
   "why": "The server reads the key from the Secret docair-ai." }
 ```
 
+A reply carries edits only when the message asks for one: it says something
+is wrong or missing, or asks to document, add, fix or change something. A
+question about what a part is or does gets none, also for a part with no
+block; the answer may offer to document it (docair-pa4). A type (a struct,
+enum, interface or type alias) is data the lines carry: an `@in`, `@out` or
+`@calls` the model adds to one is left out and goes back in the repair
+request (docair-d9o).
+
 Only known tags (§3–§4) are accepted; an edit to a node that does not exist,
 without `@kind`, is dropped. Every edit is checked twice. When the reply
 arrives, a ref that names no node goes back to the model in the repair
@@ -1929,13 +1949,16 @@ request (§10.2). When the edit is applied, the new file must still parse (§2)
 and every ref it adds must resolve; an edit that fails either is left out
 and reported, never written.
 
-* **CLI.** `docair ask` writes the edits as a unified diff to
+* **CLI.** `docair ask` writes the edits waiting as a unified diff to
   `.docair/docair.patch` (paths relative to the root, so `git apply` takes
-  it). `--apply` or `docair apply` writes them into the files; then the next
+  it); in a conversation an edit of a part already waiting is merged into it,
+  and `replaced` says so (docair-b7e). `--apply` or `docair apply` writes them into the files; then the next
   scan shows the change.
 * **The page** (with `docair serve`). Each proposed edit is listed under the
-  reply with its reason. **Review diff** shows the waiting edits as the
-  server wrote them; **Apply & regenerate** writes them into the project's
+  reply with its reason. One edit waits per part: a reply's edit of a part
+  that has one waiting is merged into it, its summary winning, each tag once,
+  a tag it removes gone, and the chat says so (docair-b7e). **Review diff**
+  shows all the waiting edits as the server wrote them; **Apply & regenerate** writes them into the project's
   files (`POST /api/apply`), the documentation is written again and the page
   reloads where it was; **⤓ Patch** saves `docair.patch`.
 

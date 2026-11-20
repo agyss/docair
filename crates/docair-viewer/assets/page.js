@@ -203,6 +203,7 @@ function wirePopups() {
     if (t) panel(P.terms[t.dataset.term || t.dataset.termOpen]);
     else if (d) panel(P.details[d.dataset.data || d.dataset.about]);
     else if (n) go(`part/${n.dataset.node}`);
+    else if (ev.target.closest?.('.line-ref')) (l => l && pickLine(l))([...(S.svg?.querySelectorAll('.line[data-edges]') || [])].find((x) => x.dataset.edges.split('\n').includes(ev.target.closest('.line-ref').dataset.lineEdge)));
     else if (ev.target.closest?.('[data-glossary], #btn-glossary')) panel(P.glossary);
     else if (ev.target.closest?.('[data-data-list], #btn-data')) panel(P.dataList);
     else if (ev.target.closest?.('#details [data-back]')) select(S.selected, false);
@@ -257,12 +258,18 @@ function wireChat() {
     m.className = `msg ${e.role}`;
     m.dataset.test = `msg-${e.role}`;
     if (e.role === 'ai') m.innerHTML = e.html;
-    else m.textContent = e.text;
+    else m.append(e.text, ...(e.chips || []).map(asked));
     if (e.applied) applied(m);
     if (e.undone) undone(m);
     log.append(m);
     log.scrollTop = log.scrollHeight;
     return m;
+  };
+  // A question's chips: each opens what it was about, as the chips above the question did; a line's selects it when drawn (docair-rgz).
+  const asked = ([ref, label]) => {
+    const [kind, id] = [ref.slice(0, ref.indexOf(':')), ref.slice(ref.indexOf(':') + 1).split('\n')[0]];
+    const c = Object.assign(document.createElement('span'), { className: `asked ${{ part: 'node-ref', data: 'data-ref', term: 'term', edge: 'line-ref' }[kind] || ''}`, textContent: label, tabIndex: 0 });
+    return Object.assign(c.dataset, { node: id, data: id, term: id, lineEdge: id, test: 'asked' }) && c;
   };
   const ids = (list) => (list || '').split(' ').filter(Boolean);
   const undone = (m) => {
@@ -321,8 +328,8 @@ function wireChat() {
     if (!r.ok) throw new Error(a.error || `${r.status}`);
     return a;
   };
-  const ask = async (path, body, said) => {
-    if (said) say({ role: 'user', text: said });
+  const ask = async (path, body, said, chips) => {
+    if (said) say({ role: 'user', text: said, ...(chips?.length ? { chips } : {}) });
     busy(true);
     try {
       const a = await post(path, body);
@@ -331,7 +338,7 @@ function wireChat() {
       // A view change hides and shows at once, as the reader's own hiding.
       const view = add(e).querySelector('[data-test="view-change"]');
       if (view && typeof setHidden === 'function') setHidden(ids(view.dataset.hide), ids(view.dataset.show));
-      if (said) state.history.push({ question: said, answer: a.reply?.answer || '' });
+      if (said) state.history.push({ question: said, answer: a.reply?.answer || '', ...(body.context ? { context: body.context } : {}) });
       if (a.version) version = a.version;
       save();
       if (a.regenerated) location.reload();
@@ -345,8 +352,10 @@ function wireChat() {
     const q = question.value.trim();
     if (!q) return;
     question.value = '';
-    const refs = context();
-    ask('/api/ask', { question: q, history: state.history, ...(refs.length ? { context: refs } : {}) }, q);
+    // The chips put in go with the question, into its bubble; the selection's chip stays (docair-rgz).
+    const [refs, chips] = [context(), S.chips];
+    (S.refs = []), context();
+    ask('/api/ask', { question: q, history: state.history, ...(refs.length ? { context: refs } : {}) }, q, chips);
   };
   chat.querySelector('form').addEventListener('submit', (ev) => (ev.preventDefault(), send()));
   question.addEventListener('keydown', (ev) => ev.key === 'Enter' && !ev.shiftKey && (ev.preventDefault(), send()));
@@ -394,16 +403,18 @@ function wireChat() {
   document.addEventListener('click', async (ev) => {
     if (ev.target.closest('[data-tidy-open], #btn-tidy')) fetch(`${base}/api/tidy`).then((r) => r.json()).then((t) => Object.assign($('#details [data-test="tidy-diff"]') || {}, { textContent: t.patch || '', hidden: !t.patch })).catch(() => {});
     if (ev.target.closest('[data-test="tidy-patch"]')) download((await (await fetch(`${base}/api/tidy`)).json()).patch || '', 'docair-tidy.patch');
-    // Explaining is a job on the server: the button says how far it is; done, the page was written again (docair-8l6.11).
+    // Explaining is a job on the server: under the button, a bar and each change as soon as it is made (docair-8l6.11, 8l6.65); done, the page was written again.
     const explain = ev.target.closest('[data-test="explain"]');
     if (explain) {
-      explain.disabled = true;
+      const shown = (j) => Object.assign(explain.nextElementSibling, { innerHTML: j.html || j.error || '', hidden: false });
+      [explain.disabled, explain.textContent] = [true, '✦ Reviewing …'];
       let job = await post('/api/explain', { a: explain.dataset.a, b: explain.dataset.b || undefined }).catch((err) => ({ error: err.message }));
       for (; job.running; job = await fetch(`${base}/api/explain/${job.job}`).then((r) => r.json()).catch((err) => ({ error: err.message }))) {
-        explain.textContent = job.text;
-        await new Promise((r) => setTimeout(r, 1500));
+        shown(job);
+        await new Promise((r) => setTimeout(r, 1000));
       }
-      [explain.textContent, explain.disabled] = [job.text || job.error || '', job.phase === 'done'];
+      [explain.textContent, explain.disabled] = [job.phase === 'done' ? '✓ Reviewed' : '✦ Review the changes', job.phase === 'done'];
+      shown(job);
       if (job.phase === 'done') location.reload();
     }
     const one = ev.target.closest('[data-tidy-one]');
@@ -423,7 +434,7 @@ function context() {
   c.querySelector('.refs').replaceChildren(
     ...refs.map(([ref, label]) => Object.assign(document.createElement('button'), { className: 'chip-x', type: 'button', textContent: `${label} ×`, title: ref, onclick: () => ((S.refs = (S.refs || []).filter(([r]) => r !== ref)), ref === sel[0]?.[0] && (S.selected = null), context()) })),
   );
-  c.hidden = !refs.length;
+  c.hidden = !(S.chips = refs).length;
   return refs.flatMap(([r]) => r.split('\n'));
 }
 
@@ -1012,8 +1023,7 @@ function wireSides() {
     const k = h.dataset.side;
     set(k, +stored('localStorage', `docair:side-${k}`) || 0);
     h.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      h.setPointerCapture(e.pointerId), h.classList.add('on');
+      e.preventDefault(), h.setPointerCapture(e.pointerId), h.classList.add('on');
       const app = $('#app').getBoundingClientRect();
       h.onpointermove = (m) => set(k, Math.round(Math.max(160, Math.min(app.width / 2, k === 'tree' ? m.clientX - app.left : app.right - m.clientX))));
       h.onpointerup = () => ((h.onpointermove = null), h.classList.remove('on'), stored('localStorage', `docair:side-${k}`, parseInt($('#app').style.getPropertyValue(`--side-${k}`)) || null));

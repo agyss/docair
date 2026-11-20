@@ -1,0 +1,429 @@
+{
+  "schema": "docair.explained/2",
+  "a": "HEAD~1",
+  "b": "the working tree",
+  "links": [
+    {
+      "a": "changes-spec.a-reviewed-change-opens-on-its-own-picture-with-why-and-other-edits",
+      "b": "changes-spec.a-reviewed-change-opens-on-its-own-picture-with-why-and-every-piece-is-a-change",
+      "why": "the same e2e test, renamed and rewritten for the new behaviour",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T13:36:02Z"
+      }
+    }
+  ],
+  "changes": [
+    {
+      "title": "What the review found off is sorted into three kinds, each under its own heading, with the clear contradictions first.",
+      "how": [
+        {
+          "piece": "path:changes-spec.a-reviewed-change-opens-on-its-own-picture-with-why-and-every-piece-is-a-change",
+          "words": "Groups the found-off items by kind on the change's card, each kind under its own heading, contradictions first, and only contradictions show what was said and by what."
+        },
+        {
+          "piece": "box:docair-ai.explain.found-off",
+          "words": "A found-off item carries a kind field, empty for reviews stored before the kinds so they still read."
+        },
+        {
+          "piece": "path:docair-core.review.off_kinds",
+          "words": "Defines the three kinds in the order a reader sees them, each with its heading: contradictions, then what nothing mentions, then risks."
+        },
+        {
+          "piece": "code:docair-ai.explain.found-off",
+          "words": "Reads the model's off items, normalising the kind to one of the three, and demotes an item that claims a contradiction but names nothing said to a risk."
+        },
+        {
+          "piece": "path:docair-ai.explain.found-off.kind",
+          "words": "Falls back to a kind for reviews stored before kinds existed, and renders each change's off items grouped under their kind's heading, with only contradictions showing what was said."
+        },
+        {
+          "piece": "code:docair-viewer.page_changes",
+          "words": "off_item now works out a kind for each finding (contradicts, unsaid or risk, with old stored items and bare sentences mapped onto kinds), returns it, and writes the Said line only for contradictions, so the page can group them under headings."
+        },
+        {
+          "piece": "code:e2e.cli",
+          "words": "The end-to-end test for the review now expects each found-off item to carry a kind, the comment grouped under a 'Said, but the code does otherwise' heading with the kind recorded in the store, and a separate 'Looks wrong or risky' heading, while asserting no 'Done, but said nowhere' heading appears when nothing of that kind was found."
+        },
+        {
+          "piece": "box:e2e.cli",
+          "words": "The box of CLI end-to-end tests holds the updated review test, so the suite covers the new kind-by-kind presentation from the terminal."
+        }
+      ],
+      "why": "A reader of a review cares most about claims the code clearly contradicts; sorting by kind puts those first and lets the softer notes (unannounced behaviour, possible mistakes) sit under their own headings. Old stored reviews without kinds still render instead of breaking.",
+      "off": [
+        {
+          "kind": "contradicts",
+          "source": "commit",
+          "where": "Review: found off by kind, and every piece is a change",
+          "says": "Stores without kinds read as before.",
+          "code": "A stored finding without a kind used to be shown as said by nobody; `docair-viewer.page_changes.off_item` now files a bare sentence under risk, so it appears under the risk heading instead of the said-nowhere one.",
+          "parts": [
+            "docair-viewer.page_changes.off_item"
+          ]
+        },
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "The page test's new 'unsaid' example fixture still carries a `source` of `commit` with a `says` text, although an unsaid item is defined as one nothing mentions and the rendered form for that kind shows no 'Said' line; the fixture and the definition disagree, so either the fixture is misleading or the renderer must silently drop those fields.",
+          "parts": [
+            "cli-spec.docair-explain-reviews-the-change-and-keeps-the-review"
+          ]
+        }
+      ],
+      "check": "Check that a stored review written before the kinds existed still renders sensibly, especially an item whose source is a commit rather than a doc or comment.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "The graph digest now tells the model what kind of code item each part is, and the AI's proposed edits no longer put data-flow tags on types.",
+      "how": [
+        {
+          "piece": "path:docair-ai.ask.code_items",
+          "words": "A new list of symbol first-words (fn, struct, class, …) decides which parts count as code items."
+        },
+        {
+          "piece": "path:docair-ai.ask.code_item",
+          "words": "Two helpers pick a part's code item from its symbol and tell whether it is a type; the draft checker uses the latter to strip @in/@out/@calls tags off edits of types, ask for a repair, and drop the edit when nothing is left of it."
+        },
+        {
+          "piece": "path:docair-ai.ask.data_items",
+          "words": "A new list of the items that are data the lines carry (struct, enum, type, interface, union), which may never send or take."
+        },
+        {
+          "piece": "path:docair-ai.ask.messages",
+          "words": "The digest sent to the model now carries each node's code item (for example `struct Cli`) next to its other fields."
+        }
+      ],
+      "why": "Types are carried by lines, not senders or takers; showing the model what each part is and rejecting flow tags on types keeps the graph and the doc edits honest.",
+      "off": [
+        {
+          "kind": "unsaid",
+          "source": "none",
+          "code": "The digest now names each node's code item and edits of types that add @in/@out/@calls tags are turned away with a repair message; neither the commit nor any doc mentions this.",
+          "parts": [
+            "docair-ai.ask.digest",
+            "docair-ai.ask.check_draft"
+          ]
+        },
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "`docair-ai.ask.is_data_item` judges a node by the first word of its symbol (struct, enum, …), while the system prompt defines data by the node's kind; a data-kind node whose symbol is not in `docair-ai.ask.data_items`, or a type whose symbol is, would be judged the other way.",
+          "parts": [
+            "docair-ai.ask.is_data_item",
+            "docair-ai.ask.data_items"
+          ]
+        }
+      ],
+      "check": "Whether the symbol-word lists cover every kind the graph actually marks as data, so no type slips through or a data node is wrongly stripped.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "When the AI is asked a follow-up question, the earlier questions in the conversation now go to the model together with what they pointed at.",
+      "how": [
+        {
+          "piece": "code:docair-ai.ask",
+          "words": "A turn now stores the refs the question pointed at, and building the message list moved into its own function that resolves each earlier turn's refs into the text of what it pointed at before replaying it."
+        }
+      ],
+      "why": "A follow-up like \"and that one?\" only makes sense if the model still sees what the earlier question was about; replaying the resolved context keeps the conversation coherent across turns.",
+      "off": [
+        {
+          "kind": "unsaid",
+          "source": "none",
+          "code": "Earlier questions are replayed to the model with what they pointed at, resolved in the words of now; nothing in the commit or docs says so.",
+          "parts": [
+            "docair-ai.ask.messages",
+            "docair-ai.ask.turn"
+          ]
+        }
+      ],
+      "check": "That resolving an old turn's refs against today's graph cannot fail or mis-resolve when the pointed-at parts have changed since.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "While a review runs, each answer is bound in the requests' order as soon as it arrives, and the changes made so far are shown on the page.",
+      "how": [
+        {
+          "piece": "path:docair-ai.explain.run-state",
+          "words": "A run keeps what is bound so far plus the answers that arrived early and wait for the requests before them."
+        },
+        {
+          "piece": "path:docair-ai.explain.bind_answer",
+          "words": "Each request's answer is bound the moment all before it are — failed or unreadable ones leave their pieces — and the changes bound so far go out with the progress."
+        },
+        {
+          "piece": "code:docair-cli.diff",
+          "words": "While the review runs, the command prints each new change's title to stderr as it arrives, alongside the count of answered requests."
+        },
+        {
+          "piece": "path:docair-server.project.code_html",
+          "words": "Renders the running job as HTML: a bar of the requests answered with the job's words, then each change made so far with its title, piece count, off count and why; a small helper turns backticked names into code elements."
+        },
+        {
+          "piece": "code:docair-server.project",
+          "words": "The job answer gains an html field filled at every status poll, and starting a job initialises it, so GET /api/explain/<job> returns the live view."
+        }
+      ],
+      "why": "A reviewer watching a long run sees real findings within seconds instead of waiting for every request and a final merge; binding in request order keeps the result identical to binding everything at the end.",
+      "off": [
+        {
+          "kind": "unsaid",
+          "source": "none",
+          "code": "When several answers produce a link between the same two parts, `docair-ai.explain.bind_answer` keeps only the first and silently drops the later ones, including their reasons.",
+          "parts": [
+            "docair-ai.explain.bind_answer"
+          ]
+        },
+        {
+          "kind": "unsaid",
+          "source": "none",
+          "code": "When the stored review is stale, `docair-ai.explain.explain_with` drops the stored model's changes but still keeps its links, which may then point at changes that no longer exist.",
+          "parts": [
+            "docair-ai.explain.explain_with"
+          ]
+        },
+        {
+          "kind": "unsaid",
+          "source": "none",
+          "code": "When the review needs several requests, `docair-ai.explain.explain_with` repacks them at a smaller limit (down to half the usual size) to leave room for the other requests' piece ids, so runs may need more requests than before.",
+          "parts": [
+            "docair-ai.explain.explain_with"
+          ]
+        },
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "The progress callback can run from several requests at once; `docair-cli.diff.cmd_explain` reads the previous maximum and then skips printed titles in a separate, non-atomic step, so two concurrent callbacks could print the same change title twice or skip one.",
+          "parts": [
+            "docair-cli.diff.cmd_explain"
+          ]
+        }
+      ],
+      "check": "Check that a failed or unreadable answer still leaves its pieces to a later request and that the run surfaces the recorded failure at the end.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "When the review is asked in several requests, each request is told which pieces the others cover and leaves those pieces to them.",
+      "how": [
+        {
+          "piece": "path:docair-ai.explain.elsewhere",
+          "words": "Each request's prompt names the pieces asked about elsewhere and tells the model never to claim them in its own changes."
+        }
+      ],
+      "why": "Parallel requests would otherwise each claim the same cross-cutting pieces, producing duplicate or conflicting changes; telling each request what belongs elsewhere, and stripping such entries on binding, keeps every piece in exactly one request's changes until the final merge.",
+      "off": [
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "`docair-ai.explain.leave_elsewhere` deletes a whole change, title and reasoning included, when every one of its entries names another request's pieces, instead of moving it; if the other request does not make that change, the finding is lost and only counted in a problem message.",
+          "parts": [
+            "docair-ai.explain.leave_elsewhere"
+          ]
+        }
+      ],
+      "check": "Check that a change the model places entirely in the wrong request really does come back from the request that owns its pieces, so nothing is silently dropped.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "Every changed piece now appears in the review as part of some change, even one the AI left out",
+      "how": [
+        {
+          "piece": "code:docair-ai.explain",
+          "words": "The settle prompt now asks the model to place every left piece or make it a new change of its own, and the review prompt says every piece belongs to a change."
+        },
+        {
+          "piece": "code:docair-e2e.fake-ai",
+          "words": "The fake model's last review request turns any pieces left over into a change of their own, so tests exercise the new behaviour."
+        },
+        {
+          "piece": "path:docair-viewer.page_changes.docair_note",
+          "words": "A new helper turns a finding's note (the AI left the piece out, the run stopped before it, or the piece is newer than the review) into the sentence shown; the recorded line now labels findings docair wrote itself as in docair's words instead of naming a model, and the review view drops stored changes none of whose pieces still exist."
+        },
+        {
+          "piece": "path:docair-viewer.page_changes.plain_words",
+          "words": "A new helper flattens docair's HTML wording into plain text with code in backticks, used to title the changes docair synthesizes for uncovered pieces."
+        },
+        {
+          "piece": "path:docair-ai.explain.as_parts",
+          "words": "The new `docair-ai.explain.as_parts` helper rewrites backticked piece ids in docair's own wording into the part names they stand for, so synthesized changes read like the model's ones."
+        },
+        {
+          "piece": "path:docair-viewer.page_changes.review_ids",
+          "words": "New helpers read the stored review's `other` and `left` piece lists, and review_view turns each such piece, plus any piece the stored changes do not hold, into its own change with docair's words instead of folding them into a separate other-edits panel."
+        },
+        {
+          "piece": "line:docair-viewer.page_changes.change_view->docair-viewer.page_changes.review_changes",
+          "words": "The changes count on the button and heading now comes from the rendered review, so docair's own filler changes count too, and change_view no longer counts the stored changes directly."
+        },
+        {
+          "piece": "box:e2e.changes",
+          "words": "The end-to-end test now expects the piece the first request left to appear as a change of its own after the AI's changes, rather than as a folded other edit."
+        }
+      ],
+      "why": "Pieces the AI put in no change used to be hidden in a folded other-edits list; now nothing that changed goes unexplained, and the comment renders them as numbered changes in docair's own words, marked as such.",
+      "off": [
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "The findings still carry a separate `other` bucket (the review prompt still asks for the pieces no change holds, nor `other`), while `docair-server.project.job_text` counts those as changes; a reader of the raw findings JSON sees two kinds that the page presents as one.",
+          "parts": [
+            "docair-server.project.job_text"
+          ]
+        },
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "`docair-viewer.page_changes.plain_words` decodes only a fixed list of entities; any other escape in docair's wording (a numeric form, a non-breaking space) is shown raw in the change's title.",
+          "parts": [
+            "docair-viewer.page_changes.plain_words"
+          ]
+        },
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "A piece held only by a stored change whose pieces no longer exist is counted as held and so is neither shown in that (dropped) change nor made a change of its own: `docair-viewer.page_changes.review_view` computes `held` from the unfiltered stored changes, so such pieces vanish from the review entirely.",
+          "parts": [
+            "docair-viewer.page_changes.review_view"
+          ]
+        }
+      ],
+      "check": "Check that the page and the serve status mark these docair-worded changes as the commit claims, since those renderers are pieces asked about elsewhere.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "When a new edit merges into the edit already waiting to be applied, docair says so",
+      "how": [
+        {
+          "piece": "code:docair-cli.ask",
+          "words": "After taking a reply, the turn prints a line for each node whose waiting edit was replaced, saying this reply's edit holds both."
+        },
+        {
+          "piece": "path:docair-server.project.merge_changes",
+          "words": "A new function merges each incoming edit into a waiting edit of the same part: the new summary and why win, tags added or removed are reconciled, and whole-file rewrites replace the waiting one; it returns the parts whose waiting edit was replaced."
+        }
+      ],
+      "why": "Merging into a pending edit used to happen silently, so a user could not tell that the earlier waiting edit was absorbed; naming the replaced nodes makes the pending state legible before applying.",
+      "off": [
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "The turn record gains a `context` field that is always set to an empty vector, so it is carried but never filled with anything.",
+          "parts": [
+            "docair-cli.ask.turn"
+          ]
+        }
+      ],
+      "check": "Check what the empty context field is for, and whether later turns are meant to fill it.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "The served documentation is rewritten sooner when unrelated files keep changing during a burst",
+      "how": [
+        {
+          "piece": "code:docair-cli.serve",
+          "words": "During the quiet wait, only events that count restart the timer; events that do not count, such as a build writing its output, are dropped instead of extending the wait."
+        }
+      ],
+      "why": "Before, any event at all during the wait restarted the full quiet period, so a noisy build could hold the documentation back indefinitely; now only relevant file events delay the rewrite.",
+      "check": "Check the quiet duration is still long enough that a relevant edit's trailing events are not dropped before the rewrite.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    },
+    {
+      "title": "A sent question keeps what it was about, so its bubble can show it.",
+      "how": [
+        {
+          "piece": "code:docair-viewer.assets.page",
+          "words": "While drawing the context chips, the page also stores the current refs in S.chips, so the sent question's bubble can show what it asked about."
+        },
+        {
+          "piece": "code:docair-viewer.doc-page",
+          "words": "The chat part renders each user question with chips taken from the server's reply, each carrying the reference it was about, and stores them with the conversation so they survive a reload; the wire-sides part in the same piece only joins two statements onto one line, with no change in behaviour."
+        },
+        {
+          "piece": "line:docair-viewer.doc-page.popups->docair-viewer.doc-page.pick-line",
+          "words": "Clicking a chip that names a diagram line now calls pickLine to select that line, joining the existing chip clicks that open a part, a term or a data panel."
+        },
+        {
+          "piece": "line:ask-spec.ask-about-this-puts-a-part-a-line-and-a-datum-into-one-question->docair-ai.ask.ask",
+          "words": "The end-to-end test now checks that a sent question keeps its three refs as chips in its bubble, that each chip opens its part or line, that they survive a reload, and that a follow-up still tells the model what the earlier question pointed at."
+        },
+        {
+          "piece": "box:e2e.ask",
+          "words": "The chat end-to-end tests cover the sent question's bubble, exercising what the ask flow now shows about each question."
+        }
+      ],
+      "why": "The stylesheet adds chip styling for the question bubble; storing the refs at send time lets the bubble render its context after the chat clears the composer.",
+      "off": [
+        {
+          "kind": "risk",
+          "source": "none",
+          "code": "A chip whose reference kind is not in the class map in `docair-viewer.doc-page.chat` is rendered with no kind class, so it looks clickable (the stylesheet gives every chip a pointer cursor) but no click handler in `docair-viewer.doc-page.popups` matches it and clicking does nothing.",
+          "parts": [
+            "docair-viewer.doc-page.chat",
+            "docair-viewer.doc-page.popups"
+          ]
+        }
+      ],
+      "check": "That clearing a chip before sending also clears it from the stored chips, since the click handler updates both.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T14:00:08Z"
+      }
+    }
+  ],
+  "problems": [
+    "request 1: 8 of its pieces were another request's, left to it, and 1 of its changes held only those",
+    "\"Every changed piece shows up as a change in the review: pieces the AI left out of every change become small changes of their own, in docair's words.\": the piece `path:changes-spec.a-reviewed-change-opens-on-its-own-picture-with-why-and-every-piece-is-a-change` is in an earlier change already; left there",
+    "\"Every changed piece shows up as a change in the review: pieces the AI left out of every change become small changes of their own, in docair's words.\": the piece `path:changes-spec.a-reviewed-change-opens-on-its-own-picture-with-why-and-every-piece-is-a-change` is in an earlier change already; left there",
+    "\"Every changed piece shows up as a change in the review: pieces the AI left out of every change become small changes of their own, in docair's words.\" holds no piece docair found; left out",
+    "\"When the AI is asked a follow-up question, the earlier questions in the conversation now go to the model together with what they pointed at.\": the piece `path:docair-ai.ask.messages` is in an earlier change already; left there",
+    "\"The AI now proposes doc-block edits only when the message actually asks for one.\": the piece `code:docair-ai.ask` is in an earlier change already; left there",
+    "\"The AI now proposes doc-block edits only when the message actually asks for one.\" holds no piece docair found; left out",
+    "request 3: 28 of its pieces were another request's, left to it, and 1 of its changes held only those",
+    "\"In the review's words, a piece id is named as the part it stands for.\": the words on `path:docair-ai.explain.as_parts` name `orders.audit`, `path:orders.audit`; left out",
+    "\"In the review's words, a piece id is named as the part it stands for.\" holds no piece docair found; left out",
+    "\"Every reviewed piece counts as a change; pieces the AI leaves out become a change of their own.\": the piece `code:docair-server.project` is in an earlier change already; left there",
+    "\"In a conversation, a new edit of a part merges into the edit already waiting for it instead of piling up.\": the piece `code:docair-server.project` is in an earlier change already; left there",
+    "\"Each question sent in the chat shows what it was about, as a link that opens that thing.\": its why names `.asked`; left out",
+    "the model's merge [2] names no two changes of this review, or one twice; left apart",
+    "the model's merge [3] names no two changes of this review, or one twice; left apart",
+    "the model's merge [5] names no two changes of this review, or one twice; left apart",
+    "the model's merge [11] names no two changes of this review, or one twice; left apart"
+  ],
+  "requests": 9
+}

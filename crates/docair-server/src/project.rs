@@ -24,6 +24,60 @@ use axum::response::{Html, IntoResponse, Response};
 
 use crate::ApiError;
 
+/***
+ * Add a reply's edits to the waiting ones, one edit per part (docair-b7e): an edit of a part that
+ * has one waiting is merged into it. Its summary and why win; each tag it adds is added once, and
+ * one it removes goes (from the waiting additions, else it is removed). An edit of a glossary text,
+ * section or whole file replaces the waiting one of the same file. Returns the parts whose waiting
+ * edit was replaced.
+ *
+ * @id docair-server.project.merge_changes
+ ***/
+pub fn merge_changes(waiting: &mut Vec<Change>, new: &[Change]) -> Vec<String> {
+    let whole = |c: &Change| ["text", "section", "file"].contains(&c.mode.as_str());
+    let mut replaced = Vec::new();
+    for c in new {
+        let same = waiting.iter_mut().find(|w| {
+            w.node == c.node
+                && whole(w) == whole(c)
+                && (!whole(c) || (w.mode == c.mode && w.file == c.file))
+        });
+        let Some(w) = same else {
+            waiting.push(c.clone());
+            continue;
+        };
+        if !replaced.contains(&c.node) {
+            replaced.push(c.node.clone());
+        }
+        if whole(c) {
+            *w = c.clone();
+            continue;
+        }
+        for tag in &c.remove {
+            if w.add.contains(tag) {
+                w.add.retain(|t| t != tag);
+            } else if !w.remove.contains(tag) {
+                w.remove.push(tag.clone());
+            }
+        }
+        for tag in &c.add {
+            if w.remove.contains(tag) {
+                w.remove.retain(|t| t != tag);
+            } else if !w.add.contains(tag) {
+                w.add.push(tag.clone());
+            }
+        }
+        if c.summary.is_some() {
+            w.summary = c.summary.clone();
+        }
+        if !c.why.is_empty() {
+            w.why = c.why.clone();
+        }
+        (w.mode, w.file, w.line) = (c.mode.clone(), c.file.clone(), c.line);
+    }
+    replaced
+}
+
 /// What `docair apply` needs from the last reply.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Pending {
@@ -159,12 +213,17 @@ impl ProjectSession {
     /***
      * Take a reply into the project: record its walkthrough, add its edits and view change to the
      * pending ones (a new conversation starts afresh), and write `pending.json` and `docair.patch`.
+     * An edit of a part that already has one waiting is merged into it (`merge_changes`,
+     * docair-b7e); the parts whose waiting edit it replaced come back. `docair.patch` holds every
+     * edit waiting, what Apply writes.
+     *
+     * @calls docair-server.project.merge_changes "one edit per part waits"
      ***/
     pub fn take_reply(
         &mut self,
         reply: &Reply,
         fresh: bool,
-    ) -> Result<(Pending, Option<PatchResult>)> {
+    ) -> Result<(Pending, Option<PatchResult>, Vec<String>)> {
         if let Some(wt) = &reply.walkthrough {
             let mut wt = wt.clone();
             if self.save {
@@ -182,7 +241,7 @@ impl ProjectSession {
         } else {
             read_pending(&self.out).unwrap_or_default()
         };
-        pending.changes.extend(reply.changes.iter().cloned());
+        let replaced = merge_changes(&mut pending.changes, &reply.changes);
         if let Some(v) = &reply.view {
             let merged = pending.view.get_or_insert_with(ViewChange::default);
             for id in &v.hide {
@@ -206,11 +265,11 @@ impl ProjectSession {
         let result = if reply.changes.is_empty() {
             None
         } else {
-            let result = self.patch(&reply.changes);
+            let result = self.patch(&pending.changes);
             std::fs::write(self.out.join("docair.patch"), &result.diff)?;
             Some(result)
         };
-        Ok((pending, result))
+        Ok((pending, result, replaced))
     }
 
     /// Write edits into the files and the view change into docair.toml, then scan again; the files edited.
@@ -595,7 +654,7 @@ pub(crate) fn answered(
         view: None,
         ..reply.clone()
     };
-    let (pending, result) = session.take_reply(&kept, fresh)?;
+    let (pending, result, replaced) = session.take_reply(&kept, fresh)?;
     let regenerated = reply.walkthrough.is_some();
     let version = if regenerated {
         s.written(&session)?
@@ -605,11 +664,25 @@ pub(crate) fn answered(
     let patch = result.map(|r| r.diff).unwrap_or_default();
     let pending = pending.changes.len() + usize::from(pending.view.is_some());
     // A Reply always turns into JSON; Null would only leave the chat with no answer to show.
-    let html = docair_viewer::page_ai::reply_html(
+    let mut html = docair_viewer::page_ai::reply_html(
         &serde_json::to_value(&reply).unwrap_or_default(),
         &patch,
         pending,
     );
+    // An edit merged into the one already waiting for its part says so (docair-b7e).
+    if !replaced.is_empty() {
+        html.push_str(&format!(
+            r#"<div class="muted" data-test="replaced">This reply's edit of {} replaced the one already waiting for it.</div>"#,
+            replaced
+                .iter()
+                .map(|n| format!(
+                    "<code>{}</code>",
+                    n.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     Ok(ServeAnswer {
         reply,
         regenerated,
@@ -806,6 +879,9 @@ pub struct ExplainJob {
     pub error: Option<String>,
     /// What the page shows, as it is: *The AI reviews 30 pieces in 2 requests · 1 answered · 1:12*.
     pub text: String,
+    /// The same with a bar of the requests answered and the changes made so far, as the page shows
+    /// it while the job runs (docair-8l6.65).
+    pub html: String,
     /// The documentation's version once it was written again with the findings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u64>,
@@ -827,8 +903,71 @@ impl JobState {
         let mut a = self.answer.clone();
         a.seconds = took.as_secs();
         a.text = job_text(&a);
+        a.html = job_html(&a);
         a
     }
+}
+
+/// Text as HTML, what is in backticks as code: `` `orders.audit` `` → `<code>orders.audit</code>`.
+fn code_html(t: &str) -> String {
+    let t = t
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    if t.matches('`').count() % 2 == 1 {
+        return t;
+    }
+    t.split('`')
+        .enumerate()
+        .map(|(i, x)| {
+            if i % 2 == 1 {
+                format!("<code>{x}</code>")
+            } else {
+                x.to_string()
+            }
+        })
+        .collect()
+}
+
+/***
+ * What the page shows of a running job (docair-8l6.65): a bar of the requests answered with the job's
+ * words, then each change made so far, as soon as it is made: its title, how many pieces, what was
+ * found off, why.
+ ***/
+fn job_html(j: &ExplainJob) -> String {
+    let p = &j.progress;
+    let mut out = format!(
+        r#"<div class="explain-now"><progress max="{}" value="{}"></progress> <span data-test="explain-text">{}</span></div>"#,
+        p.requests.max(1),
+        p.answered.min(p.requests.max(1)),
+        code_html(&j.text)
+    );
+    if !p.found.is_empty() && j.phase != "done" {
+        out.push_str(&format!(
+            r#"<p class="muted">{} so far; the last request may still merge them and add pieces.</p><ol class="review-list" data-test="review-so-far">"#,
+            count(p.found.len(), "change", "changes")
+        ));
+        for c in &p.found {
+            let off = if c.off.is_empty() {
+                " · ✓ nothing found off".to_string()
+            } else {
+                format!(" · ⚠ {} found off", c.off.len())
+            };
+            out.push_str(&format!(
+                r#"<li><b>{}</b> <span class="muted">· {}{off}</span>{}</li>"#,
+                code_html(&c.title),
+                count(c.how.len(), "piece", "pieces"),
+                if c.why.is_empty() {
+                    String::new()
+                } else {
+                    format!(r#"<div class="muted">{}</div>"#, code_html(&c.why))
+                }
+            ));
+        }
+        out.push_str("</ol>");
+    }
+    out
 }
 
 /// `n thing` or `n things`.
@@ -965,6 +1104,7 @@ pub(crate) async fn explain(
                 seconds: 0,
                 error: None,
                 text: String::new(),
+                html: String::new(),
                 version: None,
                 findings: None,
             },
@@ -1267,6 +1407,124 @@ mod tests {
         assert!(!watched(root, out, Path::new("/p/.git/index")));
         assert!(!watched(root, out, Path::new("/p/web/node_modules/a/b.js")));
         assert!(!watched(root, out, Path::new("/elsewhere/a.rs")));
+    }
+
+    /// Two replies edit one part: one edit waits, with the newer summary and each tag once; an
+    /// edit of another part waits beside it (docair-b7e).
+    #[test]
+    fn edits_of_one_part_wait_as_one() {
+        let edit = |node: &str, add: &[&str], remove: &[&str], summary: Option<&str>| Change {
+            node: node.into(),
+            mode: "insert".into(),
+            file: "src/main.rs".into(),
+            line: 22,
+            add: add.iter().map(|t| t.to_string()).collect(),
+            remove: remove.iter().map(|t| t.to_string()).collect(),
+            summary: summary.map(str::to_string),
+            why: "w".into(),
+        };
+        let mut waiting = vec![edit(
+            "cli",
+            &["@out args: Cli to main", "@part-of cli"],
+            &[],
+            Some("Old."),
+        )];
+        let replaced = merge_changes(
+            &mut waiting,
+            &[
+                edit(
+                    "cli",
+                    &["@part-of cli", "@see main"],
+                    &["@out args: Cli to main"],
+                    Some("New."),
+                ),
+                edit("main", &["@calls cli"], &[], None),
+            ],
+        );
+        assert_eq!(replaced, ["cli"]);
+        assert_eq!(waiting.len(), 2, "{waiting:#?}");
+        assert_eq!(waiting[0].summary.as_deref(), Some("New."));
+        assert_eq!(waiting[0].add, ["@part-of cli", "@see main"]);
+        assert!(
+            waiting[0].remove.is_empty(),
+            "a tag only proposed is dropped, not removed"
+        );
+        assert_eq!(waiting[1].node, "main");
+        // Applied, the merged edit writes one block.
+        let src = "fn a() {}\n".repeat(21) + "pub struct Cli;\n";
+        let known: HashSet<String> = ["cli", "main"].iter().map(|s| s.to_string()).collect();
+        let result = edit::patch(&waiting[..1], &|_: &str| Some(src.clone()), &known);
+        assert_eq!(result.files.len(), 1, "{:?}", result.problems);
+        assert_eq!(
+            result.files[0].after.matches("/***").count(),
+            1,
+            "{}",
+            result.files[0].after
+        );
+    }
+
+    /// A running review shows a bar of the requests answered and each change as soon as it is made (docair-8l6.65).
+    #[test]
+    fn a_running_review_shows_its_changes_so_far() {
+        let change = docair_ai::explain::ReviewChange {
+            title: "Checkout reaches `orders.audit`.".into(),
+            how: vec![docair_ai::explain::HowStep {
+                piece: "path:orders.audit".into(),
+                words: "x".into(),
+            }],
+            why: "Auditors need a trail.".into(),
+            off: vec![docair_ai::explain::FoundOff {
+                kind: "risk".into(),
+                source: "none".into(),
+                place: String::new(),
+                says: String::new(),
+                code: "Nothing tests it.".into(),
+                parts: vec![],
+            }],
+            check: String::new(),
+            recorded: docair_ai::explain::Recorded {
+                by: "model".into(),
+                model: Some("m".into()),
+                at: "t".into(),
+            },
+        };
+        let mut job = ExplainJob {
+            job: "j".into(),
+            a: "HEAD~1".into(),
+            b: None,
+            running: true,
+            phase: "asking".into(),
+            progress: docair_ai::explain::ExplainProgress {
+                pieces: 4,
+                requests: 2,
+                started: 2,
+                answered: 1,
+                found: vec![change],
+                ..Default::default()
+            },
+            seconds: 5,
+            error: None,
+            text: String::new(),
+            html: String::new(),
+            version: None,
+            findings: None,
+        };
+        job.text = job_text(&job);
+        let html = job_html(&job);
+        assert!(
+            html.contains(r#"<progress max="2" value="1"></progress>"#),
+            "{html}"
+        );
+        assert!(html.contains("1 answered"), "{html}");
+        assert!(
+            html.contains(r#"<ol class="review-list" data-test="review-so-far"><li><b>Checkout reaches <code>orders.audit</code>.</b> <span class="muted">· 1 piece · ⚠ 1 found off</span><div class="muted">Auditors need a trail.</div></li></ol>"#),
+            "{html}"
+        );
+        job.phase = "done".into();
+        assert!(
+            !job_html(&job).contains("review-so-far"),
+            "done, the page reloads with the review"
+        );
     }
 
     /// An answer comes with the HTML the page's chat shows, written by docair-viewer.

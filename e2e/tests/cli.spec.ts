@@ -217,10 +217,28 @@ test.describe('the CLI', () => {
     expect(work.text).toMatch(/^Reviewed: \d+ changes? in \d+ requests? · /);
     expect(work.findings.changes[0].title).toContain('now reaches');
     expect(await version()).toBeGreaterThan(was);
+    // The job says how far it is with a bar, and gives out the changes as they are made (docair-8l6.65).
+    expect(work.html).toContain('<progress');
+    expect(work.found[0].title).toContain('now reaches');
     await page.goto(`${served.url}/#review/1`);
     await ready(page);
     // The change's whole title heads its card (docair-8l6.54).
     await expect(page.getByTestId('step-card').locator('.card-head')).toContainText('now reaches');
+    // From the page: the button shows the job's progress under it, then the page reloads with the review.
+    const kept = await version();
+    for (const f of fs.readdirSync(store).filter((f) => f.endsWith('..work.json'))) fs.rmSync(path.join(store, f));
+    // The removed store is a file change: the page is written again, without the review.
+    await expect.poll(version, { timeout: 10_000 }).toBeGreaterThan(kept);
+    await page.goto(served.url);
+    await ready(page);
+    await page.getByTestId('changes-button').click();
+    const reloaded = page.waitForEvent('load', { timeout: 20_000 });
+    await page.getByTestId('explain').click();
+    await expect(page.getByTestId('explain-progress').locator('progress')).toBeVisible();
+    await reloaded;
+    await ready(page);
+    await page.getByTestId('changes-button').click();
+    await expect(page.getByTestId('review-list')).toContainText('now reaches');
     await served.stop();
     fs.rmSync(path.dirname(shop), { recursive: true, force: true });
   });

@@ -31,6 +31,7 @@ When to use which part:
 - "How does ... work?", "What happens when ...?", "Walk me through ...": a walkthrough.
 - "I don't care about ...", "hide ...", "show only ...", "show ... again": a view change. Hide or show whole sections by the id of their group node. For "show only X", hide every top-level group and show X: the chart then shows X inside its groups and hides everything beside it. Showing a part inside a hidden section brings the section back with only that part in it.
 - "This is wrong", "... is missing", "... also calls ...", "document ...": changes to the doc blocks. Change only what the user says or what the graph clearly gets wrong; never rewrite what is right.
+- Only then: "changes" only when the message asks for an edit (it says something is wrong or missing, or asks to document, add, fix or change something). A question about what a part is, what it does or how it is used gets no "changes", also for a node marked "undocumented"; the answer may say in one sentence that the part has no doc block yet and offer to document it.
 
 Walkthrough rules:
 1. Use only node ids that appear in the graph's "nodes". Never invent an id.
@@ -49,7 +50,8 @@ Change rules (doc blocks, the format docair reads from the code):
   In @in and @out, the words "from" and "to" introduce a node id; do not use them in the type text (write "@out graph: Graph", not "@out graph: Graph handed to the CLI").
   Kinds: system service module component function endpoint store topic external job workload config host cluster namespace network gateway container release test.
 - Refer only to ids from the graph or ids you add in the same reply.
-- For a node marked "undocumented", give a "summary" (one sentence: what it does) and the tags that say how data flows.
+- Asked to document a node marked "undocumented", give a "summary" (one sentence: what it does) and the tags that say how data flows.
+- A node whose "item" is a struct, an enum, an interface or a type is data the lines carry, not a part that sends or takes it: never give it "@in", "@out" or "@calls". Who makes, takes or holds it shows only in the graph's edges and what they "carry".
 - "why" says in one sentence why the edit is right.
 
 Code and data:
@@ -60,6 +62,7 @@ Code and data:
 General:
 - The conversation so far tells you what "it", "that" or "there" refers to.
 - If the graph does not contain enough to answer, say so in "answer" and mark guesses with "probably".
+- When the graph holds no edge or tag for what is asked (who uses a part, what it calls, where it goes), say so plainly: the graph shows no such relation, and anything more would come only from names. Never state such a guess as fact.
 - Write in the language of the user's message."#;
 
 /// How much of a description goes into the digest.
@@ -70,8 +73,43 @@ const FLOW_TAGS: &[&str] = &[
     "calls", "reads", "writes", "emits", "consumes", "creates", "covers", "in", "out",
 ];
 
+/// The first words of a symbol that make it a code item; a symbol of other words is a heading's.
+const CODE_ITEMS: &[&str] = &[
+    "fn",
+    "function",
+    "struct",
+    "enum",
+    "type",
+    "interface",
+    "class",
+    "trait",
+    "const",
+    "static",
+    "mod",
+    "union",
+    "let",
+    "var",
+];
+/// The items that are data the lines carry: they never send or take anything (docair-d9o).
+const DATA_ITEMS: &[&str] = &["struct", "enum", "type", "interface", "union"];
+
+/// A part's code item, `struct Cli`, when its symbol is one.
+fn code_item(n: &docair_core::model::Node) -> Option<&str> {
+    let s = n.symbol.as_deref()?.trim();
+    CODE_ITEMS
+        .contains(&s.split_whitespace().next()?)
+        .then_some(s)
+}
+
+/// Whether a part is a type: data the lines carry, never a sender or taker.
+fn is_data_item(n: &docair_core::model::Node) -> bool {
+    code_item(n)
+        .and_then(|s| s.split_whitespace().next())
+        .is_some_and(|w| DATA_ITEMS.contains(&w))
+}
+
 /***
- * Shorten the graph to what the model needs: nodes with their data-flow tags, edges and scenarios, no source code.
+ * Shorten the graph to what the model needs: nodes with their code item (`struct Cli`), data-flow tags, edges and scenarios, no source code.
  *
  * @id      docair-ai.ask.digest
  * @creates data.digest "shortens the graph for the model"
@@ -105,6 +143,10 @@ pub fn digest(graph: &Graph) -> String {
         }
         if let Some(s) = &n.source {
             o.insert("at".into(), json!(format!("{}:{}", s.file, s.line)));
+        }
+        // What kind of code item it is (docair-d9o): `struct Cli`, `fn main`; never its code.
+        if let Some(item) = code_item(n) {
+            o.insert("item".into(), json!(item));
         }
         if n.origin != Origin::Authored {
             o.insert("undocumented".into(), json!(true));
@@ -190,6 +232,10 @@ fn shorten(s: &str, max: usize) -> String {
 pub struct Turn {
     pub question: String,
     pub answer: String,
+    /// What the question pointed at, as refs (`part:<id>`, `edge:<i>`, …): the model still reads
+    /// them in a later question (docair-rgz).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<String>,
 }
 
 /// Sections to hide and show (SPEC §11).
@@ -438,6 +484,35 @@ fn check_draft(
             summary: d.summary.filter(|s| !s.trim().is_empty()),
             why: d.why,
         };
+        // A type is carried by lines; it does not send or take (docair-d9o): such tags are left out.
+        let mut c = c;
+        if let Some(n) = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == c.node && is_data_item(n))
+        {
+            let item = code_item(n).unwrap_or_default();
+            let (bad, good): (Vec<String>, Vec<String>) =
+                std::mem::take(&mut c.add).into_iter().partition(|t| {
+                    ["@in ", "@out ", "@calls "]
+                        .iter()
+                        .any(|k| t.trim_start().starts_with(k))
+                });
+            c.add = good;
+            for t in bad {
+                repair.push(format!(
+                    "change of `{}`: `{item}` is a type, data the lines carry; it takes and gives nothing, so `{t}` is wrong",
+                    c.node
+                ));
+                problems.push(format!(
+                    "`{t}` on `{}` left out: `{item}` is a type, which lines carry; it does not send or take data",
+                    c.node
+                ));
+            }
+            if c.add.is_empty() && c.remove.is_empty() && c.summary.is_none() {
+                continue;
+            }
+        }
         match edit::resolve(&c, &graph.nodes) {
             Ok(c) => {
                 let unknown = edit::unknown_refs(&c, &|r| ids.contains(r) || new_ids.contains(r));
@@ -474,6 +549,43 @@ fn check_draft(
     (reply, repair)
 }
 
+/// What goes to the model for a question: the prompt, the graph's digest, the earlier turns, each with
+/// what it pointed at (docair-rgz), and the question with what it points at.
+fn messages(
+    graph: &Graph,
+    question: &str,
+    history: &[Turn],
+    context: Option<&str>,
+) -> Vec<Message> {
+    let mut messages = vec![
+        Message::system(SYSTEM_PROMPT),
+        Message::user(format!(
+            "The graph of the system `{}`:\n{}",
+            graph.system,
+            digest(graph)
+        )),
+        Message::assistant("{\"answer\": \"I have read the graph. What would you like to know?\"}"),
+    ];
+    let start = history.len().saturating_sub(HISTORY_TURNS);
+    for turn in &history[start..] {
+        // What an earlier question pointed at goes with it, in the words of now (docair-rgz).
+        let mut asked = turn.question.clone();
+        if let (Some(about), _) = crate::ask_context::about(graph, &turn.context) {
+            asked.push_str(&format!("\n\n(What the question points at:\n{about})"));
+        }
+        messages.push(Message::user(asked));
+        messages.push(Message::assistant(
+            json!({ "answer": turn.answer }).to_string(),
+        ));
+    }
+    let mut message = question.to_string();
+    if let Some(ctx) = context.filter(|c| !c.trim().is_empty()) {
+        message.push_str(&format!("\n\n(What the question points at:\n{ctx})"));
+    }
+    messages.push(Message::user(message));
+    messages
+}
+
 /***
  * Ask the model about the graph, with the earlier turns, and return its reply checked against the graph.
  *
@@ -500,27 +612,7 @@ pub fn ask(
     if question.is_empty() {
         bail!("the question is empty");
     }
-    let mut messages = vec![
-        Message::system(SYSTEM_PROMPT),
-        Message::user(format!(
-            "The graph of the system `{}`:\n{}",
-            graph.system,
-            digest(graph)
-        )),
-        Message::assistant("{\"answer\": \"I have read the graph. What would you like to know?\"}"),
-    ];
-    let start = history.len().saturating_sub(HISTORY_TURNS);
-    for turn in &history[start..] {
-        messages.push(Message::user(turn.question.clone()));
-        messages.push(Message::assistant(
-            json!({ "answer": turn.answer }).to_string(),
-        ));
-    }
-    let mut message = question.to_string();
-    if let Some(ctx) = context.filter(|c| !c.trim().is_empty()) {
-        message.push_str(&format!("\n\n(What the question points at:\n{ctx})"));
-    }
-    messages.push(Message::user(message));
+    let mut messages = messages(graph, question, history, context);
 
     let mut usage = Usage::default();
     let mut seconds = 0.0;
@@ -703,6 +795,66 @@ mod tests {
         assert_eq!(repair.len(), 2, "{repair:?}");
     }
 
+    /// An earlier question keeps what it pointed at: a follow-up's input still says it (docair-rgz).
+    #[test]
+    fn an_earlier_turn_keeps_what_it_pointed_at() {
+        let history = [Turn {
+            question: "What does this do?".into(),
+            answer: "It does a.".into(),
+            context: vec!["part:a".into()],
+        }];
+        let m = messages(&graph(), "And what calls it?", &history, None);
+        let earlier = &m[3].content;
+        assert!(
+            earlier.starts_with("What does this do?\n\n(What the question points at:"),
+            "{earlier}"
+        );
+        assert!(earlier.contains("`a`"), "{earlier}");
+        assert_eq!(m.last().unwrap().content, "And what calls it?");
+        let plain = Turn {
+            context: vec![],
+            ..history[0].clone()
+        };
+        assert_eq!(
+            messages(&graph(), "q", &[plain], None)[3].content,
+            "What does this do?"
+        );
+    }
+
+    /// A type is carried by lines: an `@out` the model adds to a struct is left out, and the repair
+    /// request says why (docair-d9o).
+    #[test]
+    fn a_type_gets_no_flow_tags() {
+        let mut g = graph();
+        let mut cli = node("cli", Origin::Inferred);
+        cli.symbol = Some("struct Cli".into());
+        cli.tags.clear();
+        g.nodes.push(cli);
+        let draft: DraftReply = serde_json::from_str(
+            r#"{"answer":"A.","changes":[{"node":"cli","summary":"The parsed command line.","add":["@out args: Cli to a","@part-of a"],"why":"w"},{"node":"cli","add":["@in x: X from a"],"why":"w"}]}"#,
+        )
+        .unwrap();
+        let (reply, repair) = check_draft(draft, &g, "q", &cfg());
+        assert_eq!(
+            reply.changes.len(),
+            1,
+            "an edit with nothing left goes: {:?}",
+            reply.changes
+        );
+        assert_eq!(reply.changes[0].add, ["@part-of a"]);
+        assert_eq!(repair.len(), 2, "{repair:?}");
+        assert!(repair[0].contains("`struct Cli` is a type"), "{repair:?}");
+        assert!(
+            reply
+                .problems
+                .iter()
+                .any(|p| p.contains("`@out args: Cli to a` on `cli` left out")),
+            "{:?}",
+            reply.problems
+        );
+        assert_eq!(digest(&g).matches(r#""item":"struct Cli""#).count(), 1);
+    }
+
     #[test]
     fn the_digest_marks_undocumented_nodes_and_has_no_code() {
         let d = digest(&graph());
@@ -712,6 +864,11 @@ mod tests {
         assert!(v["nodes"][0].get("undocumented").is_none());
         assert_eq!(v["nodes"][1]["undocumented"], true);
         assert!(v["nodes"][0]["about"].as_str().unwrap().chars().count() <= DESCRIPTION_CHARS + 1);
-        assert!(!d.contains("fn a"), "no symbols or code");
+        // Its code item, never its code (docair-d9o).
+        assert_eq!(v["nodes"][0]["item"], "fn a");
+        assert!(
+            !d.contains("x".repeat(DESCRIPTION_CHARS + 2).as_str()),
+            "no code"
+        );
     }
 }

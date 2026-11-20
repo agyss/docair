@@ -227,10 +227,11 @@ test.describe('clarify with AI', () => {
   });
 
   /***
-   * ✦ Ask about this, in a part's details, a line's details and a datum's page, puts each into the question as a chip; the question carries them as typed refs, and the model gets the facts of all three.
+   * ✦ Ask about this, in a part's details, a line's details and a datum's page, puts each into the question as a chip; the question carries them as typed refs, and the model gets the facts of all three. Sent, the question keeps them as chips in its bubble, each opening its thing, across a reload, and a follow-up still tells the model what it pointed at.
    *
    * @part-of e2e.ask
-   * @covers  docair-viewer.doc-page.chat "checks Ask about this puts things into the question"
+   * @covers  docair-viewer.doc-page.chat "checks Ask about this puts things into the question, and the question keeps them"
+   * @covers  docair-ai.ask.ask "checks a follow-up carries what an earlier question pointed at"
    * @covers  docair-viewer.page_panels.panels "checks a part's details offer Ask about this"
    ***/
   test('✦ Ask about this puts a part, a line and a datum into one question', async ({ page }) => {
@@ -268,6 +269,32 @@ test.describe('clarify with AI', () => {
     expect(sent).toContain('- part `orders.create`');
     expect(sent).toContain('- line `');
     expect(sent).toContain('- datum `data.order`');
+    // The question keeps what it was about, as chips in its bubble; the chips above it go (docair-rgz).
+    const bubble = page.getByTestId('msg-user').last();
+    const asked = bubble.getByTestId('asked');
+    await expect(asked).toHaveCount(3);
+    await expect(asked.nth(0)).toContainText('create');
+    await expect(asked.nth(1)).toContainText('→');
+    // Only the selection's chip stays above the question: it follows the selection (decision docair-t2z).
+    await expect(page.locator('#chat [data-test="context"] .chip-x')).toHaveText(['create_order ×']);
+    // Each opens its thing: the line is selected, the part opens.
+    await asked.nth(1).click();
+    await expect(page.getByTestId('line-details')).toBeVisible();
+    await asked.nth(0).click();
+    await expect(page).toHaveURL(/#part\/orders\.create$/);
+    // Kept with the conversation, across a reload.
+    await page.reload();
+    await expect(page.getByTestId('msg-user').last().getByTestId('asked')).toHaveCount(3);
+    // A follow-up still tells the model what the earlier question pointed at.
+    await ask(page, 'And which of them comes first, as a follow-up?');
+    const later = (await (await page.request.get(`${fakeAi}/requests`)).json())
+      .map((r: any) => r.messages.filter((m: any) => m.role === 'user').map((m: any) => m.content as string))
+      .filter((qs: string[]) => qs.at(-1)!.includes('as a follow-up?'))
+      .at(-1);
+    const earlier = later.find((q: string) => q.includes('pointed at in the page?'));
+    expect(earlier).toContain('(What the question points at:');
+    expect(earlier).toContain('- part `orders.create`');
+    expect(earlier).toContain('- datum `data.order`');
   });
 });
 

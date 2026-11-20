@@ -915,4 +915,38 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
         details.contains("in docair's words: the AI put this piece in no change"),
         "{details}"
     );
+    // A review older than the change (docair-8l6.67): its change whose pieces are gone is left out,
+    // the new piece is a change of its own, and the list says so and offers to review again.
+    let old = serde_json::json!({
+        "schema": "docair.explained/2", "a": "01234567", "b": "fedcba98",
+        "changes": [{ "title": "Gone by now.", "how": [{ "piece": "path:gone", "words": "x" }], "recorded": recorded }],
+        "problems": [], "left": [], "requests": 1
+    });
+    let page = render(Some(&old));
+    assert!(
+        page.contains("Δ Changes · 1"),
+        "the button counts the new piece's change"
+    );
+    let ix = script(&page, "docair-index");
+    let packed = script(&page, "docair-packed");
+    let panels: Value = serde_json::from_str(&unpack(
+        packed[ix["panels"].as_u64().unwrap() as usize]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    let list = panels["changes"].as_str().unwrap();
+    assert!(
+        list.contains(r#"data-test="review-stale">The review is older than these changes: 1 piece it does not cover is in docair's words."#)
+            && list.contains(r#"data-test="explain" data-served hidden data-a="0123456789abcdef0123456789abcdef01234567""#)
+            && list.contains("✦ Review again")
+            && !list.contains("Gone by now.")
+            && list.contains(r##"href="#review/1" data-test="review-change">Code changed in <code>"##),
+        "{list}"
+    );
+    let details = panels["flowChanges"]["review/1"].as_str().unwrap();
+    assert!(
+        details.contains("in docair's words: this piece is newer than the review"),
+        "{details}"
+    );
 }

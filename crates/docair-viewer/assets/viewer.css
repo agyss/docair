@@ -467,6 +467,9 @@ h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color
   padding: 0 8px; font: inherit; cursor: pointer;
 }
 .chip-x:hover { border-color: var(--accent); }
+/* What a sent question was about, in its bubble: each opens its thing (docair-rgz). */
+#chat .msg .asked { display: inline-block; margin: 4px 0 0 6px; padding: 0 7px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; cursor: pointer; text-decoration: none; }
+#chat .msg .asked:hover { border-color: var(--accent); }
 .hide-link { font-size: 11.5px; margin-left: 4px; }
 
 /* tests (SPEC §12) */
@@ -608,6 +611,11 @@ code.node-ref:hover, code.node-ref:focus-visible { background: var(--accent-soft
 .off-group[data-kind="unsaid"] { --off-kind: var(--accent); }
 .off-group[data-kind="risk"] { --off-kind: var(--warning); }
 .review-ok { margin: 8px 0; color: var(--muted); font-size: 12.5px; }
+/* A running review: a bar of the requests answered, then each change as soon as it is made (docair-8l6.65). */
+.explain-progress { margin: 8px 0; font-size: 12.5px; }
+.explain-now { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.explain-now progress { width: 140px; accent-color: var(--accent); }
+.explain-progress .review-list { margin: 4px 0 0; }
 /* Every flow of the system, folded under the flows the changes touch (docair-8l6.57). */
 .all-flows { margin: 10px 0 12px; }
 .all-flows > summary { cursor: pointer; font-weight: 550; }

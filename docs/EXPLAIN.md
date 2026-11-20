@@ -161,7 +161,7 @@ step `data.order#path:orders-db`).
 | Call | Answer |
 |------|--------|
 | `POST /api/explain` (`a`, `b`) | at once: a job id; a second call while a job runs answers that job |
-| `GET /api/explain/<job>` | the requests started, answered and left, the flows asked about, the time so far, an error; kept 10 minutes after the job ends |
+| `GET /api/explain/<job>` | the requests started, answered and left, the flows asked about, the time so far, an error, the changes made so far (`found`) and the page's view of it (`html`, docair-8l6.65); kept 10 minutes after the job ends |
 
 * Batches go out in parallel, at most 3 at once (docair-8l6.14). With the 2
   questions to the model the server allows (`ASKING_AT_ONCE`), up to 5
@@ -171,16 +171,22 @@ step `data.order#path:orders-db`).
   answers.
 * `[explain] max_requests` counts the requests started; the flows left over
   are *not explained yet*, as today.
-* The page shows the job in words the server writes, for example *The AI
-  explains 30 flows in 5 requests · 2 answered · 1:12*, and asks again every
-  second or two. When the job ends, the server writes the page again and the
-  page reloads (docair-8l6.16). The page's script stays within its line
-  budget: the words come from the server.
+* The page shows the job under its button as the server writes it: a bar of
+  the requests answered with words such as *The AI explains 30 flows in 5
+  requests · 2 answered · 1:12*, then each change as soon as it is made
+  (docair-8l6.65), and asks again every second. An answer is bound as soon as
+  those before it are, so the changes come out in the requests' order and the
+  review is the same as when all are bound at the end; the last request may
+  still merge them and place pieces into them. When the job ends, the server
+  writes the page again and the page reloads (docair-8l6.16). The page's
+  script stays within its line budget: the HTML comes from the server.
 
 **Built** (docair-8l6.11): `docair_ai::explain::explain_with` sends the
 batches on up to `AT_ONCE` (3) threads, says each start and answer
-(`ExplainProgress`), and merges the answers in the batches' order, so the
-findings do not depend on which answered first; a failed request leaves its
+(`ExplainProgress`), and binds the answers in the batches' order, each as
+soon as those before it are (`bind_answer`, docair-8l6.65), so the findings
+do not depend on which answered first and the changes so far go out with the
+progress (`ExplainProgress.found`); a failed request leaves its
 flows, and only when none answers is it an error. The server keeps the jobs
 (`ExplainJobs`, `crates/docair-server/src/project.rs`); `GET
 /api/explain/<job>` works out `seconds` and `text` when asked. `docair
@@ -268,7 +274,11 @@ does.
 | a request, everything together | 60,000 characters (docair-8l6.8) |
 
 A review too big for one request is asked in parts, the pieces in their
-order, the intent with each part. Then one last request (decision
+order, the intent with each part, and with each part the ids of the pieces
+the other parts hold, to leave to them (decision docair-rl6, docair-8l6.60);
+a split review keeps room for that list. What a part's answer still puts
+into *how* of another part's pieces is left to that part before binding, and
+a change left with nothing goes; each part says so once among the problems. Then one last request (decision
 docair-8l6.56, replacing 8l6.31, 8l6.41 and 8l6.50) gets every change by
 number, with its title, why and what its pieces do, and the pieces no change
 holds yet, with their code; it goes when the parts gave changes from more
@@ -294,7 +304,13 @@ change, when the last request fails or is cut short, is kept in the store's
 `other` and shown as a change of its own after the AI's: titled in docair's
 words for the piece (*Code changed in `total`.*), marked *in docair's words:
 the AI put this piece in no change*, with no why, nothing found off and
-nothing to check, since the AI checked nothing of it.
+nothing to check, since the AI checked nothing of it. The same holds for a
+piece the run did not reach (`left`, beyond `max_requests`) and for one newer
+than the stored review, when the change moved on after `docair explain`
+(docair-8l6.67): each is a change of its own in docair's words, marked so.
+A review that does not cover every piece says how many it misses and offers,
+served, *✦ Review again*; a stored change none of whose pieces are there now
+is left out.
 
 ### 9.3 What the AI gives back
 
@@ -319,7 +335,7 @@ removed at A that is the same as one added at B.
 |------|-----|
 | a change has a title and a piece | else it is left out, and said |
 | a `how` entry names a piece docair made | a part's id, or a piece id guessed from it (`path:<part>`), binds to the piece that holds that part (docair-8l6.37); else that entry is left out; a piece already in an earlier change stays there (docair-8l6.32) |
-| words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `off` that does not is left out alone |
+| words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `off` that does not is left out alone. A piece id in backticks is named as its part when the piece stands for one part or is named after one (`path:orders.audit` → `orders.audit`, docair-8l6.64) |
 | an *off* says where only of what is there (docair-8l6.59) | a commit by its subject, made the subject as it is; a doc by its path, made whole; a comment by its part's id; else its `where` is left out, and said. An off without `code` is left out. Only a contradiction says what was said and where: one that names nothing said is kept as a risk, and said; an *unsaid* or a *risk* keeps no source (`none`). A bare sentence is a risk. An off stored before the kinds is a contradiction where something was said, else a risk. Its `parts` keep only parts of A or B, else the parts its `code` names (docair-8l6.61) |
 | every piece is a change | the prompt asks for every piece in its change, a piece part of no other change a change of its own; the last request places the pieces left or makes changes of them (§9.2); the rest is kept in `other`, each shown as a change of its own in docair's words (docair-8l6.63) |
 

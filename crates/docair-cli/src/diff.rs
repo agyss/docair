@@ -67,8 +67,10 @@ pub fn cmd_explain(
     let max = settings
         .max_requests
         .unwrap_or(docair_ai::explain::MAX_REQUESTS);
-    // Each answered request is said on stderr, so a long run shows it is working.
+    // Each answered request is said on stderr, so a long run shows it is working, and each change as
+    // soon as it is made (docair-8l6.65).
     let said = std::sync::atomic::AtomicUsize::new(0);
+    let made = std::sync::atomic::AtomicUsize::new(0);
     let explained = docair_ai::explain::explain_with(
         &ai,
         (&compared.a, &compared.b),
@@ -82,6 +84,10 @@ pub fn cmd_explain(
                     "docair explain: {} of {} requests answered",
                     p.answered, p.requests
                 );
+            }
+            let from = made.fetch_max(p.found.len(), std::sync::atomic::Ordering::SeqCst);
+            for (k, c) in p.found.iter().enumerate().skip(from) {
+                eprintln!("docair explain: {}. {}", k + 1, c.title);
             }
         },
     )?;

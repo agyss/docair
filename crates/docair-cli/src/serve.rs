@@ -127,10 +127,13 @@ fn watch(project: &ServedProject) {
         if !counts(&ev) {
             continue;
         }
-        // Wait until the files are quiet: what counts restarts the wait, the rest is dropped.
+        // Wait until the files are quiet: what counts restarts the wait, the rest is dropped, so a
+        // build writing `target` does not hold the documentation back (docair-8l6.66).
+        let mut until = std::time::Instant::now() + QUIET;
         loop {
-            match rx.recv_timeout(QUIET) {
-                Ok(_) => continue,
+            match rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())) {
+                Ok(ev) if counts(&ev) => until = std::time::Instant::now() + QUIET,
+                Ok(_) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }

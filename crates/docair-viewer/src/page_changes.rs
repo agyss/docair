@@ -70,7 +70,7 @@ fn recorded(f: &Value) -> String {
     let r = &f["recorded"];
     let at = r["at"].as_str().unwrap_or("");
     if r["by"].as_str() == Some("docair") {
-        return "in docair's words: the AI put this piece in no change".into();
+        return format!("in docair's words: {}", docair_note(f));
     }
     if r["by"].as_str() == Some("human") {
         format!("corrected by hand · {at}")
@@ -824,13 +824,27 @@ fn review_changes(findings: Option<&Value>) -> &[Value] {
 
 /// The pieces no change of a stored review holds (docair-8l6.63): each is a change of its own.
 fn review_other(findings: Option<&Value>) -> Vec<&str> {
+    review_ids(findings, "other")
+}
+
+/// A list of piece ids in a stored review of `docair.explained/2`: `other`, `left`.
+fn review_ids<'f>(findings: Option<&'f Value>, k: &str) -> Vec<&'f str> {
     findings
         .filter(|f| f["schema"].as_str() == Some("docair.explained/2"))
-        .and_then(|f| f["other"].as_array())
+        .and_then(|f| f[k].as_array())
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .collect()
+}
+
+/// Why a change is in docair's words, not the AI's (docair-8l6.63, 8l6.67).
+fn docair_note(ch: &Value) -> &'static str {
+    match ch["note"].as_str() {
+        Some("newer") => "this piece is newer than the review",
+        Some("left") => "the run reached its limit of requests before this piece",
+        _ => "the AI put this piece in no change",
+    }
 }
 
 /// docair's words as plain text with code in backticks: `<code>total</code>` → `` `total` ``.
@@ -858,6 +872,8 @@ fn flow_title(after: &Graph, before: &Graph, seed: &str) -> String {
 /// The review as the page shows it: what leads the changes' list, each change's details and pictures.
 struct ReviewView {
     list: String,
+    /// How many changes the review lists: none without a review.
+    n: usize,
     details: Map<String, Value>,
     pictures: Vec<ChangePicture>,
 }
@@ -881,44 +897,93 @@ fn review_view(
     let other = review_other(changed.findings);
     let mut out = ReviewView {
         list: String::new(),
+        n: 0,
         details: Map::new(),
         pictures: Vec::new(),
     };
-    if stored.is_empty() && other.is_empty() {
-        let b_arg = if c.working_tree {
+    // The command that writes the review, and, served, a button that asks for it with its progress under it.
+    let command = format!(
+        "<code>docair explain {}{}</code>",
+        escape_text(&c.a),
+        if c.working_tree {
             String::new()
         } else {
-            format!(" {}", c.b)
-        };
-        let _ = write!(
-            out.list,
-            r#"<p class="muted" data-test="review-needs-ai">The AI writes the review: what each change does, how, why and what to check. <code>docair explain {}{}</code> writes it.</p><button class="btn primary" type="button" data-test="explain" data-served hidden data-a="{}"{}>✦ Review the changes</button>"#,
-            escape_text(&c.a),
-            escape_text(&b_arg),
+            format!(" {}", escape_text(&c.b))
+        }
+    );
+    let button = |label: &str| {
+        format!(
+            r#"<button class="btn primary" type="button" data-test="explain" data-served hidden data-a="{}"{}>{label}</button><div class="explain-progress" data-test="explain-progress" hidden></div>"#,
             escape_text(&c.a),
             if c.working_tree {
                 String::new()
             } else {
                 format!(r#" data-b="{}""#, escape_text(&c.b))
             }
+        )
+    };
+    if stored.is_empty() && other.is_empty() {
+        let _ = write!(
+            out.list,
+            r#"<p class="muted" data-test="review-needs-ai">The AI writes the review: what each change does, how, why and what to check. {command} writes it.</p>{}"#,
+            button("✦ Review the changes")
         );
         return out;
     }
     let pieces = docair_core::review::pieces(before, after, c);
     let piece = |id: &str| pieces.iter().find(|p| p.id() == id);
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    // Every piece is a change (docair-8l6.63): one the AI put in none is a change of its own, in docair's words.
-    let mut found: Vec<Value> = stored.to_vec();
-    for p in other.into_iter().filter_map(piece) {
-        found.push(json!({
-            "title": plain_words(&docair_words(after, &p.step)),
-            "how": [{ "piece": p.id(), "words": "" }],
-            "recorded": { "by": "docair" },
-        }));
+    // Every piece is a change (docair-8l6.63, 8l6.67): one the AI put in none, one the run did not reach,
+    // and one newer than the review are each a change of its own, in docair's words.
+    // A stored change none of whose pieces are there now no longer says anything of this change.
+    let mut found: Vec<Value> = stored
+        .iter()
+        .filter(|ch| {
+            ch["how"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|h| h["piece"].as_str().is_some_and(|p| piece(p).is_some()))
+        })
+        .cloned()
+        .collect();
+    let left = review_ids(changed.findings, "left");
+    let held: HashSet<&str> = stored
+        .iter()
+        .flat_map(|ch| ch["how"].as_array().into_iter().flatten())
+        .filter_map(|h| h["piece"].as_str())
+        .chain(other.iter().copied())
+        .chain(left.iter().copied())
+        .collect();
+    let newer: Vec<&str> = pieces
+        .iter()
+        .map(|p| p.id())
+        .filter(|p| !held.contains(p))
+        .collect();
+    for (ids, note) in [(&other, ""), (&left, "left"), (&newer, "newer")] {
+        for p in ids.iter().filter_map(|id| piece(id)) {
+            found.push(json!({
+                "title": plain_words(&docair_words(after, &p.step)),
+                "how": [{ "piece": p.id(), "words": "" }],
+                "recorded": { "by": "docair" },
+                "note": note,
+            }));
+        }
+    }
+    // A review older than the change says so, and offers to review again (docair-8l6.67).
+    if !newer.is_empty() {
+        let _ = write!(
+            out.list,
+            r#"<p class="muted" data-test="review-stale">The review is older than these changes: {} it does not cover {} in docair's words. {command} reviews them again.</p>{}"#,
+            count(newer.len(), "piece"),
+            if newer.len() == 1 { "is" } else { "are" },
+            button("✦ Review again")
+        );
     }
     out.list
         .push_str(r#"<ol class="review-list" data-test="review-list">"#);
     let n = found.len();
+    out.n = n;
     for (k, ch) in found.iter().enumerate() {
         let addr = format!("review/{}", k + 1);
         let title = text(ch, "title");
@@ -962,8 +1027,12 @@ fn review_view(
             );
         }
         if docair {
-            // The AI did not see it as a change, so it checked nothing of it (docair-8l6.63).
-            intro.push_str(r#"<p class="muted" data-test="review-docair">In docair's words: the AI put this piece in no change, so nothing of it was checked.</p>"#);
+            // The AI did not see it as a change, so it checked nothing of it (docair-8l6.63, 8l6.67).
+            let _ = write!(
+                intro,
+                r#"<p class="muted" data-test="review-docair">In docair's words: {}, so nothing of it was checked.</p>"#,
+                docair_note(ch)
+            );
         } else if off.is_empty() {
             intro.push_str(r#"<p class="review-ok" data-test="review-ok">✓ Checked against the code: nothing found off.</p>"#);
         } else {
@@ -1310,7 +1379,15 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     let c = changed.changes;
     let (a, b) = (short(&c.a), short(&c.b));
     let n = c.flows.len();
-    let review_n = review_changes(changed.findings).len() + review_other(changed.findings).len();
+    // Code the model names links to its part, as in every other panel.
+    let linker = crate::page_glossary::Linker::new(after);
+    // The review leads (docs/EXPLAIN.md §9.5); the flows it is built from follow.
+    let inside_code = change_steps::changed_inside(&c.graph).code;
+    // The changed parts' texts, to get down to the code from every change (docair-8l6.49).
+    let texts: Texts = changed.code.iter().map(|t| (t.part.as_str(), t)).collect();
+    let reviewed = review_view(after, changed, keep, (&linker, &texts), &inside_code);
+    // Every change the review lists counts, those in docair's words too (docair-8l6.63, 8l6.67).
+    let review_n = reviewed.n;
     let button = format!(
         r#"<button class="btn" id="btn-changes" data-test="changes-button" title="What changed from {} to {}">Δ Changes · {}</button>"#,
         escape_text(a),
@@ -1340,13 +1417,6 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     }
     let mut details = Map::new();
     let mut pictures = Vec::new();
-    // Code the model names links to its part, as in every other panel.
-    let linker = crate::page_glossary::Linker::new(after);
-    // The review leads (docs/EXPLAIN.md §9.5); the flows it is built from follow.
-    let inside_code = change_steps::changed_inside(&c.graph).code;
-    // The changed parts' texts, to get down to the code from every change (docair-8l6.49).
-    let texts: Texts = changed.code.iter().map(|t| (t.part.as_str(), t)).collect();
-    let reviewed = review_view(after, changed, keep, (&linker, &texts), &inside_code);
     list.push_str(&reviewed.list);
     details.extend(reviewed.details);
     pictures.extend(reviewed.pictures);
