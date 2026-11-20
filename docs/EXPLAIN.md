@@ -212,7 +212,7 @@ changes is not capped (docair-8l6.27).
 | *what* the app does differently, one sentence from the user's side | An uploaded page keeps working when the cluster runs two server pods. |
 | *how*: its pieces in the order they work together, each in a sentence | `upload_id` names the pod that took the upload; `forward` sends a request for it there, through the new Service `docair-server-peers`. |
 | *why*: the AI's own reading of the code, the commits and the docs together, never a quote or a citation (docair-8l6.55) | A user's upload lands on one pod; the others now ask that pod for it instead of answering that it is gone. |
-| *off*: what the AI found off, each as what was said against what the code does: the claim of a commit message, a doc or a code comment and which one, or that nothing mentions it (docair-8l6.58); or that it found nothing | *Said:* the commit “Audit every order”: every order is audited. *The code:* `audit` has an empty body, so it records nothing yet. |
+| *off*: what the AI found off, each of one of three kinds (docair-8l6.62): *contradicts*, what a commit message, a doc or a code comment says, and which one, against what the code clearly does otherwise (docair-8l6.58); *unsaid*, what the code does that nothing mentions; *risk*, a mistake, a missed case or a risk in the code; or that it found nothing | *Said:* the commit “Audit every order”: every order is audited. *The code:* `audit` has an empty body, so it records nothing yet. |
 | *what to check*: the risky part | The NetworkPolicy must let the server pods reach each other. |
 
 The commit messages and docs are claims the AI checks against the code, not
@@ -220,7 +220,11 @@ sources to cite: they go to it without ids, and the prompt asks it never to
 quote or name a commit, doc, issue or ticket (decision docair-8l6.55,
 replacing the cited sources of 8l6.24 and the disagreements of 8l6.30).
 Only an *off* names and repeats what was said, so a reader sees both sides
-of it (decision docair-8l6.59).
+of it (decision docair-8l6.59), and of the offs only a contradiction does
+(docair-8l6.62). The prompt asks for clear ones: what was said and what the
+code does cannot both be true. Something no commit, doc or comment mentions,
+or mentions only in part, is *unsaid*; a fault the AI sees in the code is a
+*risk*, whatever was said of it.
 
 ### 9.2 What the AI gets
 
@@ -269,25 +273,36 @@ docair-8l6.56, replacing 8l6.31, 8l6.41 and 8l6.50) gets every change by
 number, with its title, why and what its pieces do, and the pieces no change
 holds yet, with their code; it goes when the parts gave changes from more
 than one request, or a piece is left. It answers which changes came back
-twice and where each left piece belongs, with what it does there:
+twice and where each left piece belongs, with what it does there, or which
+changes of their own the left pieces that belong to none make (docair-8l6.63):
 
 ```json
-{"same": [[1, 4]], "place": [{"piece": "<id>", "change": 2, "words": "…"}]}
+{"same": [[1, 4]], "place": [{"piece": "<id>", "change": 2, "words": "…"}],
+ "new": [{"title": "…", "how": [{"piece": "<id>", "words": "…"}], "why": "…", "check": "…"}]}
 ```
 
 docair places first, then merges each group into its first change: the
 pieces in order, what was found off without repeats. A left piece is named by
 its id, a part it holds or a part in its box (`explain::resolve_left`); a
 place or a group that does not bind is left out and said (`place_left`,
-`merge_same`). A piece it places nowhere is an other edit. The request comes
-on top of `max_requests`, in the progress.
+`merge_same`). Its new changes are bound as the review's are (§9.4), of the
+left pieces only. The request comes on top of `max_requests`, in the progress.
+
+Every piece is a change; there are no *other edits* (docair-8l6.63, decision
+docair-cum, replacing 8l6.28 and 8l6.42). A piece the AI still puts in no
+change, when the last request fails or is cut short, is kept in the store's
+`other` and shown as a change of its own after the AI's: titled in docair's
+words for the piece (*Code changed in `total`.*), marked *in docair's words:
+the AI put this piece in no change*, with no why, nothing found off and
+nothing to check, since the AI checked nothing of it.
 
 ### 9.3 What the AI gives back
 
 ```json
 {"changes": [{"title": "…", "how": [{"piece": "<piece id>", "words": "…"}],
               "why": "…",
-              "off": [{"source": "commit | doc | comment | none", "where": "<the commit's subject, the doc's path, the part whose comment it is>",
+              "off": [{"kind": "contradicts | unsaid | risk",
+                       "source": "commit | doc | comment | none", "where": "<the commit's subject, the doc's path, the part whose comment it is>",
                        "says": "…", "code": "<what the code seems to do>",
                        "parts": ["<the id of each part where the code does it>"]}],
               "check": "…"}],
@@ -305,8 +320,8 @@ removed at A that is the same as one added at B.
 | a change has a title and a piece | else it is left out, and said |
 | a `how` entry names a piece docair made | a part's id, or a piece id guessed from it (`path:<part>`), binds to the piece that holds that part (docair-8l6.37); else that entry is left out; a piece already in an earlier change stays there (docair-8l6.32) |
 | words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `off` that does not is left out alone |
-| an *off* says where only of what is there (docair-8l6.59) | a commit by its subject, made the subject as it is; a doc by its path, made whole; a comment by its part's id; else its `where` is left out, and said. An off without `code` is left out; one of `none` says nothing; a bare sentence is what the code does, said nowhere. Its `parts` keep only parts of A or B, else the parts its `code` names (docair-8l6.61) |
-| every piece belongs somewhere | the prompt asks for every piece in its change; the last request places the pieces left (§9.2); the rest is an *other edit*, which the review lists (docair-8l6.28) |
+| an *off* says where only of what is there (docair-8l6.59) | a commit by its subject, made the subject as it is; a doc by its path, made whole; a comment by its part's id; else its `where` is left out, and said. An off without `code` is left out. Only a contradiction says what was said and where: one that names nothing said is kept as a risk, and said; an *unsaid* or a *risk* keeps no source (`none`). A bare sentence is a risk. An off stored before the kinds is a contradiction where something was said, else a risk. Its `parts` keep only parts of A or B, else the parts its `code` names (docair-8l6.61) |
+| every piece is a change | the prompt asks for every piece in its change, a piece part of no other change a change of its own; the last request places the pieces left or makes changes of them (§9.2); the rest is kept in `other`, each shown as a change of its own in docair's words (docair-8l6.63) |
 
 The findings go to the store as before (§4): `docs/changes/<A>..<B>.json`,
 schema `docair.explained/2`, with `changes`, the pieces the model left as
@@ -320,15 +335,16 @@ quoting and citing) is asked again. A store of an older schema, or one whose cha
 **Δ Changes** opens the review: the changes, in the model's order (what
 matters to the user first), then the flows they touch, with how many of the
 system's flows changed and all of them folded, each a link to its picture and
-a changed one to its change (docair-8l6.57), then the *Other edits*, folded
-(docair-8l6.42). A
+a changed one to its change (docair-8l6.57). A
 change opens at `#review/<n>` on its own picture: its pieces' parts at A and
 at B as one picture, nothing else (docair-8l6.33), marked as in CHANGES.md
 §8. Its walk opens on *What and why*, headed by the change's whole title:
-why, then what the AI found off, marked (*⚠ Found off*), each as *Said*
-(by which commit, doc or comment, or *Nothing: no commit, doc or comment
-mentions it*) over *The code* (docair-8l6.58), with the parts where the code
-does it as links and their code folded (docair-8l6.61), or *✓ Checked against the
+why, then what the AI found off, marked (*⚠ Found off*), by kind, each
+under its heading, contradictions first (docair-8l6.62): *Said, but the code
+does otherwise*, each as *Said* (by which commit, doc or comment) over *The
+code* (docair-8l6.58); *Done, but said nowhere* and *Looks wrong or risky*,
+each as *The code*; every one with the parts where the code does it as links
+and their code folded (docair-8l6.61). Or *✓ Checked against the
 code: nothing found off*, then what to check, framed on the
 whole change; then *How · k of n*, its pieces in the order of *how*, each
 card the model's words for that piece over docair's own (Before and After)
@@ -339,7 +355,7 @@ two are always seen together. Without findings the review says the AI makes
 it, with the command, and, served, a button.
 
 **Down to the code** (docair-8l6.49, decision 8l6.51). Each piece, on its
-card, in the details' *How* and among the other edits, has a fold, *The code
+card and in the details' *How*, has a fold, *The code
 · n parts*: each of its new, gone and edited parts, by id (a link to the
 part), with its file and line and its whole text as a line diff, the lines
 both versions keep, removed lines struck, added ones marked. These are the
@@ -350,9 +366,10 @@ have the same fold.
 ### 9.6 `docair explain` and the comment
 
 `docair explain <A> [<B>]` asks, stores and prints the review: each change
-with what, how, why and what to check, *Other edits*, links; `--json` the
-store. The pull request comment is the same in Markdown, *how* and the other
-edits folded.
+with what, how, why, what was found off by kind and what to check, then each
+piece no change holds as a change of its own in docair's words, links;
+`--json` the store. The pull request comment is the same in Markdown, *how*
+folded.
 
 ### 9.7 Tests
 
@@ -381,7 +398,7 @@ the notice.
 | the intent: commit messages, changed Markdown, changed doc-block words | `docair_server::commits::intent`, `docair_core::review::words_changed`; `CommitPair.intent` |
 | the request, compact (docair-8l6.34), without reasoning first (docair-8l6.36) | `docair_ai::explain::{digest, explain_with}`, `REVIEW_PROMPT`; `client::chat_with` |
 | bind and cover, the store `docair.explained/2` | `docair_ai::explain::bind`; `ChangeFindings { changes, other, links }` |
-| the page: the review list, `#review/<n>`, other edits, the notice | `docair_viewer::page_changes::review_view`, `docair_core::review::change_picture` |
+| the page: the review list, `#review/<n>`, a left piece as a change, the notice | `docair_viewer::page_changes::review_view`, `docair_core::review::change_picture` |
 | `docair explain` and the comment | `docair-cli` `cmd_explain`, `docair_ai::explain::comment` |
 
 With the configured model (`zai-org/GLM-5.3-Flash`): docair's commit

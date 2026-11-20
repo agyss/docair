@@ -724,7 +724,8 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             "off": [
                 { "source": "doc", "where": "README.md", "says": "The cart checks itself before it posts.",
                   "code": "The cart is checked in `orders.create`, not in the cart.", "parts": ["orders.create"] },
-                "Nothing tests an empty cart."
+                "Nothing tests an empty cart.",
+                { "kind": "unsaid", "source": "commit", "says": "Dropped.", "code": "An empty cart is now turned away, and nothing says so." }
             ],
             "check": "That `orders.create` still answers fast.",
             "recorded": recorded
@@ -797,11 +798,17 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             && intro.contains(r#"<div class="card-step">What and why</div>"#)
             && intro.contains(r#"data-test="review-why""#)
             && intro.contains(r#"data-test="review-off""#)
-            && intro.contains(r#"<dl class="off-item" data-test="off-item" data-source="doc"><dt>Said</dt><dd data-test="off-said"><span class="off-who"><code>README.md</code>:</span> The cart checks itself before it posts.</dd><dt>The code</dt><dd data-test="off-code">The cart is checked in "#)
+            // docair-8l6.62: by kind, each under its heading, the contradictions first; only they say what was said.
+            && intro.contains(r#"<section class="off-group" data-test="off-group" data-kind="contradicts"><h5>Said, but the code does otherwise <span class="muted">· 1</span></h5><dl class="off-item" data-test="off-item" data-kind="contradicts" data-source="doc"><dt>Said</dt><dd data-test="off-said"><span class="off-who"><code>README.md</code>:</span> The cart checks itself before it posts.</dd><dt>The code</dt><dd data-test="off-code">The cart is checked in "#)
             // docair-8l6.61: where the code does it, a link to the part, and its code folded.
             && intro.contains(r#"<div class="off-parts" data-test="off-parts">in <code class="node-ref" data-node="orders.create" tabindex="0" title="orders.create">"#)
             && intro.contains(r#"</div><details class="piece-code" data-test="piece-code"><summary>The code · 1 part</summary>"#)
-            && intro.contains(r#"data-source="none"><dt>Said</dt><dd data-test="off-said"><span class="muted">Nothing: no commit, doc or comment mentions it.</span></dd><dt>The code</dt><dd data-test="off-code">Nothing tests an empty cart.</dd>"#)
+            && intro.contains(r#"<section class="off-group" data-test="off-group" data-kind="unsaid"><h5>Done, but said nowhere <span class="muted">· 1</span></h5><dl class="off-item" data-test="off-item" data-kind="unsaid" data-source="none"><dt>The code</dt><dd data-test="off-code">An empty cart is now turned away, and nothing says so.</dd>"#)
+            && intro.contains(r#"<section class="off-group" data-test="off-group" data-kind="risk"><h5>Looks wrong or risky <span class="muted">· 1</span></h5><dl class="off-item" data-test="off-item" data-kind="risk" data-source="none"><dt>The code</dt><dd data-test="off-code">Nothing tests an empty cart.</dd>"#)
+            && intro.find(r#"data-kind="contradicts""#) < intro.find(r#"data-kind="unsaid""#)
+            && intro.find(r#"data-kind="unsaid""#) < intro.find(r#"data-kind="risk""#)
+            && !intro.contains("Dropped.")
+            && !intro.contains("Nothing: no commit")
             && intro.contains(r#"data-test="review-check""#)
             && !intro.contains("review-ok")
             && !intro.contains("commit:")
@@ -870,5 +877,42 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             && list.contains("docair explain 0123456789abcdef0123456789abcdef01234567 fedcba9876543210fedcba9876543210fedcba98")
             && list.contains(r#"data-test="explain" data-served hidden data-a="0123456789abcdef0123456789abcdef01234567" data-b="fedcba9876543210fedcba9876543210fedcba98""#),
         "the review needs the AI: {list}"
+    );
+    // Every piece is a change (docair-8l6.63): one the AI put in none is a change of its own, in
+    // docair's words, with no Other edits.
+    let lone = serde_json::json!({
+        "schema": "docair.explained/2", "a": "01234567", "b": "fedcba98",
+        "changes": [], "other": [pieces[0].id()], "problems": [], "left": [], "requests": 1
+    });
+    let page = render(Some(&lone));
+    assert!(page.contains("Δ Changes · 1"), "the button counts it");
+    let ix = script(&page, "docair-index");
+    let packed = script(&page, "docair-packed");
+    let unpacked = |k: &str| -> Value {
+        serde_json::from_str(&unpack(
+            packed[ix[k].as_u64().unwrap() as usize].as_str().unwrap(),
+        ))
+        .unwrap()
+    };
+    let panels = unpacked("panels");
+    let list = panels["changes"].as_str().unwrap();
+    assert!(
+        list.contains(r##"href="#review/1" data-test="review-change">Code changed in <code>"##)
+            && list.contains("· 1 piece · in docair's words</span>")
+            && !list.contains("Other edits")
+            && !list.contains("other-edits")
+            && !list.contains("review-needs-ai"),
+        "{list}"
+    );
+    let walks = unpacked("walks");
+    let intro = walks["review/1"]["steps"][0]["card"].as_str().unwrap();
+    assert!(
+        intro.contains(r#"data-test="review-docair""#) && !intro.contains("review-ok"),
+        "{intro}"
+    );
+    let details = panels["flowChanges"]["review/1"].as_str().unwrap();
+    assert!(
+        details.contains("in docair's words: the AI put this piece in no change"),
+        "{details}"
     );
 }

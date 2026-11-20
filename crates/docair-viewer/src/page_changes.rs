@@ -69,6 +69,9 @@ fn with_code(text: &str) -> String {
 fn recorded(f: &Value) -> String {
     let r = &f["recorded"];
     let at = r["at"].as_str().unwrap_or("");
+    if r["by"].as_str() == Some("docair") {
+        return "in docair's words: the AI put this piece in no change".into();
+    }
     if r["by"].as_str() == Some("human") {
         format!("corrected by hand · {at}")
     } else {
@@ -819,6 +822,28 @@ fn review_changes(findings: Option<&Value>) -> &[Value] {
         .map_or(&[][..], Vec::as_slice)
 }
 
+/// The pieces no change of a stored review holds (docair-8l6.63): each is a change of its own.
+fn review_other(findings: Option<&Value>) -> Vec<&str> {
+    findings
+        .filter(|f| f["schema"].as_str() == Some("docair.explained/2"))
+        .and_then(|f| f["other"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+/// docair's words as plain text with code in backticks: `<code>total</code>` → `` `total` ``.
+fn plain_words(html: &str) -> String {
+    html.replace("<code>", "`")
+        .replace("</code>", "`")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
 /// A changed flow's title, from the version that has it: *Datum order*, *Scenario checkout*.
 fn flow_title(after: &Graph, before: &Graph, seed: &str) -> String {
     match docair_core::slice::find(after, seed) {
@@ -833,14 +858,12 @@ fn flow_title(after: &Graph, before: &Graph, seed: &str) -> String {
 /// The review as the page shows it: what leads the changes' list, each change's details and pictures.
 struct ReviewView {
     list: String,
-    /// The other edits, folded: the panel puts them after the flows.
-    other: String,
     details: Map<String, Value>,
     pictures: Vec<ChangePicture>,
 }
 
 /***
- * The review (docs/EXPLAIN.md §9.5, docair-8l6.22): the AI's changes in its order, each at `#review/<n>` on its own picture (its pieces' parts only, docair-8l6.33), walked: first what and why under its title (why, what the AI found off or that it found nothing, what to check), then its pieces in the order of *how*, each card the model's words for that piece over docair's own, with its code. Its details hold only what the card does not (docair-8l6.54): which change, the flows it touches, who wrote it. Then the other edits. Without a review: that the AI writes it, the command, and, served, a button (docair-8l6.26).
+ * The review (docs/EXPLAIN.md §9.5, docair-8l6.22): the AI's changes in its order, each at `#review/<n>` on its own picture (its pieces' parts only, docair-8l6.33), walked: first what and why under its title (why, what the AI found off or that it found nothing, what to check), then its pieces in the order of *how*, each card the model's words for that piece over docair's own, with its code. Its details hold only what the card does not (docair-8l6.54): which change, the flows it touches, who wrote it. Every piece is a change (docair-8l6.63): one the AI put in none is a change of its own after the AI's, in docair's words, marked so. Without a review: that the AI writes it, the command, and, served, a button (docair-8l6.26).
  *
  * @calls docair-core.review.pieces "the pieces of the whole change"
  * @calls docair-core.review.change_picture "each change's own picture"
@@ -854,14 +877,14 @@ fn review_view(
 ) -> ReviewView {
     let c = changed.changes;
     let before = changed.before;
-    let found = review_changes(changed.findings);
+    let stored = review_changes(changed.findings);
+    let other = review_other(changed.findings);
     let mut out = ReviewView {
         list: String::new(),
-        other: String::new(),
         details: Map::new(),
         pictures: Vec::new(),
     };
-    if found.is_empty() {
+    if stored.is_empty() && other.is_empty() {
         let b_arg = if c.working_tree {
             String::new()
         } else {
@@ -884,6 +907,15 @@ fn review_view(
     let pieces = docair_core::review::pieces(before, after, c);
     let piece = |id: &str| pieces.iter().find(|p| p.id() == id);
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    // Every piece is a change (docair-8l6.63): one the AI put in none is a change of its own, in docair's words.
+    let mut found: Vec<Value> = stored.to_vec();
+    for p in other.into_iter().filter_map(piece) {
+        found.push(json!({
+            "title": plain_words(&docair_words(after, &p.step)),
+            "how": [{ "piece": p.id(), "words": "" }],
+            "recorded": { "by": "docair" },
+        }));
+    }
     out.list
         .push_str(r#"<ol class="review-list" data-test="review-list">"#);
     let n = found.len();
@@ -898,6 +930,7 @@ fn review_view(
             .map(|h| (text(h, "piece"), text(h, "words")))
             .filter(|(p, _)| piece(p).is_some())
             .collect();
+        let docair = ch["recorded"]["by"].as_str() == Some("docair");
         let its: Vec<&docair_core::review::Piece> =
             how.iter().filter_map(|(p, _)| piece(p)).collect();
         let mut flows: Vec<&String> = its.iter().flat_map(|p| &p.flows).collect();
@@ -905,14 +938,15 @@ fn review_view(
         flows.dedup();
         let _ = write!(
             out.list,
-            r#"<li><a class="link" href="{}" data-test="review-change">{}</a> <span class="muted">· {}</span></li>"#,
+            r#"<li><a class="link" href="{}" data-test="review-change">{}</a> <span class="muted">· {}{}</span></li>"#,
             href(&addr),
             with_code(&title),
             count(how.len(), "piece"),
+            if docair { " · in docair's words" } else { "" },
         );
         // What and why, the card it opens on: why, what the AI found off (or that it found nothing), what to check.
         let why = text(ch, "why");
-        let off: Vec<String> = ch["off"]
+        let off: Vec<(&str, String)> = ch["off"]
             .as_array()
             .into_iter()
             .flatten()
@@ -927,13 +961,33 @@ fn review_view(
                 with_code(&why)
             );
         }
-        if off.is_empty() {
+        if docair {
+            // The AI did not see it as a change, so it checked nothing of it (docair-8l6.63).
+            intro.push_str(r#"<p class="muted" data-test="review-docair">In docair's words: the AI put this piece in no change, so nothing of it was checked.</p>"#);
+        } else if off.is_empty() {
             intro.push_str(r#"<p class="review-ok" data-test="review-ok">✓ Checked against the code: nothing found off.</p>"#);
         } else {
+            // By kind, each under its heading, the clear contradictions first (docair-8l6.62).
             intro
                 .push_str(r#"<div class="review-off" data-test="review-off"><h4>⚠ Found off</h4>"#);
-            for x in &off {
-                intro.push_str(x);
+            for (kind, heading) in docair_core::review::OFF_KINDS {
+                let mine: Vec<&String> = off
+                    .iter()
+                    .filter(|(k, _)| *k == kind)
+                    .map(|(_, x)| x)
+                    .collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                let _ = write!(
+                    intro,
+                    r#"<section class="off-group" data-test="off-group" data-kind="{kind}"><h5>{heading} <span class="muted">· {}</span></h5>"#,
+                    mine.len()
+                );
+                for x in mine {
+                    intro.push_str(x);
+                }
+                intro.push_str("</section>");
             }
             intro.push_str("</div>");
         }
@@ -952,6 +1006,7 @@ fn review_view(
         // Its picture, walked: what and why first, then its pieces in the order of how.
         let words = Value::Object(
             how.iter()
+                .filter(|(_, w)| !w.is_empty())
                 .map(|(p, w)| (p.clone(), Value::String(w.clone())))
                 .collect(),
         );
@@ -1010,32 +1065,6 @@ fn review_view(
             .insert(addr, Value::String(linker.link(&d, None)));
     }
     out.list.push_str("</ol>");
-    // The pieces no change holds, folded, for the panel to put after the flows (docair-8l6.28, 8l6.42).
-    let other: Vec<&docair_core::review::Piece> = changed
-        .findings
-        .and_then(|f| f["other"].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(piece)
-        .collect();
-    if !other.is_empty() {
-        let _ = write!(
-            out.other,
-            r#"<details class="other-edits-box" data-test="other-edits-box"><summary>Other edits · {}</summary><p class="muted">Pieces the AI found part of no change.</p><ul class="other-edits" data-test="other-edits">"#,
-            other.len()
-        );
-        for p in other {
-            let _ = write!(
-                out.other,
-                "<li>{}{}</li>",
-                docair_words(after, &p.step),
-                piece_code(&p.step, texts, &[after, before])
-            );
-        }
-        out.other.push_str("</ul></details>");
-        out.other = linker.link(&out.other, None);
-    }
     out.list = linker.link(&out.list, None);
     out
 }
@@ -1043,10 +1072,15 @@ fn review_view(
 /// The picture of a flow neither version has: it says so.
 const NOT_FOUND: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" class="docair-pic changes" viewBox="0 0 280 120" width="280" height="120"><g class="side-missing"><rect x="0" y="0" width="280" height="120" rx="8"/><text x="140" y="60">Not found in either version</text></g></svg>"#;
 
-/// One thing the AI found off, as the card shows it (docair-8l6.58): what was said, by which commit, doc or
-/// code comment, over what the code seems to do; said nowhere, that nothing says it. A bare sentence (as
-/// the model may answer) is what the code does.
-fn off_item(v: &Value, texts: &Texts, (after, before): (&Graph, &Graph)) -> Option<String> {
+/// One thing the AI found off, as the card shows it, and its kind (docair-8l6.58, 8l6.62): a contradiction
+/// as what was said, by which commit, doc or code comment, over what the code seems to do; what nothing
+/// mentions and a risk as what the code does. A bare sentence (as the model may answer) is a risk; an item
+/// stored before the kinds is a contradiction where something was said, else a risk.
+fn off_item<'a>(
+    v: &'a Value,
+    texts: &Texts,
+    (after, before): (&Graph, &Graph),
+) -> Option<(&'a str, String)> {
     let field = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").trim();
     let (source, place, says, code) = match v.as_str() {
         Some(t) => ("none", "", "", t.trim()),
@@ -1060,8 +1094,15 @@ fn off_item(v: &Value, texts: &Texts, (after, before): (&Graph, &Graph)) -> Opti
     if code.is_empty() {
         return None;
     }
+    let said = source != "none" && !says.is_empty();
+    let kind = match field("kind") {
+        "contradicts" if said => "contradicts",
+        "unsaid" => "unsaid",
+        "" if said => "contradicts",
+        _ => "risk",
+    };
     let who = match (source, place) {
-        _ if says.is_empty() || source == "none" => String::new(),
+        _ if kind != "contradicts" => String::new(),
         ("commit", "") => "A commit message".into(),
         ("commit", p) => format!("The commit \u{201c}{}\u{201d}", escape_text(p)),
         ("doc", "") => "A doc".into(),
@@ -1071,9 +1112,12 @@ fn off_item(v: &Value, texts: &Texts, (after, before): (&Graph, &Graph)) -> Opti
         _ => "It".into(),
     };
     let said = if who.is_empty() {
-        r#"<span class="muted">Nothing: no commit, doc or comment mentions it.</span>"#.to_string()
+        String::new()
     } else {
-        format!(r#"<span class="off-who">{who}:</span> {}"#, with_code(says))
+        format!(
+            r#"<dt>Said</dt><dd data-test="off-said"><span class="off-who">{who}:</span> {}</dd>"#,
+            with_code(says)
+        )
     };
     // Where the code does it (docair-8l6.61): each part a link to it, gone ones by id, and their code folded.
     let parts: Vec<&str> = v["parts"]
@@ -1126,10 +1170,13 @@ fn off_item(v: &Value, texts: &Texts, (after, before): (&Graph, &Graph)) -> Opti
     } else {
         format!(r#"<div class="off-parts" data-test="off-parts">in {at}</div>"#)
     };
-    Some(format!(
-        r#"<dl class="off-item" data-test="off-item" data-source="{}"><dt>Said</dt><dd data-test="off-said">{said}</dd><dt>The code</dt><dd data-test="off-code">{}{at}{folded}</dd></dl>"#,
-        if who.is_empty() { "none" } else { source },
-        with_code(code)
+    Some((
+        kind,
+        format!(
+            r#"<dl class="off-item" data-test="off-item" data-kind="{kind}" data-source="{}">{said}<dt>The code</dt><dd data-test="off-code">{}{at}{folded}</dd></dl>"#,
+            if who.is_empty() { "none" } else { source },
+            with_code(code)
+        ),
     ))
 }
 
@@ -1263,7 +1310,7 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     let c = changed.changes;
     let (a, b) = (short(&c.a), short(&c.b));
     let n = c.flows.len();
-    let review_n = review_changes(changed.findings).len();
+    let review_n = review_changes(changed.findings).len() + review_other(changed.findings).len();
     let button = format!(
         r#"<button class="btn" id="btn-changes" data-test="changes-button" title="What changed from {} to {}">Δ Changes · {}</button>"#,
         escape_text(a),
@@ -1544,8 +1591,6 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         }
         list.push_str("</ul>");
     }
-    // The other edits last, folded, so they never hide the flows.
-    list.push_str(&reviewed.other);
     ChangeView {
         button,
         list,

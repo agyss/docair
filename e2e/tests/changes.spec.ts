@@ -90,24 +90,27 @@ test.describe('what changed since a commit', () => {
   });
 
   /***
-   * Reviewed by the model (docair explain, docs/EXPLAIN.md §9): the changes list leads with the review's change, titled from the commit, the flows right after it, the cart's code edit, which no change explains, a folded other edit; the change opens on its own picture on what and why, headed by its title, then the how, its pieces with the model's words over docair's, the route after on the card, the new step lit; its details say why with the commit and the README as sources.
+   * Reviewed by the model (docair explain, docs/EXPLAIN.md §9): the changes list leads with the review's change, titled from the commit, the flows right after it, then the cart's code edit, which the first request left, as a change of its own (every piece is a change, docair-8l6.63); the change opens on its own picture on what and why, headed by its title, then the how, its pieces with the model's words over docair's, the route after on the card, the new step lit; its details say why with the commit and the README as sources.
    *
    * @part-of e2e.changes
-   * @covers  docair-viewer.page_changes.review_view "checks the review's change opens on its picture with its why and other edits"
+   * @covers  docair-viewer.page_changes.review_view "checks the review's change opens on its picture with its why, and a left piece is a change of its own"
    * @covers  docair-viewer.page_changes.changes_walk "checks the model's words show on the change's piece"
    * @covers  docair-viewer.page_changes.piece_code "checks a piece's code shows, before and after"
    ***/
-  test('a reviewed change opens on its own picture, with why and other edits', async ({ page }) => {
+  test('a reviewed change opens on its own picture, with why, and every piece is a change', async ({ page }) => {
     test.skip(!withFakeAi, 'needs the fake model');
     const shop = twoCommits(true);
     execFileSync(docair, ['explain', 'HEAD~1', '--root', shop], { env: { ...process.env, ...fakeAiEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
     await page.goto(buildWithChanges(shop));
     await ready(page);
-    await expect(page.getByTestId('changes-button')).toContainText('Δ Changes · 1');
+    await expect(page.getByTestId('changes-button')).toContainText('Δ Changes · 2');
     await page.getByTestId('changes-button').click();
     const review = page.getByTestId('review-list');
     await expect(review).toContainText('Audit every order: the flow now reaches orders.audit.');
-    // The flows right after the changes; the other edits last, folded (docair-8l6.42).
+    // Every piece is a change (docair-8l6.63): the cart's edit, which the first request left, is one of its own.
+    await expect(review.getByTestId('review-change')).toHaveText([/^Audit every order/, 'An item in the cart costs more.']);
+    await expect(page.getByTestId('other-edits-box')).toHaveCount(0);
+    // The flows right after the changes (docair-8l6.42).
     await expect(page.getByTestId('flows-head')).toBeVisible();
     await expect(page.getByTestId('changes-list')).toContainText('Scenario checkout');
     // Every flow of the system, folded under them (docair-8l6.57): checkout marked, to its change.
@@ -117,20 +120,6 @@ test.describe('what changed since a commit', () => {
     await expect(allFlows).toContainText('Scenarios ·');
     await expect(allFlows.locator('a[href="#slice/flow:checkout"]')).toHaveText('checkout');
     await expect(allFlows.locator('a[href="#changes/flow:checkout"]')).toBeVisible();
-    await expect(page.getByTestId('other-edits')).toContainText('total');
-    const flowsFirst = await page.evaluate(() => {
-      const f = document.querySelector('[data-test="flows-head"]');
-      const o = document.querySelector('[data-test="other-edits-box"]');
-      return !!f && !!o && !!(f.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING) && !o.hasAttribute('open');
-    });
-    expect(flowsFirst).toBe(true);
-    // Down to the code (docair-8l6.49): the cart's edit, its whole text before and after, folded.
-    await page.getByTestId('other-edits-box').locator('summary').first().click();
-    const cartCode = page.getByTestId('other-edits').getByTestId('piece-code').filter({ hasText: 'shop-ui.cart.total' }).first();
-    await cartCode.locator('summary').click();
-    await expect(cartCode).toContainText('ui/src/cart.ts');
-    await expect(cartCode.locator('.code-diff .del', { hasText: '* 100' })).toHaveCount(1);
-    await expect(cartCode.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
     await page.getByTestId('review-change').first().click();
     await expect(page).toHaveURL(/#review\/1$/);
     // It opens on what was done and why, headed by the change's title (docair-8l6.43) ...
@@ -138,21 +127,28 @@ test.describe('what changed since a commit', () => {
     await expect(page.getByTestId('step-card')).toContainText('Audit every order');
     // The AI's own why, and what it found off, on the card (docair-8l6.55).
     await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('Checkout now goes one step further');
-    // Each thing found off: what was said, and by what, over what the code does (docair-8l6.58).
-    const offs = page.getByTestId('step-card').getByTestId('off-item');
+    // Found off by kind, each under its heading, the clear contradictions first (docair-8l6.62).
+    const groups = page.getByTestId('step-card').getByTestId('off-group');
+    await expect(groups.locator('h5')).toHaveText([/^Said, but the code does otherwise/, /^Done, but said nowhere/, /^Looks wrong or risky/]);
+    // A contradiction: what was said, and by what, over what the code does (docair-8l6.58).
+    const offs = page.getByTestId('step-card').locator('[data-test="off-item"][data-kind="contradicts"]');
     await expect(offs.first().getByTestId('off-said')).toHaveText('The commit “Audit every order”: Every order is audited.');
     await expect(offs.first().getByTestId('off-code')).toContainText('Only checkout reaches orders.audit.');
     // Where the code does it, a link to the part (docair-8l6.61) ...
     await expect(offs.first().getByTestId('off-parts').locator('.node-ref')).toHaveAttribute('data-node', 'orders.audit');
-    const unsaid = page.getByTestId('step-card').locator('[data-test="off-item"][data-source="none"]');
-    await expect(unsaid.getByTestId('off-said')).toHaveText('Nothing: no commit, doc or comment mentions it.');
+    // What nothing mentions, and a risk: what the code does, nothing said.
+    const unsaid = page.getByTestId('step-card').locator('[data-test="off-item"][data-kind="unsaid"]');
+    await expect(unsaid.getByTestId('off-said')).toHaveCount(0);
     await expect(unsaid.getByTestId('off-code')).toContainText('nothing announces it');
+    const risk = page.getByTestId('step-card').locator('[data-test="off-item"][data-kind="risk"]');
+    await expect(risk.getByTestId('off-said')).toHaveCount(0);
+    await expect(risk.getByTestId('off-code')).toContainText('Nothing tests orders.audit.');
     // ... and its code folded: the cart's edit, before and after.
     await unsaid.getByTestId('piece-code').locator('summary').click();
     await expect(unsaid.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
     await expect(page.getByTestId('step-card')).not.toContainText('commit:');
     // The details below hold only what the card does not (docair-8l6.54).
-    await expect(page.getByTestId('review-meta')).toContainText('change 1 of 1');
+    await expect(page.getByTestId('review-meta')).toContainText('change 1 of 2');
     await expect(page.locator('[data-test="review-why"]')).toHaveCount(1);
     // ... then the how: the new step, and the cart's own block the model put with it.
     await page.getByTestId('step-card').locator('[data-step="1"]').click();
@@ -166,5 +162,16 @@ test.describe('what changed since a commit', () => {
     await expect(auditCode.locator('.code-diff .add', { hasText: 'pub fn audit()' })).toHaveCount(1);
     await expect(page.locator('#pic g.part.flow-current[data-id="orders.audit"]')).toHaveCount(1);
     await expect(page.getByTestId('review-flows')).toContainText('Scenario checkout');
+    // The cart's change, down to the code (docair-8l6.49): its whole text before and after, folded.
+    await page.evaluate(() => (location.hash = '#review/2'));
+    await expect(page.getByTestId('step-card')).toContainText('An item in the cart costs more.');
+    await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('The price of an item went up.');
+    await page.getByTestId('step-card').locator('[data-step="1"]').click();
+    await expect(page.getByTestId('step-words')).toContainText('Each item now counts for more in the total.');
+    const cartCode = page.getByTestId('step-card').getByTestId('piece-code').filter({ hasText: 'shop-ui.cart.total' }).first();
+    await cartCode.locator('summary').click();
+    await expect(cartCode).toContainText('ui/src/cart.ts');
+    await expect(cartCode.locator('.code-diff .del', { hasText: '* 100' })).toHaveCount(1);
+    await expect(cartCode.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
   });
 });

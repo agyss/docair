@@ -444,11 +444,12 @@ messages and the changed docs checked against it, and what it found off. See [EX
 
 See: docair-ai.explain.found-off
 
-What the AI found wrong in a change, as two sides. *Said*: what a commit
-message, a doc or a code comment says, and which one; or *Nothing*, when no
-commit, doc or comment mentions it. *The code*: what the code seems to do.
-A claim the code does not bear out, a doc left out of date, a change nobody
-announced, a mistake or a risk. See [EXPLAIN §9.1](EXPLAIN.md#91-what-a-change-is).
+What the AI found wrong in a change, of one of three kinds. A
+*contradiction*: what a commit message, a doc or a code comment says, and
+which one (*Said*), against what the code clearly does otherwise (*The
+code*); a doc left out of date is one. *Unsaid*: what the code does that no
+commit, doc or comment mentions. A *risk*: a mistake, a missed case or a
+risk in the code. See [EXPLAIN §9.1](EXPLAIN.md#91-what-a-change-is).
 
 ## piece
 
@@ -469,12 +470,4 @@ versions, the changed Markdown docs, and the doc blocks whose words
 changed. The AI reads it to say why a change was made. With it goes all
 of what changed, to read: each changed part's whole text before and
 after, comments with it, and the changed files that hold no part.
-
-## other edit
-
-Also: other edits
-See: docair-ai.explain.bind
-
-A piece the AI put into no change. The review lists the other edits, so
-nothing that changed is hidden.
 

@@ -225,8 +225,8 @@ why = "everyday word for what a step is given; meanings::Input and docair-layout
 
 ["found off"]
 from = "docair-ai.explain.found-off"
-checked = "7e8b2841"
-why = "the review's heading for what the AI found wrong: what a commit, doc or code comment says against what the code does (docs/EXPLAIN.md §9.1, docair-8l6.58)"
+checked = "7db7898d"
+why = "the review's heading for what the AI found wrong, of three kinds: a contradiction of a commit, doc or code comment, what nothing mentions, a risk (docs/EXPLAIN.md §9.1, docair-8l6.58, 8l6.62)"
 
 [intent]
 from = "docair-core.review.intent"

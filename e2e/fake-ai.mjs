@@ -42,9 +42,17 @@ function reply(messages) {
       checks,
     };
   }
-  // The last request of a review (docs/EXPLAIN.md §9.2): nothing came back twice, no piece placed.
+  // The last request of a review (docs/EXPLAIN.md §9.2): nothing came back twice, no piece placed; the
+  // pieces left make one change of their own (docair-8l6.63).
   if ((messages[0]?.content || '').startsWith('You finish a review')) {
-    return { same: [], place: [] };
+    let left = [];
+    try {
+      left = JSON.parse(messages[1]?.content || '{}').left || [];
+    } catch {}
+    const made = left.length
+      ? [{ title: 'An item in the cart costs more.', how: left.map((p) => ({ piece: p.id, words: 'Each item now counts for more in the total.' })), why: 'The price of an item went up.', check: 'That the shown total matches what checkout charges.' }]
+      : [];
+    return { same: [], place: [], new: made };
   }
   // The review (docair explain, docs/EXPLAIN.md §9): the path's pieces make one change, titled from the
   // first commit's subject; its why in its own words; a code edit it finds off; code edits are left out.
@@ -63,8 +71,9 @@ function reply(messages) {
           why: `Checkout now goes one step further${first ? ', to `' + first + '`' : ''}.`,
           // What was said against what the code does (docair-8l6.58): the commit's claim, and an edit nothing mentions.
           off: [
-            ...(commit && first ? [{ source: 'commit', where: commit.subject, says: 'Every order is audited.', code: `Only checkout reaches \`${first}\`.`, parts: [first] }] : []),
-            ...(edited.length ? [{ source: 'none', where: '', says: '', code: `\`${edited[0]}\` changes too, and nothing announces it.`, parts: [edited[0]] }] : []),
+            ...(commit && first ? [{ kind: 'contradicts', source: 'commit', where: commit.subject, says: 'Every order is audited.', code: `Only checkout reaches \`${first}\`.`, parts: [first] }] : []),
+            ...(edited.length ? [{ kind: 'unsaid', source: '', where: '', says: '', code: `\`${edited[0]}\` changes too, and nothing announces it.`, parts: [edited[0]] }] : []),
+            ...(first ? [{ kind: 'risk', source: '', where: '', says: '', code: `Nothing tests \`${first}\`.`, parts: [first] }] : []),
           ],
           check: 'Check that the new step has a test.',
         }]

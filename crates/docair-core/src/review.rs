@@ -27,6 +27,14 @@ pub const MAX_DOC: usize = 2_000;
 /// All Markdown files' changed lines together go cut at this many characters.
 pub const MAX_DOCS: usize = 12_000;
 
+/// The kinds of what the AI found off (docs/EXPLAIN.md §9.1, docair-8l6.62), in the order a reader sees them,
+/// each with its heading: the clear contradictions first, then what nothing mentions, then the risks.
+pub const OFF_KINDS: [(&str, &str); 3] = [
+    ("contradicts", "Said, but the code does otherwise"),
+    ("unsaid", "Done, but said nowhere"),
+    ("risk", "Looks wrong or risky"),
+];
+
 /***
  * A piece of the whole change: a change step (CHANGES.md §8) of one picture of the whole change, a stretch of new and gone parts and lines, a line alone, the parts of one box whose code changed, or an open box whose own block changed; named without a flow (`path:<first new or gone part>`, `line:<from>-><to>`, `code:<box>`, `box:<id>`), with the changed flows it touches.
  ***/

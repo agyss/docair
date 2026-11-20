@@ -2,8 +2,8 @@
 //! into changes, one difference in what the app does each, and says for each what the app does
 //! differently, how its pieces work together, why (from the commit messages and the changed docs)
 //! and what to check. It links what docair could not prove is the same. Every claim is bound
-//! against the two graphs, the pieces and the sources: what names nothing is dropped and said, and
-//! every piece no change holds is an other edit.
+//! against the two graphs, the pieces and the sources: what names nothing is dropped and said. Every
+//! piece is a change: one the AI puts in none is kept in `other`, and shown as a change of its own.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -30,7 +30,7 @@ pub const AT_ONCE: usize = 3;
 /// How far an explain is: what it asks, and how many of its requests have answered.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ExplainProgress {
-    /// The pieces it asks about: those no stored change or other edit holds, `left` included.
+    /// The pieces it asks about: those no stored change holds nor `other`, `left` included.
     pub pieces: usize,
     /// The requests it sends: at most `max_requests`.
     pub requests: usize,
@@ -45,11 +45,11 @@ Read the code first. The commit messages and docs are claims: check each against
 {"changes": [{"title": "<what the app does differently: one plain sentence, from the user's side>",
               "how": [{"piece": "<a piece id, as given>", "words": "<one plain sentence: what this piece does for the change, as its code shows>"}],
               "why": "<why it was done and what it is good for: your own reading of the code, the commits and the docs together, one or two plain sentences>",
-              "off": [{"source": "<commit, doc, comment or none>", "where": "<the commit's subject, the doc's path, or the id of the part whose comment it is; \"\" for none>", "says": "<what it says, briefly and close to its words; \"\" for none>", "code": "<what the code seems to do: one plain sentence, naming parts by their ids in backticks>", "parts": ["<the id of each part where the code does it: a part's id, not a piece's>"]}],
+              "off": [{"kind": "<contradicts, unsaid or risk>", "source": "<commit, doc or comment; \"\" unless it contradicts>", "where": "<the commit's subject, the doc's path, or the id of the part whose comment it is; \"\" unless it contradicts>", "says": "<what it says, briefly and close to its words; \"\" unless it contradicts>", "code": "<what the code seems to do: one plain sentence, naming parts by their ids in backticks>", "parts": ["<the id of each part where the code does it: a part's id, not a piece's>"]}],
               "check": "<what a reviewer should still check by hand: the risky part, one sentence>"}],
  "links": [{"a": "<id at A>", "b": "<id at B>", "why": "<a few words>"}]}
-"how": the change's pieces in the order they work together; each piece in one change at most. Put every piece into the change it is part of, also the small ones (a new type, a constant, an edited helper); leave a piece out only when it belongs to no change.
-"off": what you found to be off, each as what was said against what the code does, so a reader sees both side by side. A claim of a commit message, a doc or a code comment (a doc block or a comment in a part's source) that the code does not bear out: its source, where, what it says, and what the code does instead. A doc or comment the change leaves out of date: what it still says, and what the code does now. Something the code does that nothing mentions, or a mistake, a missed case or a risk you see in the code: source "none", "says" empty, and "code" says what the code does and why that is a problem. Only what you found: not what you could not see or check, and not that work which is not committed has no message. [] when you checked and found nothing.
+"how": the change's pieces in the order they work together; each piece in one change at most. Every piece is part of a change: put each into the change it is part of, also the small ones (a new type, a constant, an edited helper); a piece that is part of no other change is a change of its own.
+"off": what you found to be off, each of one of three kinds, so a reader can tell them apart. "contradicts": a commit message, a doc or a code comment (a doc block or a comment in a part's source) says something the code clearly does otherwise, so both cannot be true; or a doc or comment the change leaves out of date, still saying what the code no longer does. Give its source, where, what it says, and in "code" what the code does instead. Only a clear contradiction you can see in the code: something a commit, doc or comment does not mention, or mentions only in part, is not one, and what you cannot see enough of to be sure is not one either. "unsaid": the code does something a reader would want to know (it behaves differently, has a new effect, drops a case) and no commit message, doc or comment mentions it; "code" says what it does. "risk": a mistake, a missed case or a risk you see in the code itself; "code" says what the code does and why that is a problem. For "unsaid" and "risk", "source", "where" and "says" are "". Only what you found: not what you could not see or check, and not that work which is not committed has no message. [] when you checked and found nothing.
 Write everything in your own words, as your own reading. Only an "off" names and repeats what was said; everywhere else never quote a commit message or a doc, never say what a commit or doc says, and never name a commit, a doc, an issue or a ticket (no hashes, no file names of docs, no issue numbers). Not: "The commit and the README say auditors want a trail of each order." But: "Auditors need a trail of each order; checkout now records one."
 A piece's "source" gives each of its parts' whole code: "before" at the version before, "after" at the version after. Where it is cut (…) or not shown, say only what you can see. "files" are changed files that hold no part (a stylesheet, a config), as their changed lines.
 "links": a part removed at A that is the same as a part added at B (renamed and changed); only from "removed at A" and "added at B", and only when sure.
@@ -57,9 +57,10 @@ Name parts by their ids in backticks. Name only ids you were given. Make as many
 
 const SETTLE_PROMPT: &str = r#"You finish a review of what changed between two versions of a software system. You get the changes it found, each by number (its title, why and what its pieces do), and the pieces no change holds yet ("left"), each with its parts and their code before and after. Answer as JSON:
 {"same": [[<number>, <number>]],
- "place": [{"piece": "<a left piece's id, as given>", "change": <number>, "words": "<one plain sentence: what this piece does for that change, as its code shows>"}]}
+ "place": [{"piece": "<a left piece's id, as given>", "change": <number>, "words": "<one plain sentence: what this piece does for that change, as its code shows>"}],
+ "new": [{"title": "<what the app does differently: one plain sentence, from the user's side>", "how": [{"piece": "<a left piece's id, as given>", "words": "<one plain sentence: what this piece does for the change, as its code shows>"}], "why": "<why it was done and what it is good for, one or two plain sentences>", "check": "<what a reviewer should still check by hand, one sentence>"}]}
 "same": the review was asked in parts, so the same change may have come back more than once, each time from other pieces of it (its prompt, its stored data, its page, its output). Each group: the numbers of changes that serve one and the same purpose, one feature or one fix; a number in one group at most; changes that are only related stay apart.
-"place": each left piece that is part of a change, read from its code; leave a piece out only when it belongs to no change.
+"place": each left piece that is part of one of the changes, read from its code. "new": the left pieces that are part of none of them, as changes of their own, the pieces that work together in one change. Every left piece is in "place" or in "new", once.
 Write in your own words; never name a commit, a doc, an issue or a ticket. Name parts by their ids in backticks; name only ids you were given."#;
 
 /// Who wrote a finding, with what and when.
@@ -89,12 +90,15 @@ pub struct HowStep {
     pub words: String,
 }
 
-/// One thing the model found off (docs/EXPLAIN.md §9.1, docair-8l6.58): what a commit message, a doc or a
-/// code comment says, set against what the code seems to do; or, said nowhere, what the code does and why
-/// that is a problem.
+/// One thing the model found off (docs/EXPLAIN.md §9.1, docair-8l6.58, 8l6.62), of one of three kinds: a
+/// contradiction, what a commit message, a doc or a code comment says set against what the code clearly does
+/// otherwise; unsaid, what the code does that nothing mentions; a risk, a mistake or missed case in the code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FoundOff {
-    /// `commit`, `doc`, `comment`, or `none` when nothing says it.
+    /// `contradicts`, `unsaid` or `risk`; empty in a review stored before the kinds, see [`FoundOff::kind`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// `commit`, `doc` or `comment` for a contradiction; `none` for the other kinds.
     pub source: String,
     /// Which one: the commit's subject, the doc's path, the id of the part whose comment it is; empty when not known.
     #[serde(rename = "where", default, skip_serializing_if = "String::is_empty")]
@@ -119,17 +123,34 @@ fn field(v: &Value, k: &str) -> String {
 }
 
 impl FoundOff {
-    /// An item of the model's "off" as docair keeps it: its source one of four, a `none` saying nothing,
-    /// `where` without backticks. A bare sentence is what the code does; an item without it is none.
-    fn read(v: &Value) -> Option<FoundOff> {
+    /// Its kind; a review stored before the kinds has a contradiction where something was said, else a risk.
+    pub fn kind(&self) -> &str {
+        match self.kind.as_str() {
+            "" if self.source != "none" && !self.says.is_empty() => "contradicts",
+            "" => "risk",
+            k => k,
+        }
+    }
+
+    /// An item of the model's "off" as docair keeps it: its kind one of three, its source one of four, only a
+    /// contradiction saying what was said, `where` without backticks. A bare sentence is a risk: what the
+    /// code does; an item without it is none. A contradiction that says nothing was said is no contradiction:
+    /// it is kept as a risk, and `true` says so.
+    fn read(v: &Value) -> Option<(FoundOff, bool)> {
         if let Some(t) = v.as_str() {
             let t = t.trim();
-            return (!t.is_empty()).then(|| FoundOff {
-                source: "none".into(),
-                place: String::new(),
-                says: String::new(),
-                code: t.to_string(),
-                parts: Vec::new(),
+            return (!t.is_empty()).then(|| {
+                (
+                    FoundOff {
+                        kind: "risk".into(),
+                        source: "none".into(),
+                        place: String::new(),
+                        says: String::new(),
+                        code: t.to_string(),
+                        parts: Vec::new(),
+                    },
+                    false,
+                )
             });
         }
         let code = field(v, "code");
@@ -144,26 +165,42 @@ impl FoundOff {
             "comment" | "code comment" | "doc block" => "comment",
             _ => "none",
         };
-        let none = source == "none";
-        Some(FoundOff {
-            source: source.into(),
-            place: if none {
-                String::new()
-            } else {
-                field(v, "where").trim_matches('`').trim().to_string()
+        let said = source != "none";
+        let kind = match field(v, "kind").to_lowercase().as_str() {
+            "contradicts" | "contradiction" | "contradicted" | "contradict" | "out of date"
+            | "outdated" | "stale" => "contradicts",
+            "unsaid" | "said nowhere" | "unmentioned" | "not mentioned" | "nowhere"
+            | "undocumented" => "unsaid",
+            "risk" | "risky" | "mistake" | "bug" | "missed case" | "problem" => "risk",
+            _ if said => "contradicts",
+            _ => "risk",
+        };
+        let demoted = kind == "contradicts" && !said;
+        let kind = if demoted { "risk" } else { kind };
+        let said = kind == "contradicts";
+        Some((
+            FoundOff {
+                kind: kind.into(),
+                source: if said { source } else { "none" }.into(),
+                place: if said {
+                    field(v, "where").trim_matches('`').trim().to_string()
+                } else {
+                    String::new()
+                },
+                says: if said { says } else { String::new() },
+                code,
+                parts: v
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|p| p.trim().trim_matches('`').trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect(),
             },
-            says: if none { String::new() } else { says },
-            code,
-            parts: v
-                .get("parts")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(|p| p.trim().trim_matches('`').trim().to_string())
-                .filter(|p| !p.is_empty())
-                .collect(),
-        })
+            demoted,
+        ))
     }
 }
 
@@ -200,7 +237,8 @@ pub struct ChangeFindings {
     pub links: Vec<ChangeLink>,
     #[serde(default)]
     pub changes: Vec<ReviewChange>,
-    /// The pieces no change holds: the review's other edits (docair-8l6.28).
+    /// The pieces no change holds (docair-8l6.28): each is shown as a change of its own, in docair's words
+    /// (docair-8l6.63).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other: Vec<String>,
     /// What the model said that did not bind, and so was left out.
@@ -550,12 +588,17 @@ pub fn bind(
         let (why, check) = (keep("why"), keep("check"));
         let mut off = Vec::new();
         for v in c.get("off").and_then(Value::as_array).into_iter().flatten() {
-            let Some(mut d) = FoundOff::read(v) else {
+            let Some((mut d, demoted)) = FoundOff::read(v) else {
                 problems.push(format!(
                     "\"{title}\": something it found off says nothing of the code; left out"
                 ));
                 continue;
             };
+            if demoted {
+                problems.push(format!(
+                    "\"{title}\": a contradiction it found names nothing that was said; kept as looks wrong or risky"
+                ));
+            }
             let bad: Vec<String> = unknown(&d.says)
                 .into_iter()
                 .chain(unknown(&d.code))
@@ -631,7 +674,7 @@ pub fn bind(
 }
 
 /***
- * Review the changes (docs/EXPLAIN.md §9): the pieces no stored change or other edit holds go to the model with the intent, in requests of at most `MAX_CHARS` (the pieces in their order, the intent with each; docair-8l6.31), at most `max_requests` of them and at most `AT_ONCE` at a time; the answers are bound in the requests' order; a last request says which changes came back twice and where the pieces no change holds belong, with its words on them (docair-8l6.56); then joined with what the store had. A change a human wrote is kept and its pieces are not asked about; a store of another schema is asked again. A request that fails leaves its pieces; when none answers, the error is returned.
+ * Review the changes (docs/EXPLAIN.md §9): the pieces no stored change holds, nor `other`, go to the model with the intent, in requests of at most `MAX_CHARS` (the pieces in their order, the intent with each; docair-8l6.31), at most `max_requests` of them and at most `AT_ONCE` at a time; the answers are bound in the requests' order; a last request says which changes came back twice and where the pieces no change holds belong, with its words on them (docair-8l6.56), or makes changes of them (docair-8l6.63); then joined with what the store had. A change a human wrote is kept and its pieces are not asked about; a store of another schema is asked again. A request that fails leaves its pieces; when none answers, the error is returned.
  *
  * @id    docair-ai.explain.explain
  * @calls docair-core.review.pieces "the pieces of the whole change"
@@ -828,7 +871,7 @@ pub fn explain_with(
         out.problems.extend(problems);
     }
     // The last request (docair-8l6.56): which changes came back twice, and where the pieces no
-    // change holds belong, with the model's words on them.
+    // change holds belong, with the model's words on them, or which changes of their own they make (8l6.63).
     let left_now: HashSet<&str> = out.left.iter().map(String::as_str).collect();
     let mut leftover: Vec<&Piece> = pieces
         .iter()
@@ -872,10 +915,26 @@ pub fn explain_with(
                 taken.extend(placed);
                 out.problems.extend(problems);
                 out.problems.extend(merge_same(&mut mine, &v));
+                // The left pieces part of none of them: changes of their own (docair-8l6.63), of the left
+                // pieces only, bound as the review's are.
+                if let Some(new) = v.get("new").filter(|n| n.is_array()) {
+                    let own: Vec<Piece> = sent_left.iter().map(|p| (*p).clone()).collect();
+                    let (_, mut made, problems) = bind(
+                        changes,
+                        (a, b),
+                        &own,
+                        &json!({ "changes": new }),
+                        &recorded,
+                        &mut taken,
+                    );
+                    out.problems.extend(problems);
+                    out.problems.extend(check_where(&mut made, intent));
+                    mine.extend(made);
+                }
                 out.changes.extend(mine);
             }
             None => out.problems.push(
-                "the last request failed: a change may show twice, and the pieces no change holds stay other edits".into(),
+                "the last request failed: a change may show twice, and each piece no change holds shows as a change of its own".into(),
             ),
         }
     }
@@ -888,7 +947,8 @@ pub fn explain_with(
     {
         return Err(e);
     }
-    // Every piece belongs somewhere: no change holds it, nor was it left for later: an other edit.
+    // Every piece is a change: one no change holds, nor left for later, is kept in `other`, and shown as a
+    // change of its own (docair-8l6.63).
     if stale || kept.is_none() {
         let left: HashSet<&str> = out.left.iter().map(String::as_str).collect();
         out.other = pieces
@@ -1159,7 +1219,7 @@ pub fn said(d: &FoundOff) -> String {
 }
 
 /***
- * The review as a pull request comment (docs/EXPLAIN.md §9.6): each change with what the app does differently, why, what the AI found off (or that it found nothing) and what to check, and how its pieces work together folded in `<details>`; the other edits and the links folded.
+ * The review as a pull request comment (docs/EXPLAIN.md §9.6): each change with what the app does differently, why, what the AI found off by kind (or that it found nothing) and what to check, and how its pieces work together folded in `<details>`; then each piece the AI put in no change as a change of its own, in docair's words; the links folded.
  *
  * @id docair-ai.explain.comment
  ***/
@@ -1170,7 +1230,8 @@ pub fn comment(changes: &Changes, review: &ChangeFindings, (a, b): (&Graph, &Gra
         "### docair: the review of `{}` → `{}`\n\n",
         changes.a, changes.b
     );
-    if review.changes.is_empty() {
+    let other: Vec<&Piece> = review.other.iter().filter_map(|id| piece(id)).collect();
+    if review.changes.is_empty() && other.is_empty() {
         out.push_str(if pieces.is_empty() {
             "Nothing changed.\n"
         } else {
@@ -1186,27 +1247,39 @@ pub fn comment(changes: &Changes, review: &ChangeFindings, (a, b): (&Graph, &Gra
         if c.off.is_empty() {
             out.push_str("Checked against the code: nothing found off.\n\n");
         } else {
+            // By kind, each under its heading, the clear contradictions first (docair-8l6.62).
             out.push_str("⚠ Found off:\n\n");
-            for d in &c.off {
-                let at = if d.parts.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " (in {})",
-                        d.parts
-                            .iter()
-                            .map(|p| format!("`{p}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                out.push_str(&format!(
-                    "- **Said:** {}  \n  **The code:** {}{at}\n",
-                    said(d),
-                    d.code
-                ));
+            for (kind, heading) in docair_core::review::OFF_KINDS {
+                let mine: Vec<&FoundOff> = c.off.iter().filter(|d| d.kind() == kind).collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("*{heading}:*\n\n"));
+                for d in mine {
+                    let at = if d.parts.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " (in {})",
+                            d.parts
+                                .iter()
+                                .map(|p| format!("`{p}`"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    if kind == "contradicts" {
+                        out.push_str(&format!(
+                            "- **Said:** {}  \n  **The code:** {}{at}\n",
+                            said(d),
+                            d.code
+                        ));
+                    } else {
+                        out.push_str(&format!("- {}{at}\n", d.code));
+                    }
+                }
+                out.push('\n');
             }
-            out.push('\n');
         }
         if !c.check.is_empty() {
             out.push_str(&format!("Check: {}\n\n", c.check));
@@ -1219,16 +1292,17 @@ pub fn comment(changes: &Changes, review: &ChangeFindings, (a, b): (&Graph, &Gra
         }
         out.push_str("</details>\n\n");
     }
-    let other: Vec<&Piece> = review.other.iter().filter_map(|id| piece(id)).collect();
-    if !other.is_empty() {
+    // Every piece is a change (docair-8l6.63): one the AI put in none is a change of its own, in docair's words.
+    for (k, p) in other.into_iter().enumerate() {
+        let words = piece_words(p, a, b);
+        let mut title = words.chars();
+        let title = title.next().map_or(String::new(), |f| {
+            f.to_uppercase().chain(title).collect::<String>()
+        });
         out.push_str(&format!(
-            "<details><summary>Other edits ({})</summary>\n\n",
-            other.len()
+            "**{}. {title}**\n\n_In docair's words: the AI put this piece in no change._\n\n",
+            review.changes.len() + k + 1
         ));
-        for p in other {
-            out.push_str(&format!("- {}\n", piece_words(p, a, b)));
-        }
-        out.push_str("</details>\n\n");
     }
     if !review.links.is_empty() {
         out.push_str("<details><summary>Linked by the model</summary>\n\n");
@@ -1375,14 +1449,15 @@ mod tests {
                        { "piece": "path:invented", "words": "Made up." } ],
               "why": "Orders were lost on a restart; kept in a table, they last.",
               "off": [
-                  { "source": "commit", "where": "Keep every order.", "says": "Every order is checked, then kept.",
+                  { "kind": "contradicts", "source": "commit", "where": "Keep every order.", "says": "Every order is checked, then kept.",
                     "code": "`orders.create` writes before it checks the cart.",
                     "parts": ["`orders.create`", "nowhere.x"] },
                   { "source": "none", "code": "`ghost.part` is off." },
-                  { "source": "doc", "where": "NOTES.md", "says": "The cart is checked.", "code": "Nothing checks the cart.",
+                  { "kind": "Contradiction", "source": "doc", "where": "NOTES.md", "says": "The cart is checked.", "code": "Nothing checks the cart.",
                     "parts": [code.id()] },
-                  { "source": "none", "where": "x", "says": "y", "code": "Nothing tests `orders.create`'s write." },
+                  { "kind": "unsaid", "source": "commit", "where": "x", "says": "y", "code": "Nothing tests `orders.create`'s write." },
                   { "source": "commit", "says": "Faster." },
+                  { "kind": "contradicts", "code": "`orders.create` checks nothing." },
                   "A bare sentence." ],
               "check": "Writing must not slow down `orders.create`." },
             { "title": "This one takes the same piece again.", "how": [ { "piece": write.id(), "words": "Again." } ] },
@@ -1419,17 +1494,22 @@ mod tests {
             .map(String::as_str)
             .collect();
         assert!(code_parts.contains(&"shop-ui.cart.total"));
-        let off = |source: &str, place: &str, says: &str, code: &str, parts: &[&str]| FoundOff {
-            source: source.into(),
-            place: place.into(),
-            says: says.into(),
-            code: code.into(),
-            parts: parts.iter().map(|p| p.to_string()).collect(),
-        };
+        let off =
+            |kind: &str, source: &str, place: &str, says: &str, code: &str, parts: &[&str]| {
+                FoundOff {
+                    kind: kind.into(),
+                    source: source.into(),
+                    place: place.into(),
+                    says: says.into(),
+                    code: code.into(),
+                    parts: parts.iter().map(|p| p.to_string()).collect(),
+                }
+            };
         assert_eq!(
             c.off,
             [
                 off(
+                    "contradicts",
                     "commit",
                     "Keep every order",
                     "Every order is checked, then kept.",
@@ -1437,6 +1517,7 @@ mod tests {
                     &["orders.create"]
                 ),
                 off(
+                    "contradicts",
                     "doc",
                     "",
                     "The cart is checked.",
@@ -1444,16 +1525,38 @@ mod tests {
                     &code_parts
                 ),
                 off(
+                    "unsaid",
                     "none",
                     "",
                     "",
                     "Nothing tests `orders.create`'s write.",
                     &["orders.create"]
                 ),
-                off("none", "", "", "A bare sentence.", &[]),
+                off(
+                    "risk",
+                    "none",
+                    "",
+                    "",
+                    "`orders.create` checks nothing.",
+                    &["orders.create"]
+                ),
+                off("risk", "none", "", "", "A bare sentence.", &[]),
             ],
-            "a part that is not there, or no code: left out; a doc that is not there: no where; none says nothing"
+            "a part that is not there, or no code: left out; a doc that is not there: no where; only a contradiction says what was said, and one that names nothing said is a risk"
         );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("kept as looks wrong or risky")),
+            "{problems:#?}"
+        );
+        // A review stored before the kinds: a contradiction where something was said, else a risk.
+        let old = |v: Value| serde_json::from_value::<FoundOff>(v).unwrap();
+        assert_eq!(
+            old(json!({"source": "commit", "where": "x", "says": "y", "code": "z"})).kind(),
+            "contradicts"
+        );
+        assert_eq!(old(json!({"source": "none", "code": "z"})).kind(), "risk");
         assert!(
             problems.iter().any(|p| p.contains("NOTES.md")),
             "{problems:#?}"
@@ -1496,11 +1599,15 @@ mod tests {
                 && text.contains(
                     "- **Said:** the commit \u{201c}Keep every order\u{201d}: Every order is checked, then kept.  \n  **The code:** `orders.create` writes before it checks the cart. (in `orders.create`)\n"
                 )
-                && text.contains("- **Said:** nothing: no commit, doc or comment mentions it.  \n  **The code:** Nothing tests `orders.create`'s write. (in `orders.create`)"),
+                && text.contains("⚠ Found off:\n\n*Said, but the code does otherwise:*\n\n- **Said:** the commit")
+                && text.contains("*Done, but said nowhere:*\n\n- Nothing tests `orders.create`'s write. (in `orders.create`)\n\n*Looks wrong or risky:*\n\n- `orders.create` checks nothing. (in `orders.create`)\n- A bare sentence.\n"),
             "{text}"
         );
         assert!(
-            text.contains("Other edits (1)") && text.contains("code of `total`"),
+            // Every piece is a change (docair-8l6.63): one the AI put in none is one of its own.
+            text.contains(
+                ". Code of `total`**\n\n_In docair's words: the AI put this piece in no change._"
+            ) && !text.contains("Other edits"),
             "{text}"
         );
     }
@@ -1523,6 +1630,7 @@ mod tests {
             off: off
                 .iter()
                 .map(|x| FoundOff {
+                    kind: "risk".into(),
                     source: "none".into(),
                     place: String::new(),
                     says: String::new(),

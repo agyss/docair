@@ -853,12 +853,11 @@ fn job_text(j: &ExplainJob) -> String {
         _ if p.pieces == 0 => "Every change is reviewed already".to_string(),
         "done" => {
             let found = j.findings.as_ref();
-            let n = found.map_or(0, |f| f["changes"].as_array().map_or(0, Vec::len));
-            let other = found.map_or(0, |f| f["other"].as_array().map_or(0, Vec::len));
+            // Every piece is a change (docair-8l6.63): a piece the AI put in none counts as one of its own.
+            let len = |k: &str| found.map_or(0, |f| f[k].as_array().map_or(0, Vec::len));
             format!(
-                "Reviewed: {} and {} in {} · {time}",
-                count(n, "change", "changes"),
-                count(other, "other edit", "other edits"),
+                "Reviewed: {} in {} · {time}",
+                count(len("changes") + len("other"), "change", "changes"),
                 count(p.requests, "request", "requests")
             )
         }
@@ -1550,7 +1549,7 @@ mod tests {
             job["text"]
                 .as_str()
                 .unwrap()
-                .starts_with("Reviewed: 1 change and 0 other edits in 1 request"),
+                .starts_with("Reviewed: 1 change in 1 request"),
             "{job}"
         );
         assert_eq!(

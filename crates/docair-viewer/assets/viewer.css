@@ -601,6 +601,12 @@ code.node-ref:hover, code.node-ref:focus-visible { background: var(--accent-soft
 .off-who { font-weight: 550; }
 .off-parts { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
 .off-item .piece-code { margin-top: 4px; }
+/* Found off by kind, each under its heading: the clear contradictions first (docair-8l6.62). */
+.off-group { margin: 6px 0 2px; padding-left: 8px; border-left: 2px solid var(--off-kind, var(--warning)); }
+.off-group h5 { margin: 0; font-size: 12px; font-weight: 600; color: var(--off-kind, var(--warning)); }
+.off-group[data-kind="contradicts"] { --off-kind: var(--error); }
+.off-group[data-kind="unsaid"] { --off-kind: var(--accent); }
+.off-group[data-kind="risk"] { --off-kind: var(--warning); }
 .review-ok { margin: 8px 0; color: var(--muted); font-size: 12.5px; }
 /* Every flow of the system, folded under the flows the changes touch (docair-8l6.57). */
 .all-flows { margin: 10px 0 12px; }
