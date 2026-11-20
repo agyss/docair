@@ -104,7 +104,7 @@
         },
         {
           "from": "docair-ai.explain.explain",
-          "to": "docair-ai.client.chat_with"
+          "to": "docair-ai.client.chat_streamed"
         }
       ]
     },

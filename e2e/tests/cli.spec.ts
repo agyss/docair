@@ -126,7 +126,7 @@ test.describe('the CLI', () => {
   });
 
   /***
-   * docair explain: two commits of the shop, the second says what it does and changes the README; the model reviews the change (docs/EXPLAIN.md §9): the pieces and the intent go to it, it groups them into a change with why and its sources, the review is kept, a second run asks nothing new, a change a human corrected is kept, and docair serve does the same as a job.
+   * docair explain: two commits of the shop, the second says what it does and changes the README; the model reviews the change (docs/EXPLAIN.md §9): the pieces and the intent go to it, it groups them into a change with why and its sources, the review is kept: while it covers every piece, a second run asks nothing and keeps it as stored, and docair serve does the same as a job.
    *
    * @part-of e2e.cli
    * @covers  docair-cli.diff.cmd_explain "checks the review is kept and the comment written"
@@ -158,13 +158,14 @@ test.describe('the CLI', () => {
     expect(out).toContain('**1. Audit every order: the flow now reaches `orders.audit`.**');
     // The AI's own words, nothing cited (docair-8l6.55).
     expect(out).toContain('Why: Checkout now goes one step further, to `orders.audit`.');
+    expect(out).toContain('<details><summary>Sources (2)</summary>\n\n- the commit “Audit every order”\n- `README.md`');
     expect(out).not.toContain('commit:');
     // What was said against what the code does (docair-8l6.58).
     expect(out).toContain('*Said, but the code does otherwise:*\n\n- **Said:** the commit “Audit every order”: Every order is audited.  \n  **The code:** Only checkout reaches `orders.audit`. (in `orders.audit`)');
     // The risks apart, under their own heading; a kind with nothing found has none (docair-8l6.62).
     expect(out).toContain('*Looks wrong or risky:*\n\n- Nothing tests `orders.audit`. (in `orders.audit`)');
     expect(out).not.toContain('Done, but said nowhere');
-    const store = path.join(shop, 'docs', 'changes');
+    const store = path.join(shop, '.docair', 'changes'); // the default store (docair-8l6.74)
     const [file] = fs.readdirSync(store);
     const found = JSON.parse(fs.readFileSync(path.join(store, file), 'utf8'));
     expect(found.schema).toBe('docair.explained/2');
@@ -182,13 +183,12 @@ test.describe('the CLI', () => {
     expect(input).toContain('README.md');
     expect(input).not.toContain('commit:');
     expect(input).not.toContain('kind_cluster');
-    // A human corrects the change; the next run keeps it and asks about nothing new.
-    found.changes[0].title = 'Audited by hand: the API keeps an audit entry of each order.';
-    found.changes[0].recorded = { by: 'human', at: '2026-11-19T00:00:00Z' };
+    // A store that covers every piece is kept as stored, and nothing is asked (docair-8l6.75: no hand corrections, the store is only kept).
+    found.changes[0].title = 'Kept as stored: the API keeps an audit entry of each order.';
     fs.writeFileSync(path.join(store, file), JSON.stringify(found, null, 2));
     const before = mine.length;
     const again = run('explain', 'HEAD~1', 'HEAD', '--root', shop);
-    expect(again).toContain('Audited by hand');
+    expect(again).toContain('Kept as stored');
     const sentAgain = (await (await request.get(`${fakeAi}/requests`)).json()) as any[];
     expect(sentAgain.filter((r) => r.messages[0].content.startsWith('You review what changed') && r.messages[1].content.includes('orders.audit')).length).toBe(before);
     // The same from a served page: docair serve on the repository reviews as a job (docair-8l6.11).
@@ -209,7 +209,7 @@ test.describe('the CLI', () => {
       return job;
     };
     const answer = (await explainJob({ a: 'HEAD~1', b: 'HEAD' })).findings;
-    expect(answer.changes[0].title).toContain('Audited by hand');
+    expect(answer.changes[0].title).toContain('Kept as stored');
     // The working tree as B, the page's own pair: the model reviews it, and the page is written again with the review.
     const version = async () => (await (await request.get(`${served.url}/api/version`)).json()).version;
     const was = await version();

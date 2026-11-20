@@ -527,6 +527,11 @@ impl ServedProject {
 /// Whether a change at `path` can change the documentation: inside the project, outside the output
 /// folder and outside what a scan skips (hidden folders, `target`, `node_modules`, `dist`).
 pub fn watched(root: &Path, out: &Path, path: &Path) -> bool {
+    // A review docair explain stores in its default place counts, though it is in docair's own
+    // folder: the page shows it (docair-8l6.74). Only the reviews there, not what lies below.
+    if is_stored_review(root, path) {
+        return true;
+    }
     if path.starts_with(out) {
         return false;
     }
@@ -539,6 +544,12 @@ pub fn watched(root: &Path, out: &Path, path: &Path) -> bool {
         let name = c.as_os_str().to_string_lossy();
         name.starts_with('.') || ["target", "node_modules", "dist"].contains(&name.as_ref())
     })
+}
+
+/// A review in the default store: a JSON file right in `<root>/.docair/changes`.
+fn is_stored_review(root: &Path, path: &Path) -> bool {
+    path.parent() == Some(root.join(docair_core::config::DEFAULT_STORE).as_path())
+        && path.extension().is_some_and(|e| e == "json")
 }
 
 fn files_seen(root: &Path, out: &Path) -> u64 {
@@ -575,6 +586,22 @@ fn files_seen(root: &Path, out: &Path) -> u64 {
                     .map_or(0, |d| d.as_nanos());
                 entries.push((path.to_string_lossy().to_string(), meta.len(), when));
             }
+        }
+    }
+    // The reviews in the default store too, though they lie in docair's own folder (docair-8l6.74).
+    for e in std::fs::read_dir(root.join(docair_core::config::DEFAULT_STORE))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let path = e.path();
+        if let (true, Ok(meta)) = (is_stored_review(root, &path), e.metadata()) {
+            let when = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            entries.push((path.to_string_lossy().to_string(), meta.len(), when));
         }
     }
     entries.sort();
@@ -938,14 +965,18 @@ fn code_html(t: &str) -> String {
 fn job_html(j: &ExplainJob) -> String {
     let p = &j.progress;
     let mut out = format!(
-        r#"<div class="explain-now"><progress max="{}" value="{}"></progress> <span data-test="explain-text">{}</span></div>"#,
-        p.requests.max(1),
-        p.answered.min(p.requests.max(1)),
+        r#"<div class="explain-now"><progress{}></progress> <span data-test="explain-text">{}</span></div>"#,
+        // A bar that moves while the AI works: its one request has no parts to count (docair-8l6.79).
+        if j.running {
+            String::new()
+        } else {
+            r#" max="1" value="1""#.to_string()
+        },
         code_html(&j.text)
     );
     if !p.found.is_empty() && j.phase != "done" {
         out.push_str(&format!(
-            r#"<p class="muted">{} so far; the last request may still merge them and add pieces.</p><ol class="review-list" data-test="review-so-far">"#,
+            r#"<p class="muted">{} so far; the last request may still add pieces to them.</p><ol class="review-list" data-test="review-so-far">"#,
             count(p.found.len(), "change", "changes")
         ));
         for c in &p.found {
@@ -1000,21 +1031,17 @@ fn job_text(j: &ExplainJob) -> String {
                 count(p.requests, "request", "requests")
             )
         }
-        _ => {
-            let mut t = format!(
-                "The AI reviews {} in {} · {} answered · {time}",
-                count(p.pieces - p.left, "piece", "pieces"),
-                count(p.requests, "request", "requests"),
-                p.answered
-            );
-            if p.left > 0 {
-                t.push_str(&format!(
-                    " · {} left for later",
-                    count(p.left, "piece", "pieces")
-                ));
-            }
-            t
-        }
+        // One request (docair-8l6.79), then one for the pieces left in no change: what it does now,
+        // and the changes made so far.
+        _ if p.requests > 1 => format!(
+            "The AI places the pieces left in no change · {} so far · {time}",
+            count(p.found.len(), "change", "changes")
+        ),
+        _ => format!(
+            "The AI reviews {} · {} so far · {time}",
+            count(p.pieces, "piece", "pieces"),
+            count(p.found.len(), "change", "changes")
+        ),
     }
 }
 
@@ -1168,16 +1195,14 @@ fn run_job(
         let kept: Option<docair_ai::explain::ChangeFindings> = std::fs::read_to_string(&file)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok());
-        let max = settings
-            .max_requests
-            .unwrap_or(docair_ai::explain::MAX_REQUESTS);
+        let review = docair_ai::explain::ReviewSettings::of(Some(&settings));
         let found = docair_ai::explain::explain_with(
             ai,
             (&pair.a, &pair.b),
             &pair.changes,
             &pair.intent,
             kept.as_ref(),
-            max,
+            &review,
             &|p| set(&|j| j.progress = p.clone()),
         )?;
         if let Some(dir) = file.parent() {
@@ -1403,6 +1428,17 @@ mod tests {
         assert!(watched(root, out, Path::new("/p/src/lib.rs")));
         assert!(watched(root, out, Path::new("/p/.env")));
         assert!(!watched(root, out, Path::new("/p/.docair/docair.html")));
+        // A stored review counts, though it is in docair's folder; what lies below it does not (docair-8l6.74).
+        assert!(watched(
+            root,
+            out,
+            Path::new("/p/.docair/changes/a..b.json")
+        ));
+        assert!(!watched(
+            root,
+            out,
+            Path::new("/p/.docair/changes/graphs/a.graph.json")
+        ));
         assert!(!watched(root, out, Path::new("/p/target/debug/x")));
         assert!(!watched(root, out, Path::new("/p/.git/index")));
         assert!(!watched(root, out, Path::new("/p/web/node_modules/a/b.js")));
@@ -1482,6 +1518,7 @@ mod tests {
                 parts: vec![],
             }],
             check: String::new(),
+            sources: vec![],
             recorded: docair_ai::explain::Recorded {
                 by: "model".into(),
                 model: Some("m".into()),
@@ -1496,9 +1533,9 @@ mod tests {
             phase: "asking".into(),
             progress: docair_ai::explain::ExplainProgress {
                 pieces: 4,
-                requests: 2,
-                started: 2,
-                answered: 1,
+                requests: 1,
+                started: 1,
+                answered: 0,
                 found: vec![change],
                 ..Default::default()
             },
@@ -1511,11 +1548,12 @@ mod tests {
         };
         job.text = job_text(&job);
         let html = job_html(&job);
+        // One request, so a bar that moves while it runs (docair-8l6.79).
+        assert!(html.contains(r#"<progress></progress>"#), "{html}");
         assert!(
-            html.contains(r#"<progress max="2" value="1"></progress>"#),
+            html.contains("The AI reviews 4 pieces · 1 change so far"),
             "{html}"
         );
-        assert!(html.contains("1 answered"), "{html}");
         assert!(
             html.contains(r#"<ol class="review-list" data-test="review-so-far"><li><b>Checkout reaches <code>orders.audit</code>.</b> <span class="muted">· 1 piece · ⚠ 1 found off</span><div class="muted">Auditors need a trail.</div></li></ol>"#),
             "{html}"
@@ -1792,7 +1830,7 @@ mod tests {
                     job["text"]
                         .as_str()
                         .unwrap()
-                        .starts_with("The AI reviews 1 piece in 1 request"),
+                        .starts_with("The AI reviews 1 piece · "),
                     "{job}"
                 );
             }
@@ -1818,7 +1856,7 @@ mod tests {
             job["version"].as_u64().unwrap() >= 2,
             "the page was written again: {job}"
         );
-        let stored = std::fs::read_dir(dir.path().join("docs/changes"))
+        let stored = std::fs::read_dir(dir.path().join(".docair/changes"))
             .unwrap()
             .count();
         assert_eq!(stored, 1, "the findings are stored");

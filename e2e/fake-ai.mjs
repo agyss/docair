@@ -76,6 +76,8 @@ function reply(messages) {
             ...(first ? [{ kind: 'risk', source: '', where: '', says: '', code: `Nothing tests \`${first}\`.`, parts: [first] }] : []),
           ],
           check: 'Check that the new step has a test.',
+          // What it read for the change, folded (docair-8l6.71).
+          sources: [...(commit ? [{ source: 'commit', where: commit.subject }] : []), { source: 'doc', where: 'README.md' }],
         }]
       : [];
     const removed = input['removed at A'] || [];

@@ -12,20 +12,9 @@ use crate::layer_view::{LayerPicture, slice_picture};
 use crate::model::Graph;
 use crate::slice::{SeedKind, Slice, SliceLine, SliceSeed};
 
-/// A changed part's text goes to the AI cut at this many characters a version (docair-8l6.47).
-pub const MAX_PART_TEXT: usize = 4_000;
-/// A piece's parts' texts go cut at this many characters together, then the rest is counted.
-pub const MAX_PIECE_TEXT: usize = 20_000;
-/// A changed file no part covers goes as its changed lines, cut at this many characters a file.
-pub const MAX_FILE: usize = 2_000;
-/// All such files together go cut at this many characters.
-pub const MAX_FILES: usize = 10_000;
-/// A commit message's body goes to the AI cut at this many characters (docs/EXPLAIN.md §9.2).
-pub const MAX_BODY: usize = 2_000;
-/// A Markdown file's changed lines go cut at this many characters.
-pub const MAX_DOC: usize = 2_000;
-/// All Markdown files' changed lines together go cut at this many characters.
-pub const MAX_DOCS: usize = 12_000;
+// What changed goes to the AI whole: a part's text, a commit's body, a doc's and a file's changed
+// lines are never cut; the review's one request has a single limit, `[explain] max_chars`
+// (docair-8l6.79).
 
 /// The kinds of what the AI found off (docs/EXPLAIN.md §9.1, docair-8l6.62), in the order a reader sees them,
 /// each with its heading: the clear contradictions first, then what nothing mentions, then the risks.
@@ -315,9 +304,7 @@ pub fn part_texts(
         let n = graph.nodes.iter().find(|n| n.id == id)?;
         let file = n.source.as_ref()?.file.clone();
         let text = files.entry(file.clone()).or_insert_with(|| read(&file));
-        text.as_deref()
-            .and_then(|t| part_text(t, n))
-            .map(|t| cut(&t, MAX_PART_TEXT))
+        text.as_deref().and_then(|t| part_text(t, n))
     };
     let mut ids: Vec<&str> = g
         .added
@@ -407,8 +394,11 @@ fn slice_of(graph: &Graph, parts: &HashSet<String>) -> Slice {
     }
 }
 
+/// A change's picture shows at most this many parts one line away from each of its parts (docair-8l6.77).
+pub const AROUND: usize = 12;
+
 /***
- * A change's own picture (docs/EXPLAIN.md §9.5, docair-8l6.33): its pieces' parts at A and at B and the lines between them, nothing else, as one picture like a flow's (`change_steps::merged`); and the change as a flow change, so it is marked like one (new, gone, changed in its code).
+ * A change's own picture (docs/EXPLAIN.md §9.5, docair-8l6.33, 8l6.77): its pieces' parts at A and at B, and one step around them, faded: the parts one line away (what calls them and what they call, at most `AROUND` a part, no test's line), with the lines between them all, as one picture like a flow's (`change_steps::merged`); and the change as a flow change, so it is marked like one (new, gone, changed in its code) and the parts around stay unmarked.
  *
  * @calls docair-core.change_steps.merged "both versions as one picture"
  ***/
@@ -456,6 +446,41 @@ pub fn change_picture(
     if at_a.is_empty() && at_b.is_empty() {
         return None;
     }
+    // One step around, faded: what calls the change's parts and what they call (docair-8l6.77).
+    let around = |g: &Graph, set: &HashSet<String>| -> HashSet<String> {
+        let known: HashSet<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        let mut extra: HashSet<String> = HashSet::new();
+        let mut ids: Vec<&String> = set.iter().collect();
+        ids.sort();
+        for id in ids {
+            let mut n = 0;
+            for e in g
+                .edges
+                .iter()
+                .filter(|e| e.kind != crate::model::EdgeKind::Cover)
+            {
+                let other = if &e.from == id {
+                    &e.to
+                } else if &e.to == id {
+                    &e.from
+                } else {
+                    continue;
+                };
+                if set.contains(other) || extra.contains(other) || !known.contains(other.as_str()) {
+                    continue;
+                }
+                extra.insert(other.clone());
+                n += 1;
+                if n >= AROUND {
+                    break;
+                }
+            }
+        }
+        extra
+    };
+    let (more_a, more_b) = (around(a, &at_a), around(b, &at_b));
+    at_a.extend(more_a);
+    at_b.extend(more_b);
     let m = picture_of(a, b, &moves, &at_a, &at_b)?;
     Some((m, f))
 }
@@ -617,9 +642,10 @@ mod tests {
         assert_eq!(cut("abcdef", 3), "abc…");
     }
 
-    /// docair-8l6.33: a change's picture holds its pieces' parts, and marks the new line.
+    /// docair-8l6.33, 8l6.77: a change's picture holds its pieces' parts and one step around them,
+    /// unmarked, and marks the new line.
     #[test]
-    fn a_change_is_drawn_from_its_pieces_only() {
+    fn a_change_is_drawn_from_its_pieces_and_one_step_around() {
         let (before, after, changes) = a_new_write();
         let ps = pieces(&before, &after, &changes);
         let write = ps
@@ -631,7 +657,26 @@ mod tests {
         for p in write.step.parts() {
             assert!(ids.contains(p.as_str()), "{p}: {ids:?}");
         }
+        // One step around: what calls orders.create is there too, and not marked as changed.
+        let callers: Vec<&str> = after
+            .edges
+            .iter()
+            .filter(|e| e.to == "orders.create" && e.kind != crate::model::EdgeKind::Cover)
+            .map(|e| e.from.as_str())
+            .collect();
+        assert!(!callers.is_empty());
+        assert!(
+            callers.iter().any(|c| ids.contains(c)),
+            "{callers:?} in {ids:?}"
+        );
         let marked = change_steps::marks(&m, &f, &HashSet::new());
+        for c in callers.iter().filter(|c| ids.contains(*c)) {
+            assert_eq!(
+                marked.parts.get(*c),
+                Some(&change_steps::PartMark::Same),
+                "{c} is around, not changed"
+            );
+        }
         assert!(
             marked
                 .lines

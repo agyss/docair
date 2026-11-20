@@ -40,13 +40,24 @@ pub struct Config {
     pub explain: Option<ExplainSettings>,
 }
 
+/// Where `docair explain` keeps its reviews, unless `[explain] store` says otherwise: docair's own
+/// output folder, so reviews are not part of the project (docair-8l6.74).
+pub const DEFAULT_STORE: &str = ".docair/changes";
+
 /// `[explain]` in `docair.toml`: where the findings about changes go, and what a run may cost.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExplainSettings {
-    /// The folder for the findings, relative to the root; default `docs/changes`.
+    /// The folder for the findings, relative to the root; default `.docair/changes` (`DEFAULT_STORE`).
     pub store: Option<String>,
-    /// The most requests to the model one run makes; default 8.
+    /// The most characters a review sends the model in its one request; default 1,000,000. A review
+    /// that needs more is an error, never split (docair-8l6.70, 8l6.79).
+    pub max_chars: Option<usize>,
+    /// How much the model reasons before it answers: `low`, `medium` or `high`; default `low`
+    /// (docair-8l6.78).
+    pub reasoning: Option<String>,
+    /// No longer used: a review is one request (docair-8l6.79). Still read, so a docair.toml that
+    /// sets it keeps working.
     pub max_requests: Option<usize>,
 }
 

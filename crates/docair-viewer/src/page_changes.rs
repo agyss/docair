@@ -13,7 +13,6 @@ use docair_core::change_steps::{
 };
 use docair_core::changes::FlowChange;
 use docair_core::model::Graph;
-use docair_core::review::PartText;
 use docair_layout::{Input, Layout, Monospace};
 use serde_json::{Map, Value, json};
 
@@ -65,18 +64,15 @@ fn with_code(text: &str) -> String {
         .collect()
 }
 
-/// Who recorded a finding, and when: `by fake-model · 2026-11-19`, `corrected by hand · …`.
+/// Who recorded a finding, and when: `by fake-model · 2026-11-19`; docair's own words say so. Every
+/// review is the AI's: there are no hand corrections (docair-8l6.75).
 fn recorded(f: &Value) -> String {
     let r = &f["recorded"];
     let at = r["at"].as_str().unwrap_or("");
     if r["by"].as_str() == Some("docair") {
         return format!("in docair's words: {}", docair_note(f));
     }
-    if r["by"].as_str() == Some("human") {
-        format!("corrected by hand · {at}")
-    } else {
-        format!("by {} · {at}", r["model"].as_str().unwrap_or("the model"))
-    }
+    format!("by {} · {at}", r["model"].as_str().unwrap_or("the model"))
 }
 
 /// A box around some parts of a laid-out picture, with room around it: where the camera of a step goes.
@@ -161,55 +157,18 @@ fn names_as_code(graph: &Graph, ids: &[&str]) -> String {
 /// A step's card names at most this many parts, and a step holds at most this many new or gone parts.
 const MAX_NAMED: usize = 8;
 
-/// A line diff of two texts (docair-8l6.49): each line with ' ', '-' or '+', the lines both keep in order (a longest common subsequence); past 400 lines a side, all of before, then all of after.
-fn line_diff<'t>(before: &'t str, after: &'t str) -> Vec<(char, &'t str)> {
-    let a: Vec<&str> = before.lines().collect();
-    let b: Vec<&str> = after.lines().collect();
-    if a.len() > 400 || b.len() > 400 {
-        return a
-            .iter()
-            .map(|l| ('-', *l))
-            .chain(b.iter().map(|l| ('+', *l)))
-            .collect();
-    }
-    let (n, m) = (a.len(), b.len());
-    let mut lcs = vec![vec![0u16; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i][j] = if a[i] == b[j] {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
-    let (mut i, mut j) = (0, 0);
-    let mut out = Vec::new();
-    while i < n && j < m {
-        if a[i] == b[j] {
-            out.push((' ', a[i]));
-            i += 1;
-            j += 1;
-        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
-            out.push(('-', a[i]));
-            i += 1;
-        } else {
-            out.push(('+', b[j]));
-            j += 1;
-        }
-    }
-    out.extend(a[i..].iter().map(|l| ('-', *l)));
-    out.extend(b[j..].iter().map(|l| ('+', *l)));
-    out
+/// Where the changed parts are, at A and at B, and how their files open (docair-8l6.82): the review
+/// links each part to its file and line instead of embedding its code.
+pub(crate) struct CodeRefs<'c> {
+    pub before: &'c Graph,
+    pub after: &'c Graph,
+    pub links: &'c crate::doc_page::CodeLinks,
 }
 
-/// The changed parts' texts by part id, as the page gets them (`Changed::code`).
-pub(crate) type Texts<'c> = HashMap<&'c str, &'c PartText>;
-
 /***
- * The code of a step's parts, folded (docair-8l6.49): each of its new, gone and edited parts by id (a link to the part), its file and line, and its whole text before and after as a line diff, comments with it; empty when docair has no text of any of them. The graphs are searched in order for where a part is.
+ * Where a step's parts are in the code (docair-8l6.49, 8l6.82): each of its new, gone and edited parts by id (a link to the part), and a link to its file and line, at B for a new one, at A for a gone one, before and after for an edited one; the file and line alone where a version has no link. Empty when none of them has a place in a file.
  ***/
-fn piece_code(s: &ChangeStep, texts: &Texts, graphs: &[&Graph]) -> String {
+fn piece_code(s: &ChangeStep, refs: &CodeRefs) -> String {
     let ids: Vec<(&str, &str)> = s
         .added
         .iter()
@@ -217,46 +176,54 @@ fn piece_code(s: &ChangeStep, texts: &Texts, graphs: &[&Graph]) -> String {
         .chain(s.removed.iter().map(|i| (i.as_str(), "gone")))
         .chain(s.code.iter().map(|i| (i.as_str(), "edited")))
         .collect();
-    parts_code(ids, texts, graphs)
+    parts_code(ids, refs)
 }
 
-/// The code of parts, each with what happened to it (`new`, `gone`, `edited`), folded as `piece_code` does.
-fn parts_code(mut ids: Vec<(&str, &str)>, texts: &Texts, graphs: &[&Graph]) -> String {
+/// Where parts are in the code, each with what happened to it (`new`, `gone`, `edited`), as `piece_code` says it.
+fn parts_code(mut ids: Vec<(&str, &str)>, refs: &CodeRefs) -> String {
+    use crate::doc_page::CodeLinks;
     let mut seen = HashSet::new();
     ids.retain(|(i, _)| seen.insert(*i));
-    let mut parts = String::new();
+    let place = |g: &Graph, id: &str| {
+        g.nodes
+            .iter()
+            .find(|x| x.id == id)
+            .and_then(|x| x.source.as_ref())
+            .map(|src| (src.file.clone(), src.line))
+    };
+    // A version's place as a link, labelled; the file and line alone without a link.
+    let link = |label: &str, template: Option<&String>, at: &(String, usize)| match CodeLinks::to(
+        template, &at.0, at.1,
+    ) {
+        Some(href) => format!(
+            r#"<a class="link" href="{}" target="_blank" rel="noopener" data-test="code-link" title="{}:{}">{label}</a>"#,
+            escape_text(&href),
+            escape_text(&at.0),
+            at.1
+        ),
+        None => format!("<code>{}:{}</code>", escape_text(&at.0), at.1),
+    };
+    let mut items = String::new();
     let mut n = 0;
     for (id, what) in ids {
-        let Some(t) = texts.get(id) else {
-            continue;
+        let (a, b) = (place(refs.before, id), place(refs.after, id));
+        let at = |p: &(String, usize)| format!("{}:{}", p.0, p.1);
+        let links = match (what, &a, &b) {
+            ("new", _, Some(b)) => link(&at(b), refs.links.at_b.as_ref(), b),
+            ("gone", Some(a), _) => link(&at(a), refs.links.at_a.as_ref(), a),
+            (_, Some(a), Some(b)) => format!(
+                "{} · {}",
+                link("before", refs.links.at_a.as_ref(), a),
+                link(&format!("after, {}", at(b)), refs.links.at_b.as_ref(), b)
+            ),
+            (_, _, Some(b)) => link(&at(b), refs.links.at_b.as_ref(), b),
+            (_, Some(a), None) => link(&at(a), refs.links.at_a.as_ref(), a),
+            _ => continue,
         };
-        let at = graphs
-            .iter()
-            .find_map(|g| g.nodes.iter().find(|x| x.id == id))
-            .and_then(|x| x.source.as_ref())
-            .map(|src| format!("{}:{}", src.file, src.line))
-            .unwrap_or_default();
-        let mut pre = String::new();
-        for (sign, line) in line_diff(
-            t.before.as_deref().unwrap_or(""),
-            t.after.as_deref().unwrap_or(""),
-        ) {
-            let class = match sign {
-                '+' => "add",
-                '-' => "del",
-                _ => "same",
-            };
-            let _ = write!(
-                pre,
-                r#"<span class="{class}">{sign} {}</span>"#,
-                escape_text(line)
-            );
-        }
         let _ = write!(
-            parts,
-            r#"<div class="code-part" data-test="code-part"><div class="code-head"><code>{}</code> <span class="muted">{what} · {}</span></div><pre class="code-diff">{pre}</pre></div>"#,
-            escape_text(id),
-            escape_text(&at)
+            items,
+            r#"<li data-test="code-part"><code>{}</code> <span class="muted">{what}</span> · {links}</li>"#,
+            escape_text(id)
         );
         n += 1;
     }
@@ -264,7 +231,7 @@ fn parts_code(mut ids: Vec<(&str, &str)>, texts: &Texts, graphs: &[&Graph]) -> S
         return String::new();
     }
     format!(
-        r#"<details class="piece-code" data-test="piece-code"><summary>The code · {}</summary>{parts}</details>"#,
+        r#"<div class="piece-code" data-test="piece-code"><span class="muted">The code · {}:</span><ul class="code-links">{items}</ul></div>"#,
         count(n, "part")
     )
 }
@@ -281,7 +248,7 @@ fn changes_walk(
     (title, words, intro): (&str, Option<&Value>, Option<&str>),
     at_picture: Option<&StepAt>,
     linker: &crate::page_glossary::Linker,
-    texts: &Texts,
+    refs: &CodeRefs,
 ) -> Option<Value> {
     // A review's change (docair-8l6.43): its pieces in the order given, after a first card on what and why.
     let in_order = intro.is_some();
@@ -386,8 +353,8 @@ fn changes_walk(
             } else {
                 String::new()
             };
-            // Down to the code, folded: its parts' texts before and after (docair-8l6.49).
-            let code = piece_code(s, texts, &[&m.graph]);
+            // Down to the code: where its parts are, as links (docair-8l6.49, 8l6.82).
+            let code = piece_code(s, refs);
             let body = match words.and_then(|w| w.get(&s.id)).and_then(Value::as_str) {
                 Some(w) => format!(
                     r#"<p data-test="step-words">{}</p>{route}<p class="muted">{said}</p>{code}"#,
@@ -727,7 +694,7 @@ fn pictures_by_change(
     (addr, title, pair): (&str, &str, &str),
     words: Option<&Value>,
     keep: Option<&Path>,
-    (linker, texts): (&crate::page_glossary::Linker, &Texts),
+    (linker, refs): (&crate::page_glossary::Linker, &CodeRefs),
 ) -> (Vec<ChangePicture>, String, String) {
     let mut out = Vec::new();
     let n = flow_steps.len();
@@ -770,7 +737,7 @@ fn pictures_by_change(
                 (title, words, None),
                 Some(&here),
                 linker,
-                texts,
+                refs,
             ),
         });
     }
@@ -791,7 +758,7 @@ fn pictures_by_change(
                 (title, words, None),
                 None,
                 linker,
-                texts,
+                refs,
             ),
         ),
         (
@@ -888,7 +855,7 @@ fn review_view(
     after: &Graph,
     changed: &Changed,
     keep: Option<&Path>,
-    (linker, texts): (&crate::page_glossary::Linker, &Texts),
+    (linker, refs): (&crate::page_glossary::Linker, &CodeRefs),
     code: &HashSet<&str>,
 ) -> ReviewView {
     let c = changed.changes;
@@ -1031,7 +998,7 @@ fn review_view(
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|v| off_item(v, texts, (after, before)))
+            .filter_map(|v| off_item(v, refs))
             .collect();
         let check = text(ch, "check");
         let mut intro = String::new();
@@ -1083,6 +1050,27 @@ fn review_view(
                 with_code(&check)
             );
         }
+        // What the AI read for it, folded: the commits by their subject, the docs by their path (docair-8l6.71).
+        let sources: Vec<String> = ch["sources"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| {
+                let place = s["where"].as_str()?;
+                Some(match s["source"].as_str() {
+                    Some("doc") => format!("<li><code>{}</code></li>", escape_text(place)),
+                    _ => format!("<li>The commit \u{201c}{}\u{201d}</li>", escape_text(place)),
+                })
+            })
+            .collect();
+        if !sources.is_empty() {
+            let _ = write!(
+                intro,
+                r#"<details class="review-sources" data-test="review-sources"><summary>Sources · {}</summary><ul>{}</ul></details>"#,
+                sources.len(),
+                sources.join("")
+            );
+        }
         let _ = write!(
             intro,
             r#"<p class="muted">Next: how, {}.</p>"#,
@@ -1107,7 +1095,7 @@ fn review_view(
                     (&title, Some(&words), Some(&intro)),
                     None,
                     linker,
-                    texts,
+                    refs,
                 );
                 (svg, walk)
             });
@@ -1161,11 +1149,8 @@ const NOT_FOUND: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" class="docair
 /// as what was said, by which commit, doc or code comment, over what the code seems to do; what nothing
 /// mentions and a risk as what the code does. A bare sentence (as the model may answer) is a risk; an item
 /// stored before the kinds is a contradiction where something was said, else a risk.
-fn off_item<'a>(
-    v: &'a Value,
-    texts: &Texts,
-    (after, before): (&Graph, &Graph),
-) -> Option<(&'a str, String)> {
+fn off_item<'a>(v: &'a Value, refs: &CodeRefs) -> Option<(&'a str, String)> {
+    let (after, before) = (refs.after, refs.before);
     let field = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").trim();
     let (source, place, says, code) = match v.as_str() {
         Some(t) => ("none", "", "", t.trim()),
@@ -1235,20 +1220,20 @@ fn off_item<'a>(
             }
         }
     }
+    let has = |g: &Graph, id: &str| g.nodes.iter().any(|n| n.id == id);
     let folded = parts_code(
         parts
             .iter()
             .map(|id| {
-                let what = match texts.get(id) {
-                    Some(t) if t.before.is_none() => "new",
-                    Some(t) if t.after.is_none() => "gone",
+                let what = match (has(before, id), has(after, id)) {
+                    (false, _) => "new",
+                    (_, false) => "gone",
                     _ => "edited",
                 };
                 (*id, what)
             })
             .collect(),
-        texts,
-        &[after, before],
+        refs,
     );
     let at = if at.is_empty() {
         String::new()
@@ -1399,9 +1384,13 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
     let linker = crate::page_glossary::Linker::new(after);
     // The review leads (docs/EXPLAIN.md §9.5); the flows it is built from follow.
     let inside_code = change_steps::changed_inside(&c.graph).code;
-    // The changed parts' texts, to get down to the code from every change (docair-8l6.49).
-    let texts: Texts = changed.code.iter().map(|t| (t.part.as_str(), t)).collect();
-    let reviewed = review_view(after, changed, keep, (&linker, &texts), &inside_code);
+    // Where the changed parts are, to get down to the code from every change (docair-8l6.49, 8l6.82).
+    let refs = CodeRefs {
+        before: changed.before,
+        after,
+        links: changed.links,
+    };
+    let reviewed = review_view(after, changed, keep, (&linker, &refs), &inside_code);
     // Every change the review lists counts, those in docair's words too (docair-8l6.63, 8l6.67).
     let review_n = reviewed.n;
     let button = format!(
@@ -1559,7 +1548,7 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
                     (&addr, &title, &pair),
                     words,
                     keep,
-                    (&linker, &texts),
+                    (&linker, &refs),
                 );
                 pictures.extend(more);
                 focus_links = format!(
@@ -1591,7 +1580,7 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
                             (&title, words, None),
                             None,
                             &linker,
-                            &texts,
+                            &refs,
                         ),
                         _ => None,
                     },
@@ -1727,29 +1716,6 @@ mod tests {
 
     /// docair-zrr.18, zrr.19, 8l6.12: the one picture is drawn with its marks and tags and opens as a
     /// walk over its one change; the model's words on that step, by its id, show over docair's.
-    /// docair-8l6.49: what both keep stays in order; what one has only is - or +.
-    #[test]
-    fn a_line_diff_keeps_what_both_have() {
-        let d = line_diff("a\nb\nc\nd", "a\nx\nc\nd\ne");
-        assert_eq!(
-            d,
-            [
-                (' ', "a"),
-                ('-', "b"),
-                ('+', "x"),
-                (' ', "c"),
-                (' ', "d"),
-                ('+', "e")
-            ]
-        );
-        assert_eq!(
-            line_diff("", "new"),
-            [('+', "new")],
-            "a new part's text, whole"
-        );
-        assert_eq!(line_diff("gone", ""), [('-', "gone")]);
-    }
-
     #[test]
     fn a_change_is_drawn_and_walked_with_its_words() {
         let (before, after, f) = a_new_line();
@@ -1779,7 +1745,11 @@ mod tests {
             ("Datum order", None, None),
             None,
             &linker,
-            &HashMap::new(),
+            &CodeRefs {
+                before: &before,
+                after: &after,
+                links: &crate::doc_page::CodeLinks::default(),
+            },
         )
         .unwrap();
         let st = &walk["steps"].as_array().unwrap()[0];
@@ -1813,7 +1783,11 @@ mod tests {
             ("Datum order", Some(&words), None),
             None,
             &linker,
-            &HashMap::new(),
+            &CodeRefs {
+                before: &before,
+                after: &after,
+                links: &crate::doc_page::CodeLinks::default(),
+            },
         )
         .unwrap();
         let card = walk["steps"][0]["card"].as_str().unwrap();
@@ -1854,7 +1828,14 @@ mod tests {
             ),
             None,
             None,
-            (&linker, &HashMap::new()),
+            (
+                &linker,
+                &CodeRefs {
+                    before: &before,
+                    after: &after,
+                    links: &crate::doc_page::CodeLinks::default(),
+                },
+            ),
         );
         let addrs: Vec<&str> = pics.iter().map(|p| p.addr.as_str()).collect();
         assert_eq!(

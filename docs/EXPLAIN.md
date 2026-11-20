@@ -40,7 +40,9 @@ that does not bind: dropped, with a warning (as W109 does for walkthroughs).
 Nothing the AI invents gets into the result.
 
 Each answer is recorded with the model and the time, like a walkthrough
-(`recorded.by`). A person can correct one by hand (`recorded.by: human`).
+(`recorded.by`). A person could once correct one by hand (`recorded.by: human`);
+since docair-8l6.75 every review is the AI's, and a store is only kept while it
+covers every piece (§9.4).
 
 ## 4. Where the findings go
 
@@ -109,12 +111,12 @@ Step 1 needs `docair diff`'s changed slices (docair-zrr.6), step 6 needs
 
 | # | Question | Decided |
 |---|----------|---------|
-| 1 | which model by default, and the input's size limit | the configured model (`[ai]`); the input is cut at 60,000 characters per request, a diff larger than that is sent flow by flow |
-| 2 | what a person's correction looks like | the findings file is edited by hand and its `recorded.by` set to `human`; docair never asks the model again about a finding a human recorded |
+| 1 | which model by default, and the input's size limit | the configured model (`[ai]`); everything that changed goes whole in one request, at most `[explain] max_chars` (default 1,000,000 characters); a review that needs more is an error, never split (docair-8l6.70, 8l6.79, replacing the 60,000-character requests sent in parts) |
+| 2 | what a person's correction looks like | none: every review is the AI's (docair-8l6.75). A stored review is kept while it covers every piece, as stored; else it is asked again whole |
 | 3 | does a workflow from the user's side need a declared start? | no: it starts at the first part outside the system (`external`) on a changed flow, else at the flow's first step |
 | 4 | the language of the comment on the pull request | plain English, one line per changed flow, the explanation under it, links and workflows folded in `<details>` |
-| 5 | (new) where the findings go | `[explain] store` in `docair.toml`, default `docs/changes`: one JSON file per pair of commits (`<A>..<B>.json`) |
-| 6 | (new) the cost limit | `[explain] max_requests`, default 8 requests per run; a run that would need more stops and says which flows are left |
+| 5 | (new) where the findings go | `[explain] store` in `docair.toml`, default `.docair/changes` (docair's own output folder, so reviews are not part of the project; docair-8l6.74, before `docs/changes`): one JSON file per pair of commits (`<A>..<B>.json`) |
+| 6 | (new) the cost limit | the review is one request, and one more for the pieces left in no change; its size is `[explain] max_chars`. `[explain] max_requests` is still read, so an old docair.toml loads, and no longer used (docair-8l6.79) |
 
 ## 8. A walkthrough of each change (docair-8l6.11, 8l6.12)
 
@@ -163,31 +165,24 @@ step `data.order#path:orders-db`).
 | `POST /api/explain` (`a`, `b`) | at once: a job id; a second call while a job runs answers that job |
 | `GET /api/explain/<job>` | the requests started, answered and left, the flows asked about, the time so far, an error, the changes made so far (`found`) and the page's view of it (`html`, docair-8l6.65); kept 10 minutes after the job ends |
 
-* Batches go out in parallel, at most 3 at once (docair-8l6.14). With the 2
-  questions to the model the server allows (`ASKING_AT_ONCE`), up to 5
-  requests reach the provider at once, and a chat question never waits
-  behind an explain. `docair explain` sends its batches the same way.
-* The links to make go with the first batch; links are merged as each batch
-  answers.
-* `[explain] max_requests` counts the requests started; the flows left over
-  are *not explained yet*, as today.
-* The page shows the job under its button as the server writes it: a bar of
-  the requests answered with words such as *The AI explains 30 flows in 5
-  requests · 2 answered · 1:12*, then each change as soon as it is made
-  (docair-8l6.65), and asks again every second. An answer is bound as soon as
-  those before it are, so the changes come out in the requests' order and the
-  review is the same as when all are bound at the end; the last request may
-  still merge them and place pieces into them. When the job ends, the server
+* The review is one request (docair-8l6.79), its answer streamed
+  (`client::chat_streamed`); then one more for the pieces left in no change.
+  A chat question never waits behind it: the server allows 2 questions to
+  the model at once (`ASKING_AT_ONCE`) besides the review.
+* The page shows the job under its button as the server writes it: a bar
+  that moves while the AI works, words such as *The AI reviews 30 pieces ·
+  2 changes so far · 1:12*, then each change as soon as the streamed answer
+  holds it whole (docair-8l6.65), and asks again every second. The last
+  request may still place pieces into them. When the job ends, the server
   writes the page again and the page reloads (docair-8l6.16). The page's
   script stays within its line budget: the HTML comes from the server.
 
-**Built** (docair-8l6.11): `docair_ai::explain::explain_with` sends the
-batches on up to `AT_ONCE` (3) threads, says each start and answer
-(`ExplainProgress`), and binds the answers in the batches' order, each as
-soon as those before it are (`bind_answer`, docair-8l6.65), so the findings
-do not depend on which answered first and the changes so far go out with the
-progress (`ExplainProgress.found`); a failed request leaves its
-flows, and only when none answers is it an error. The server keeps the jobs
+**Built** (docair-8l6.11, 8l6.79): `docair_ai::explain::explain_with` sends
+the review in one streamed request, says when it starts and answers
+(`ExplainProgress`), and binds each change as soon as the answer holds it
+whole (`complete_changes`), so the changes so far go out with the progress
+(`ExplainProgress.found`); the whole answer is then bound as before. An
+endpoint that does not stream is read whole. A failed request is an error. The server keeps the jobs
 (`ExplainJobs`, `crates/docair-server/src/project.rs`); `GET
 /api/explain/<job>` works out `seconds` and `text` when asked. `docair
 explain` uses the same and says each answered request on stderr. Tests:
@@ -220,6 +215,7 @@ changes is not capped (docair-8l6.27).
 | *why*: the AI's own reading of the code, the commits and the docs together, never a quote or a citation (docair-8l6.55) | A user's upload lands on one pod; the others now ask that pod for it instead of answering that it is gone. |
 | *off*: what the AI found off, each of one of three kinds (docair-8l6.62): *contradicts*, what a commit message, a doc or a code comment says, and which one, against what the code clearly does otherwise (docair-8l6.58); *unsaid*, what the code does that nothing mentions; *risk*, a mistake, a missed case or a risk in the code; or that it found nothing | *Said:* the commit “Audit every order”: every order is audited. *The code:* `audit` has an empty body, so it records nothing yet. |
 | *what to check*: the risky part | The NetworkPolicy must let the server pods reach each other. |
+| *sources*: the commit messages (by subject) and docs (by path) the AI read for it, listed apart and folded; only those there are, as they are (docair-8l6.71) | the commit “Two server pods”; `docs/DEPLOY.md` |
 
 The commit messages and docs are claims the AI checks against the code, not
 sources to cite: they go to it without ids, and the prompt asks it never to
@@ -263,42 +259,30 @@ Markdown goes as docs, and lock files, the beads export, the review store
 and binary files not at all. The model reads the texts to say what an edit
 does.
 
-| Input | Cut at |
-|-------|--------|
-| a commit message's body | 2,000 characters |
-| a Markdown file's changed lines | 2,000 characters |
-| all Markdown files together | 12,000 characters |
-| a part's text, one version | 4,000 characters |
-| a piece's texts together | 20,000 characters, then *n more parts not shown* |
-| a changed file no part holds | 2,000 characters; all together 10,000 |
-| a request, everything together | 60,000 characters (docair-8l6.8) |
+Nothing is cut (docair-8l6.79): a commit message's body, a Markdown file's
+changed lines, a part's whole text before and after, a changed file no part
+holds, every list of a piece go whole, however many. The review is one
+request, at most `[explain] max_chars` characters (default 1,000,000,
+docair-8l6.70); a review that needs more is an error that says how many it
+needs and how to raise the limit or review a smaller range, never split. How
+much the model reasons first is `[explain] reasoning` (`low`, `medium`,
+`high`; default `low`, docair-8l6.78).
 
-A review too big for one request is asked in parts, the pieces in their
-order, the intent with each part, and with each part the ids of the pieces
-the other parts hold, to leave to them (decision docair-rl6, docair-8l6.60),
-at most `MAX_ELSEWHERE` (a quarter of a request) of their ids, then how many
-more; a split review keeps room for that list with its words, so no request
-passes 60,000 characters (docair-8l6.68). What a part's answer still puts
-into *how* of another part's pieces is left to that part before binding, and
-a change left with nothing goes; each part says so once among the problems. Then one last request (decision
-docair-8l6.56, replacing 8l6.31, 8l6.41 and 8l6.50) gets every change by
-number, with its title, why and what its pieces do, and the pieces no change
-holds yet, with their code; it goes when the parts gave changes from more
-than one request, or a piece is left. It answers which changes came back
-twice and where each left piece belongs, with what it does there, or which
+Then one last request (decision docair-8l6.56, docair-8l6.69) gets every
+change by number, with its title, why and what its pieces do, and the pieces
+no change holds yet, with their code; it goes when a piece is left. It
+answers where each left piece belongs, with what it does there, or which
 changes of their own the left pieces that belong to none make (docair-8l6.63):
 
 ```json
-{"same": [[1, 4]], "place": [{"piece": "<id>", "change": 2, "words": "…"}],
+{"place": [{"piece": "<id>", "change": 2, "words": "…"}],
  "new": [{"title": "…", "how": [{"piece": "<id>", "words": "…"}], "why": "…", "check": "…"}]}
 ```
 
-docair places first, then merges each group into its first change: the
-pieces in order, what was found off without repeats. A left piece is named by
-its id, a part it holds or a part in its box (`explain::resolve_left`); a
-place or a group that does not bind is left out and said (`place_left`,
-`merge_same`). Its new changes are bound as the review's are (§9.4), of the
-left pieces only. The request comes on top of `max_requests`, in the progress.
+A left piece is named by its id, a part it holds or a part in its box
+(`explain::resolve_left`); a place that does not bind is left out and said
+(`place_left`). Its new changes are bound as the review's are (§9.4), of the
+left pieces only.
 
 Every piece is a change; there are no *other edits* (docair-8l6.63, decision
 docair-cum, replacing 8l6.28 and 8l6.42). A piece the AI still puts in no
@@ -307,7 +291,7 @@ change, when the last request fails or is cut short, is kept in the store's
 words for the piece (*Code changed in `total`.*), marked *in docair's words:
 the AI put this piece in no change*, with no why, nothing found off and
 nothing to check, since the AI checked nothing of it. The same holds for a
-piece the run did not reach (`left`, beyond `max_requests`) and for one newer
+piece a review stored before 8l6.79 did not reach (`left`) and for one newer
 than the stored review, when the change moved on after `docair explain`
 (docair-8l6.67): each is a change of its own in docair's words, marked so.
 A review that does not cover every piece says how many it misses and offers,
@@ -323,7 +307,8 @@ is left out with what it found off, and the notice says how many (docair-8l6.68)
                        "source": "commit | doc | comment | none", "where": "<the commit's subject, the doc's path, the part whose comment it is>",
                        "says": "…", "code": "<what the code seems to do>",
                        "parts": ["<the id of each part where the code does it>"]}],
-              "check": "…"}],
+              "check": "…",
+              "sources": [{"source": "commit | doc", "where": "<the commit's subject, the doc's path>"}]}],
  "links": [{"a": "<id at A>", "b": "<id at B>", "why": "…"}]}
 ```
 
@@ -336,17 +321,17 @@ removed at A that is the same as one added at B.
 | Rule | How |
 |------|-----|
 | a change has a title and a piece | else it is left out, and said |
-| a `how` entry names a piece docair made | a part's id, or a piece id guessed from it (`path:<part>`), binds to the piece that holds that part (docair-8l6.37); else that entry is left out; a piece already in an earlier change stays there (docair-8l6.32) |
+| a `how` entry names a piece docair made | only a piece's own id binds (docair-8l6.81, replacing 8l6.37). The prompt says so with an example of each; a name that is no piece id (a part's id, or one made up) goes back to the model once, in a repair request that lists the pieces holding that part to pick from (`misnamed`, `repair_names`); what is still no piece after it is left out, and said. A piece may be in several changes, each with its own words (docair-8l6.76, replacing 8l6.32) |
 | words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `off` that does not is left out alone. A piece id in backticks is named as its part when the piece stands for one part or is named after one (`path:orders.audit` → `orders.audit`, docair-8l6.64) |
 | an *off* says where only of what is there (docair-8l6.59) | a commit by its subject, made the subject as it is; a doc by its path, made whole; a comment by its part's id; else its `where` is left out, and said. An off without `code` is left out. Only a contradiction says what was said and where: one that names nothing said is kept as a risk, and said; an *unsaid* or a *risk* keeps no source (`none`). A bare sentence is a risk. An off stored before the kinds is a contradiction where something was said, else a risk. Its `parts` keep only parts of A or B, else the parts its `code` names (docair-8l6.61) |
 | every piece is a change | the prompt asks for every piece in its change, a piece part of no other change a change of its own; the last request places the pieces left or makes changes of them (§9.2); the rest is kept in `other`, each shown as a change of its own in docair's words (docair-8l6.63) |
 
-The findings go to the store as before (§4): `docs/changes/<A>..<B>.json`,
+The findings go to the store (§4): `.docair/changes/<A>..<B>.json` by default (docair-8l6.74),
 schema `docair.explained/2`, with `changes`, the pieces the model left as
 `other`, and `links`. A store of `/1` (with `sources` and `disagrees`,
 quoting and citing) is asked again. A store of an older schema, or one whose changes and
-`other` do not cover today's pieces, is asked again; a change a human wrote
-(`recorded.by: human`) is kept, and its pieces are not asked about.
+`other` do not cover today's pieces, is asked again whole; one that covers
+them is kept as stored. There are no hand corrections (docair-8l6.75).
 
 ### 9.5 The page
 
@@ -355,7 +340,9 @@ matters to the user first), then the flows they touch, with how many of the
 system's flows changed and all of them folded, each a link to its picture and
 a changed one to its change (docair-8l6.57). A
 change opens at `#review/<n>` on its own picture: its pieces' parts at A and
-at B as one picture, nothing else (docair-8l6.33), marked as in CHANGES.md
+at B as one picture (docair-8l6.33), and one step around them, faded: the
+parts one line away, what calls them and what they call, at most 12 a part
+(`review::AROUND`, docair-8l6.77), marked as in CHANGES.md
 §8. Its walk opens on *What and why*, headed by the change's whole title:
 why, then what the AI found off, marked (*⚠ Found off*), by kind, each
 under its heading, contradictions first (docair-8l6.62): *Said, but the code
@@ -372,14 +359,16 @@ flows it touches, who wrote it. Closing the card leaves the change, so the
 two are always seen together. Without findings the review says the AI makes
 it, with the command, and, served, a button.
 
-**Down to the code** (docair-8l6.49, decision 8l6.51). Each piece, on its
-card and in the details' *How*, has a fold, *The code
-· n parts*: each of its new, gone and edited parts, by id (a link to the
-part), with its file and line and its whole text as a line diff, the lines
-both versions keep, removed lines struck, added ones marked. These are the
-texts the AI read (`Changed::code`, `page_changes::piece_code`), so the page
-grows by the change's code, not by the code base's. A flow's change steps
-have the same fold.
+**Down to the code** (docair-8l6.49, 8l6.82, replacing decision 8l6.51). Each
+piece, on its card and in the details' *How*, and what was found off, list
+*The code · n parts*: each of its new, gone and edited parts, by id (a link to
+the part), with a link to its file and line: at B for a new one, at A for a
+gone one, *before* and *after* for an edited one. A commit opens on its
+repository host at that commit (from the `origin` remote: GitHub or GitLab),
+the working tree in the editor (`vscode://file/<root>/<path>:<line>`); where a
+version has no link, its file and line show alone (`doc_page::CodeLinks`,
+`commits::code_links`, `page_changes::piece_code`). The page embeds no code, so
+it does not grow with the change's code. A flow's change steps list the same.
 
 ### 9.6 `docair explain` and the comment
 

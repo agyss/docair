@@ -611,6 +611,9 @@ code.node-ref:hover, code.node-ref:focus-visible { background: var(--accent-soft
 .off-group[data-kind="unsaid"] { --off-kind: var(--accent); }
 .off-group[data-kind="risk"] { --off-kind: var(--warning); }
 .review-ok { margin: 8px 0; color: var(--muted); font-size: 12.5px; }
+/* What the AI read for a change, folded (docair-8l6.71). */
+.review-sources { margin: 6px 0; font-size: 12.5px; color: var(--muted); }
+.review-sources ul { margin: 4px 0 0; padding-left: 18px; }
 /* A running review: a bar of the requests answered, then each change as soon as it is made (docair-8l6.65). */
 .explain-progress { margin: 8px 0; font-size: 12.5px; }
 .explain-now { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

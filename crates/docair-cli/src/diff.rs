@@ -57,19 +57,21 @@ pub fn cmd_explain(
     };
     let config = docair_core::config::load(&compared.root)?;
     let settings = config.explain.unwrap_or_default();
-    let store = compared
-        .root
-        .join(settings.store.as_deref().unwrap_or("docs/changes"));
+    let store = compared.root.join(
+        settings
+            .store
+            .as_deref()
+            .unwrap_or(docair_core::config::DEFAULT_STORE),
+    );
     let file = store.join(format!("{}.json", compared.key));
     let kept: Option<docair_ai::explain::ChangeFindings> = std::fs::read_to_string(&file)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
-    let max = settings
-        .max_requests
-        .unwrap_or(docair_ai::explain::MAX_REQUESTS);
-    // Each answered request is said on stderr, so a long run shows it is working, and each change as
-    // soon as it is made (docair-8l6.65).
+    let review = docair_ai::explain::ReviewSettings::of(Some(&settings));
+    // What is sent and each answered request are said on stderr, so a long run shows it is working,
+    // and each change as soon as it is whole (docair-8l6.65, 8l6.79).
     let said = std::sync::atomic::AtomicUsize::new(0);
+    let asked = std::sync::atomic::AtomicUsize::new(0);
     let made = std::sync::atomic::AtomicUsize::new(0);
     let explained = docair_ai::explain::explain_with(
         &ai,
@@ -77,8 +79,14 @@ pub fn cmd_explain(
         &compared.changes,
         &compared.intent,
         kept.as_ref(),
-        max,
+        &review,
         &|p| {
+            if p.started > asked.swap(p.started, std::sync::atomic::Ordering::SeqCst) {
+                eprintln!(
+                    "docair explain: asking {} about {} pieces ({} characters) …",
+                    ai.model, p.pieces, p.chars
+                );
+            }
             if p.answered > said.swap(p.answered, std::sync::atomic::Ordering::SeqCst) {
                 eprintln!(
                     "docair explain: {} of {} requests answered",

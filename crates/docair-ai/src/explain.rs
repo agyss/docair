@@ -9,63 +9,90 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use docair_core::changes::Changes;
 use docair_core::model::Graph;
 use docair_core::review::{Intent, PartText, Piece};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::client::{Message, chat_with};
+use crate::client::{Message, chat_streamed};
 use crate::config::AiConfig;
 
 pub const SCHEMA: &str = "docair.explained/2";
-/// A request carries at most this much (docs/EXPLAIN.md §7, docair-8l6.8).
-pub const MAX_CHARS: usize = 60_000;
-/// A run asks the model at most this often, unless `[explain] max_requests` says otherwise.
-pub const MAX_REQUESTS: usize = 8;
-/// A request of a review asked in parts names the others' pieces in at most this many characters (docair-8l6.60).
-pub const MAX_ELSEWHERE: usize = MAX_CHARS / 4;
-/// At most this many requests of one explain go to the model at once (docair-8l6.14).
-pub const AT_ONCE: usize = 3;
+/// The most a review sends the model in its one request, unless `[explain] max_chars` says otherwise
+/// (docs/EXPLAIN.md §7, docair-8l6.70).
+pub const MAX_CHARS: usize = 1_000_000;
+/// How much the model reasons before it answers, unless `[explain] reasoning` says otherwise (docair-8l6.36, 8l6.78).
+pub const REASONING: &str = "low";
+
+/// What a review may send and how the model is asked (`[explain]` in docair.toml).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewSettings {
+    /// The most characters its request carries; a review that needs more is an error (docair-8l6.79).
+    pub max_chars: usize,
+    /// The model's `reasoning_effort`: `low`, `medium` or `high`.
+    pub reasoning: String,
+}
+
+impl Default for ReviewSettings {
+    fn default() -> Self {
+        ReviewSettings {
+            max_chars: MAX_CHARS,
+            reasoning: REASONING.into(),
+        }
+    }
+}
+
+impl ReviewSettings {
+    /// `[explain]` as a review uses it, the defaults where it says nothing.
+    pub fn of(s: Option<&docair_core::config::ExplainSettings>) -> Self {
+        ReviewSettings {
+            max_chars: s.and_then(|s| s.max_chars).unwrap_or(MAX_CHARS),
+            reasoning: s
+                .and_then(|s| s.reasoning.clone())
+                .unwrap_or_else(|| REASONING.into()),
+        }
+    }
+}
 
 /// How far an explain is: what it asks, how many of its requests have answered, and the changes made so far.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ExplainProgress {
-    /// The changes this run has made so far, bound as the answers come (docair-8l6.65); the last
-    /// request may still merge them and place pieces into them.
+    /// The changes made so far, each as soon as the streamed answer holds it whole (docair-8l6.65,
+    /// 8l6.79); the last request may still place pieces into them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub found: Vec<ReviewChange>,
-    /// The pieces it asks about: those no stored change holds nor `other`, `left` included.
+    /// The pieces it asks about: those no stored change holds nor `other`.
     pub pieces: usize,
-    /// The requests it sends: at most `max_requests`.
+    /// The requests it sends: the review, and one more for pieces left in no change.
     pub requests: usize,
     pub started: usize,
     pub answered: usize,
-    /// The pieces left for a later run, beyond `max_requests`.
-    pub left: usize,
+    /// The characters the review's request carries.
+    pub chars: usize,
 }
 
 const REVIEW_PROMPT: &str = r#"You review what changed between two versions of a software system, for someone who does not know the code. You get: the pieces of the change docair found, each with an id (new, gone and edited parts and lines, each part's whole code before and after with its comments, the parts where it forks off and rejoins, the flows it touches); the commit messages between the versions; the changed Markdown docs; the doc blocks whose words changed; and the changed files that hold no part.
 Read the code first. The commit messages and docs are claims: check each against the code, and believe the code. Group the pieces into changes. A change is one difference in what the app does: behaviour added, removed or adjusted, with every piece that works together for it. Answer as JSON:
 {"changes": [{"title": "<what the app does differently: one plain sentence, from the user's side>",
-              "how": [{"piece": "<a piece id, as given>", "words": "<one plain sentence: what this piece does for the change, as its code shows>"}],
+              "how": [{"piece": "<one of the piece ids given, exactly as given>", "words": "<one plain sentence: what this piece does for the change, as its code shows>"}],
               "why": "<why it was done and what it is good for: your own reading of the code, the commits and the docs together, one or two plain sentences>",
               "off": [{"kind": "<contradicts, unsaid or risk>", "source": "<commit, doc or comment; \"\" unless it contradicts>", "where": "<the commit's subject, the doc's path, or the id of the part whose comment it is; \"\" unless it contradicts>", "says": "<what it says, briefly and close to its words; \"\" unless it contradicts>", "code": "<what the code seems to do: one plain sentence, naming parts by their ids in backticks>", "parts": ["<the id of each part where the code does it: a part's id, not a piece's>"]}],
-              "check": "<what a reviewer should still check by hand: the risky part, one sentence>"}],
+              "check": "<what a reviewer should still check by hand: the risky part, one sentence>",
+              "sources": [{"source": "<commit or doc>", "where": "<the commit's subject, or the doc's path>"}]}],
  "links": [{"a": "<id at A>", "b": "<id at B>", "why": "<a few words>"}]}
-"how": the change's pieces in the order they work together; each piece in one change at most. Every piece is part of a change: put each into the change it is part of, also the small ones (a new type, a constant, an edited helper); a piece that is part of no other change is a change of its own.
+"how": the change's pieces in the order they work together. A piece is in the change it serves; one that truly serves two changes may be in both, with what it does for each. Each "piece" is one of the piece ids you were given, exactly as given, e.g. "path:orders.audit" or "code:shop-ui.cart.total"; a part's id such as "orders.audit", or an id you make up, is not a piece id. Every piece is part of a change: put each into the change it is part of, also the small ones (a new type, a constant, an edited helper); a piece that is part of no other change is a change of its own.
 "off": what you found to be off, each of one of three kinds, so a reader can tell them apart. "contradicts": a commit message, a doc or a code comment (a doc block or a comment in a part's source) says something the code clearly does otherwise, so both cannot be true; or a doc or comment the change leaves out of date, still saying what the code no longer does. Give its source, where, what it says, and in "code" what the code does instead. Only a clear contradiction you can see in the code: something a commit, doc or comment does not mention, or mentions only in part, is not one, and what you cannot see enough of to be sure is not one either. "unsaid": the code does something a reader would want to know (it behaves differently, has a new effect, drops a case) and no commit message, doc or comment mentions it; "code" says what it does. "risk": a mistake, a missed case or a risk you see in the code itself; "code" says what the code does and why that is a problem. For "unsaid" and "risk", "source", "where" and "says" are "". Only what you found: not what you could not see or check, and not that work which is not committed has no message. [] when you checked and found nothing.
+"sources": the commit messages and docs you read for this change, each by the commit's subject or the doc's path; [] when none. They are listed apart, folded; they do not let the text cite.
 Write everything in your own words, as your own reading. Only an "off" names and repeats what was said; everywhere else never quote a commit message or a doc, never say what a commit or doc says, and never name a commit, a doc, an issue or a ticket (no hashes, no file names of docs, no issue numbers). Not: "The commit and the README say auditors want a trail of each order." But: "Auditors need a trail of each order; checkout now records one."
 A piece's "source" gives each of its parts' whole code: "before" at the version before, "after" at the version after. Where it is cut (…) or not shown, say only what you can see. "files" are changed files that hold no part (a stylesheet, a config), as their changed lines.
 "links": a part removed at A that is the same as a part added at B (renamed and changed); only from "removed at A" and "added at B", and only when sure.
 Name parts by their ids in backticks. Name only ids you were given. Make as many changes as there are."#;
 
 const SETTLE_PROMPT: &str = r#"You finish a review of what changed between two versions of a software system. You get the changes it found, each by number (its title, why and what its pieces do), and the pieces no change holds yet ("left"), each with its parts and their code before and after. Answer as JSON:
-{"same": [[<number>, <number>]],
- "place": [{"piece": "<a left piece's id, as given>", "change": <number>, "words": "<one plain sentence: what this piece does for that change, as its code shows>"}],
+{"place": [{"piece": "<a left piece's id, as given>", "change": <number>, "words": "<one plain sentence: what this piece does for that change, as its code shows>"}],
  "new": [{"title": "<what the app does differently: one plain sentence, from the user's side>", "how": [{"piece": "<a left piece's id, as given>", "words": "<one plain sentence: what this piece does for the change, as its code shows>"}], "why": "<why it was done and what it is good for, one or two plain sentences>", "check": "<what a reviewer should still check by hand, one sentence>"}]}
-"same": the review was asked in parts, so the same change may have come back more than once, each time from other pieces of it (its prompt, its stored data, its page, its output). Each group: the numbers of changes that serve one and the same purpose, one feature or one fix; a number in one group at most; changes that are only related stay apart.
 "place": each left piece that is part of one of the changes, read from its code. "new": the left pieces that are part of none of them, as changes of their own, the pieces that work together in one change. Every left piece is in "place" or in "new", once.
 Write in your own words; never name a commit, a doc, an issue or a ticket. Name parts by their ids in backticks; name only ids you were given."#;
 
@@ -210,6 +237,15 @@ impl FoundOff {
     }
 }
 
+/// A commit message or doc the AI read for a change (docair-8l6.71): `commit` by its subject, `doc` by
+/// its path, as there is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeSource {
+    pub source: String,
+    #[serde(rename = "where")]
+    pub place: String,
+}
+
 /// One change of the review (docs/EXPLAIN.md §9.1): one difference in what the app does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewChange {
@@ -224,6 +260,9 @@ pub struct ReviewChange {
     pub off: Vec<FoundOff>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub check: String,
+    /// The commit messages and docs the AI read for it, listed apart, folded (docair-8l6.71).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<ChangeSource>,
     pub recorded: Recorded,
 }
 
@@ -265,19 +304,14 @@ fn part_line(g: &Graph, id: &str) -> String {
             if summary.is_empty() {
                 format!("{} ({})", n.id, n.kind)
             } else {
-                format!(
-                    "{} ({}): {}",
-                    n.id,
-                    n.kind,
-                    docair_core::review::cut(summary, 120)
-                )
+                format!("{} ({}): {summary}", n.id, n.kind)
             }
         }
         None => id.to_string(),
     }
 }
 
-/// A piece for the model (docair-8l6.34, 8l6.47): its id and kind, its new and gone parts in a line each (at most 12), its edited parts by id (at most 16), its ends (8) and box by id, its lines with + or - (12), up to four flows it touches, and its parts' whole texts before and after.
+/// A piece for the model (docair-8l6.47, 8l6.79): its id and kind, its new and gone parts in a line each, its edited parts by id, its ends and box by id, its lines with + or -, the flows it touches, and its parts' whole texts before and after; every one of them, nothing cut.
 fn piece_json(a: &Graph, b: &Graph, p: &Piece, texts: &HashMap<&str, &PartText>) -> Value {
     let s = &p.step;
     let lines = |g: &Graph, ids: &[String]| ids.iter().map(|x| part_line(g, x)).collect::<Vec<_>>();
@@ -287,54 +321,29 @@ fn piece_json(a: &Graph, b: &Graph, p: &Piece, texts: &HashMap<&str, &PartText>)
             out[k] = json!(v);
         }
     };
-    // At most this many of a list, then how many more: a piece's new and gone parts say most.
-    let capped = |v: Vec<String>, n: usize| -> Vec<String> {
-        let more = v.len().saturating_sub(n);
-        let mut v: Vec<String> = v.into_iter().take(n).collect();
-        if more > 0 {
-            v.push(format!("and {more} more"));
-        }
-        v
-    };
-    put("new", capped(lines(b, &s.added), 12));
-    put("gone", capped(lines(a, &s.removed), 12));
-    put("code changed", capped(s.code.clone(), 16));
-    put("between", capped(s.ends.clone(), 8));
+    put("new", lines(b, &s.added));
+    put("gone", lines(a, &s.removed));
+    put("code changed", s.code.clone());
+    put("between", s.ends.clone());
     put(
         "lines",
-        capped(
-            s.lines_added
-                .iter()
-                .map(|l| format!("+ {l}"))
-                .chain(s.lines_removed.iter().map(|l| format!("- {l}")))
-                .collect(),
-            12,
-        ),
+        s.lines_added
+            .iter()
+            .map(|l| format!("+ {l}"))
+            .chain(s.lines_removed.iter().map(|l| format!("- {l}")))
+            .collect(),
     );
-    let mut flows: Vec<String> = p.flows.iter().take(4).cloned().collect();
-    if p.flows.len() > 4 {
-        flows.push(format!("and {} more", p.flows.len() - 4));
-    }
-    put("flows", flows);
+    put("flows", p.flows.clone());
     if let Some(x) = &s.in_box {
         out["in"] = json!(x);
     }
     // Its parts' whole texts before and after, comments with them, so the model can read what
-    // changed (docair-8l6.47); at most MAX_PIECE_TEXT a piece, then how many more.
-    let mut room = docair_core::review::MAX_PIECE_TEXT;
+    // changed (docair-8l6.47), each whole (docair-8l6.79).
     let mut source = serde_json::Map::new();
-    let mut more = 0;
     for id in s.added.iter().chain(&s.removed).chain(&s.code) {
         let Some(t) = texts.get(id.as_str()) else {
             continue;
         };
-        let size =
-            t.before.as_ref().map_or(0, String::len) + t.after.as_ref().map_or(0, String::len);
-        if size > room {
-            more += 1;
-            continue;
-        }
-        room -= size;
         let mut v = serde_json::Map::new();
         if let Some(x) = &t.before {
             v.insert("before".into(), json!(x));
@@ -346,9 +355,6 @@ fn piece_json(a: &Graph, b: &Graph, p: &Piece, texts: &HashMap<&str, &PartText>)
     }
     if !source.is_empty() {
         out["source"] = Value::Object(source);
-    }
-    if more > 0 {
-        out["source not shown"] = json!(format!("{more} more parts, too long for this request"));
     }
     out
 }
@@ -478,7 +484,7 @@ fn as_parts(words: &str, pieces: &[Piece], part_ids: &HashSet<&str>) -> String {
 }
 
 /***
- * Bind the model's review against the graphs and the pieces (docs/EXPLAIN.md §9.4): a change keeps only `how` entries that name a piece docair made and no earlier change holds (`taken`, docair-8l6.32); words keep only what names parts, lines or pieces there are; a change with no title, a title that names what is not there, or no piece left is left out; a link only from a part removed at A to one added at B. What does not bind is said.
+ * Bind the model's review against the graphs and the pieces (docs/EXPLAIN.md §9.4): a change keeps only `how` entries that name a piece docair made by its own id (docair-8l6.81), also one another change holds too (docair-8l6.76; `taken` says which pieces some change holds); words keep only what names parts, lines or pieces there are; a change with no title, a title that names what is not there, or no piece left is left out; a link only from a part removed at A to one added at B. What does not bind is said.
  *
  * @id docair-ai.explain.bind
  ***/
@@ -538,33 +544,6 @@ pub fn bind(
             problems.push(format!("the link `{la}` → `{lb}` is not from a part removed at A to one added at B; left out"));
         }
     }
-    // A piece by its id; or by a part it holds as new, gone or edited, also named like a piece
-    // (`path:<part>`): the first such piece no change holds yet, else the first.
-    let resolve = |named: &str, taken: &HashSet<String>| -> Option<String> {
-        if piece_ids.contains(named) {
-            return Some(named.to_string());
-        }
-        let part = ["path:", "line:", "code:", "box:"]
-            .iter()
-            .find_map(|k| named.strip_prefix(k))
-            .unwrap_or(named);
-        let holding: Vec<&Piece> = pieces
-            .iter()
-            .filter(|p| {
-                let s = &p.step;
-                s.added
-                    .iter()
-                    .chain(&s.removed)
-                    .chain(&s.code)
-                    .any(|x| x == part)
-            })
-            .collect();
-        holding
-            .iter()
-            .find(|p| !taken.contains(p.id()))
-            .or(holding.first())
-            .map(|p| p.id().to_string())
-    };
     let mut out = Vec::new();
     for c in reply
         .get("changes")
@@ -588,8 +567,9 @@ pub fn bind(
         let mut how = Vec::new();
         for h in c.get("how").and_then(Value::as_array).into_iter().flatten() {
             let (named, words) = (text(h, "piece"), text(h, "words"));
-            // A part's id, or a piece's id guessed from it, binds to the piece that holds that part (docair-8l6.37).
-            let piece = resolve(&named, taken).unwrap_or(named);
+            // Only a piece's own id binds (docair-8l6.81); a part's id or a made-up one went back to the
+            // model to fix before (`misnamed`), and what is still one is left out here, and said.
+            let piece = named;
             if how.iter().any(|x: &HowStep| x.piece == piece) {
                 continue;
             }
@@ -597,16 +577,14 @@ pub fn bind(
                 problems.push(format!(
                     "\"{title}\": `{piece}` is no piece docair found; left out"
                 ));
-            } else if taken.contains(&piece) {
-                problems.push(format!(
-                    "\"{title}\": the piece `{piece}` is in an earlier change already; left there"
-                ));
             } else if !unknown(&words).is_empty() || words.is_empty() {
                 problems.push(format!(
                     "\"{title}\": the words on `{piece}` name {}; left out",
                     unknown(&words).join(", ")
                 ));
             } else {
+                // A piece may serve several changes, each with its own words (docair-8l6.76);
+                // `taken` says which pieces some change holds.
                 taken.insert(piece.clone());
                 how.push(HowStep { piece, words });
             }
@@ -713,174 +691,60 @@ pub fn bind(
         for d in &mut off {
             (d.says, d.code) = (named(&d.says), named(&d.code));
         }
+        // What it read for the change: a commit or a doc, checked against the intent later (check_where).
+        let sources: Vec<ChangeSource> = c
+            .get("sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| {
+                // A bare string is a doc's path when it ends in .md, else a commit's subject.
+                let (source, place) = match v.as_str() {
+                    Some(t) => (String::new(), t.trim().to_string()),
+                    None => (
+                        field(v, "source").to_lowercase(),
+                        field(v, "where").trim_matches('`').trim().to_string(),
+                    ),
+                };
+                let source = match source.as_str() {
+                    "commit" | "commits" | "commit message" => "commit",
+                    "doc" | "docs" | "markdown" | "readme" => "doc",
+                    _ if place.ends_with(".md") => "doc",
+                    _ => "commit",
+                };
+                (!place.is_empty()).then(|| ChangeSource {
+                    source: source.into(),
+                    place,
+                })
+            })
+            .fold(Vec::new(), |mut all: Vec<ChangeSource>, s| {
+                if !all.contains(&s) {
+                    all.push(s);
+                }
+                all
+            });
         out.push(ReviewChange {
             title: named(&title),
             how,
             why: named(&why),
             off,
             check: named(&check),
+            sources,
             recorded: recorded.clone(),
         });
     }
     (links, out, problems)
 }
 
-/// A run's state while its answers come: what is bound so far, and the answers waiting for those before them.
-struct RunState {
-    out: ChangeFindings,
-    taken: HashSet<String>,
-    from: HashSet<usize>,
-    failed: Option<anyhow::Error>,
-    read: usize,
-    /// The next request to bind.
-    next: usize,
-    waiting: std::collections::BTreeMap<usize, Result<String>>,
-}
-
-/// The pieces of all requests but `k`.
-fn others_of<'p>(batches: &[Vec<&'p Piece>], k: usize) -> Vec<&'p Piece> {
-    batches
-        .iter()
-        .enumerate()
-        .filter(|(j, _)| *j != k)
-        .flat_map(|(_, b)| b.iter().copied())
-        .collect()
-}
-
-/// What a request is told of the others (docair-8l6.60): the pieces they hold, to leave to them; at
-/// most `MAX_ELSEWHERE` characters of their ids, then how many more.
-fn elsewhere(others: &[&Piece]) -> String {
-    if others.is_empty() {
-        return String::new();
-    }
-    let mut ids: Vec<&str> = Vec::new();
-    let mut size = 0;
-    for p in others {
-        size += p.id().len() + 3;
-        if size > MAX_ELSEWHERE {
-            break;
-        }
-        ids.push(p.id());
-    }
-    let more = others.len() - ids.len();
-    format!(
-        "\n\nThe review is asked in parts. These pieces are asked about in the other parts, not here: never put them, or the parts they hold, into \"how\"; a change that needs them is made there, and the last request merges it with yours.\n{}{}",
-        serde_json::to_string(&ids).unwrap_or_default(),
-        if more > 0 {
-            format!(" and {more} more")
-        } else {
-            String::new()
-        }
-    )
-}
-
-/// Leave to the other requests the "how" entries that name their pieces (docair-8l6.60), and a change
-/// that holds nothing else: a name this request's pieces do not hold, but another's do. Returns how
-/// many entries and how many changes.
-fn leave_elsewhere(value: &mut Value, own: &[&Piece], others: &[&Piece]) -> (usize, usize) {
-    let holds = |p: &Piece, named: &str| {
-        let part = ["path:", "line:", "code:", "box:"]
-            .iter()
-            .find_map(|k| named.strip_prefix(k))
-            .unwrap_or(named);
-        p.id() == named
-            || p.step
-                .added
-                .iter()
-                .chain(&p.step.removed)
-                .chain(&p.step.code)
-                .any(|x| x == part)
-    };
-    let theirs = |named: &str| {
-        !own.iter().any(|p| holds(p, named)) && others.iter().any(|p| holds(p, named))
-    };
-    let (mut entries, mut gone) = (0, 0);
-    if let Some(list) = value.get_mut("changes").and_then(Value::as_array_mut) {
-        list.retain_mut(|c| {
-            let Some(how) = c.get_mut("how").and_then(Value::as_array_mut) else {
-                return true;
-            };
-            let was = how.len();
-            how.retain(|h| !theirs(h.get("piece").and_then(Value::as_str).unwrap_or("").trim()));
-            entries += was - how.len();
-            let keep = !(was > 0 && how.is_empty());
-            gone += usize::from(!keep);
-            keep
-        });
-    }
-    (entries, gone)
-}
-
-/// Bind request `k`'s answer into the run: a failed or unreadable one leaves its pieces; else its changes, links and problems are kept.
-#[allow(clippy::too_many_arguments)]
-fn bind_answer(
-    r: &mut RunState,
-    k: usize,
-    reply: Result<String>,
-    (batch, others): (&[&Piece], &[&Piece]),
-    (changes, a, b): (&Changes, &Graph, &Graph),
-    intent: &Intent,
-    recorded: &Recorded,
-) {
-    let content = match reply {
-        Ok(c) => c,
-        Err(e) => {
-            r.out.problems.push(format!(
-                "a request to the model failed ({e:#}); its pieces are left"
-            ));
-            r.out.left.extend(batch.iter().map(|p| p.id().to_string()));
-            r.failed.get_or_insert(e);
-            return;
-        }
-    };
-    r.read += 1;
-    let Some(mut value) = reply_json(&content) else {
-        r.out
-            .problems
-            .push("the model's answer cannot be read; its pieces are left".into());
-        r.out.left.extend(batch.iter().map(|p| p.id().to_string()));
-        return;
-    };
-    // What belongs to another request is left to it, said once, not as a problem each (docair-8l6.60).
-    let (entries, gone) = leave_elsewhere(&mut value, batch, others);
-    if entries > 0 {
-        r.out.problems.push(format!(
-            "request {}: {} of its pieces were another request's, left to it{}",
-            k + 1,
-            entries,
-            if gone > 0 {
-                format!(", and {gone} of its changes held only those")
-            } else {
-                String::new()
-            }
-        ));
-    }
-    // A change may name only the pieces of its own request.
-    let own: Vec<Piece> = batch.iter().map(|p| (*p).clone()).collect();
-    let (links, mut found, problems) = bind(changes, (a, b), &own, &value, recorded, &mut r.taken);
-    r.out.problems.extend(check_where(&mut found, intent));
-    for l in links {
-        if !r.out.links.iter().any(|x| x.a == l.a && x.b == l.b) {
-            r.out.links.push(l);
-        }
-    }
-    if !found.is_empty() {
-        r.from.insert(k);
-    }
-    r.out.changes.extend(found);
-    r.out.problems.extend(problems);
-}
-
 /***
- * Review the changes (docs/EXPLAIN.md §9): the pieces no stored change holds, nor `other`, go to the model with the intent, in requests of at most `MAX_CHARS` (the pieces in their order, the intent with each; docair-8l6.31), at most `max_requests` of them and at most `AT_ONCE` at a time; the answers are bound in the requests' order, each as soon as those before it are, the changes so far going out with the progress (docair-8l6.65); a last request says which changes came back twice and where the pieces no change holds belong, with its words on them (docair-8l6.56), or makes changes of them (docair-8l6.63); then joined with what the store had. A change a human wrote is kept and its pieces are not asked about; a store of another schema is asked again. A request that fails leaves its pieces; when none answers, the error is returned.
+ * Review the changes (docs/EXPLAIN.md §9): the pieces no stored change holds, nor `other`, go to the model whole, with the intent, in one request (docair-8l6.79); a review that would pass `max_chars` is an error, never split. Its answer streams in, and each change goes out with the progress as soon as it is whole (docair-8l6.65). A last request asks where the pieces no change holds belong, or which changes of their own they make (docair-8l6.56, 8l6.69). A store that still covers every piece is kept; else every change is asked again (no hand corrections, docair-8l6.75); a store of another schema too.
  *
  * @id    docair-ai.explain.explain
  * @calls docair-core.review.pieces "the pieces of the whole change"
  * @calls docair-ai.explain.digest "sends the pieces and the intent"
- * @calls docair-ai.client.chat_with (the pieces, the commit messages, the changed docs; not reasoning first) -> changes, links
+ * @calls docair-ai.client.chat_streamed (the pieces, the commit messages, the changed docs; reasoning as set) -> changes, links
  * @calls docair-ai.explain.bind "keeps only what binds"
  * @calls docair-ai.explain.place_left "puts the pieces no change held where the model says"
- * @calls docair-ai.explain.merge_same "merges what came back more than once"
  ***/
 pub fn explain(
     cfg: &AiConfig,
@@ -888,25 +752,135 @@ pub fn explain(
     changes: &Changes,
     intent: &Intent,
     kept: Option<&ChangeFindings>,
-    max_requests: usize,
+    settings: &ReviewSettings,
 ) -> Result<ChangeFindings> {
-    explain_with(cfg, (a, b), changes, intent, kept, max_requests, &|_| {})
+    explain_with(cfg, (a, b), changes, intent, kept, settings, &|_| {})
 }
 
-/// As `explain`, saying how far it is each time a request starts or answers (`docair serve`'s explain jobs).
+/// The names in an answer's `how` that are no piece id (docair-8l6.81), each with the pieces that hold
+/// the part it names (a part's id, or a piece id made from one: `path:orders.audit`), for the model to
+/// pick from.
+pub fn misnamed(answer: &Value, pieces: &[Piece]) -> Vec<(String, Vec<String>)> {
+    let ids: HashSet<&str> = pieces.iter().map(|p| p.id()).collect();
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for c in answer
+        .get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for h in c.get("how").and_then(Value::as_array).into_iter().flatten() {
+            let named = h.get("piece").and_then(Value::as_str).unwrap_or("").trim();
+            if named.is_empty() || ids.contains(named) || out.iter().any(|(n, _)| n == named) {
+                continue;
+            }
+            let part = ["path:", "line:", "code:", "box:"]
+                .iter()
+                .find_map(|k| named.strip_prefix(k))
+                .unwrap_or(named);
+            let holding = pieces
+                .iter()
+                .filter(|p| {
+                    let s = &p.step;
+                    s.added
+                        .iter()
+                        .chain(&s.removed)
+                        .chain(&s.code)
+                        .any(|x| x == part)
+                })
+                .map(|p| p.id().to_string())
+                .collect();
+            out.push((named.to_string(), holding));
+        }
+    }
+    out
+}
+
+/// The repair request for names that are no piece id (docair-8l6.81): each with the pieces to pick from.
+fn repair_names(wrong: &[(String, Vec<String>)]) -> String {
+    let listed: Vec<String> = wrong
+        .iter()
+        .map(|(n, holding)| match holding.as_slice() {
+            [] => format!("- \"{n}\": no piece holds it; leave it out"),
+            h => format!(
+                "- \"{n}\": not a piece id; the pieces that hold it: {}",
+                h.iter()
+                    .map(|p| format!("\"{p}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        })
+        .collect();
+    format!(
+        "Some \"piece\" values in \"how\" are not piece ids:\n{}\nAnswer again with the whole JSON, every \"piece\" one of the piece ids you were given, exactly as given.",
+        listed.join("\n")
+    )
+}
+
+/// The changes an answer that is still streaming in holds whole (docair-8l6.79): each object of its
+/// `changes` list once its closing brace has arrived, parsed alone.
+pub fn complete_changes(text: &str) -> Vec<Value> {
+    let Some(key) = text.find("\"changes\"") else {
+        return Vec::new();
+    };
+    let Some(open) = text[key..].find('[').map(|i| key + i) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let (mut depth, mut in_str, mut escaped, mut start) = (0i32, false, false, None);
+    for (i, c) in text[open + 1..].char_indices() {
+        let i = open + 1 + i;
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' | '[' => {
+                if depth == 0 && c == '{' {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            '}' | ']' => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+                if depth == 0
+                    && c == '}'
+                    && let Some(s) = start.take()
+                    && let Ok(v) = serde_json::from_str::<Value>(&text[s..=i])
+                {
+                    out.push(v);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// As `explain`, saying how far it is: when a request starts and answers, and each change as soon as it is whole (`docair serve`'s explain jobs, `docair explain` on stderr).
 pub fn explain_with(
     cfg: &AiConfig,
     (a, b): (&Graph, &Graph),
     changes: &Changes,
     intent: &Intent,
     kept: Option<&ChangeFindings>,
-    max_requests: usize,
+    settings: &ReviewSettings,
     on: &(dyn Fn(&ExplainProgress) + Sync),
 ) -> Result<ChangeFindings> {
     let pieces = docair_core::review::pieces(a, b, changes);
     let kept = kept.filter(|k| k.schema == SCHEMA);
-    // What the store already holds: a human's changes always; a model's when they and the other
-    // edits hold exactly the pieces there are now (else the model's are asked again, whole).
+    // What the store already holds, when its changes and the pieces it put in none hold exactly the
+    // pieces there are now; else every change is asked again, whole.
     let all: HashSet<&str> = pieces.iter().map(|p| p.id()).collect();
     let covered: HashSet<&str> = kept
         .map(|k| {
@@ -919,248 +893,205 @@ pub fn explain_with(
         .unwrap_or_default();
     // Stale when the pieces are not the ones it was made for, either way: one is new, or one is gone.
     let stale = all != covered;
-    let out = ChangeFindings {
+    let mut out = ChangeFindings {
         schema: SCHEMA.to_string(),
         a: changes.a.clone(),
         b: changes.b.clone(),
-        links: kept.map(|k| k.links.clone()).unwrap_or_default(),
-        changes: kept
-            .map(|k| {
-                k.changes
-                    .iter()
-                    .filter(|c| !stale || c.recorded.by == "human")
-                    .map(|c| ReviewChange {
-                        how: c
-                            .how
-                            .iter()
-                            .filter(|h| all.contains(h.piece.as_str()))
-                            .cloned()
-                            .collect(),
-                        ..c.clone()
-                    })
-                    .filter(|c| !c.how.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default(),
+        links: Vec::new(),
+        changes: Vec::new(),
         other: Vec::new(),
         problems: Vec::new(),
         left: Vec::new(),
         requests: 0,
     };
-    let mut taken: HashSet<String> = out
-        .changes
-        .iter()
-        .flat_map(|c| c.pieces().map(str::to_string))
-        .collect();
-    // Only pieces that are there now count as taken.
-    taken.retain(|p| all.contains(p.as_str()));
-    let todo: Vec<&Piece> = if stale {
-        pieces.iter().filter(|p| !taken.contains(p.id())).collect()
-    } else {
-        Vec::new()
-    };
-    // Pieces in requests of at most MAX_CHARS, in their order; the parts to link go with the first.
-    let pack = |limit: usize| {
-        let mut batches: Vec<Vec<&Piece>> = Vec::new();
-        for p in &todo {
-            let fits = batches.last().is_some_and(|last| {
-                let mut next = last.clone();
-                next.push(*p);
-                digest(changes, a, b, &next, intent, batches.len() == 1).len() <= limit
-            });
-            match batches.last_mut() {
-                Some(last) if fits => last.push(*p),
-                _ => batches.push(vec![*p]),
-            }
-        }
-        batches
-    };
-    // Asked in parts, each request also names the pieces the others hold (docair-8l6.60): room for them.
-    // The room is what that list says at most, its words included, so no request goes past MAX_CHARS.
-    let mut batches = pack(MAX_CHARS);
-    if batches.len() > 1 {
-        batches = pack(MAX_CHARS - elsewhere(&todo).len());
+    if !stale && let Some(k) = kept {
+        out.links = k.links.clone();
+        out.changes = k.changes.clone();
+        out.other = k.other.clone();
+        on(&ExplainProgress::default());
+        return Ok(out);
     }
+    let mut taken: HashSet<String> = HashSet::new();
+    let todo: Vec<&Piece> = pieces.iter().collect();
     let recorded = Recorded {
         by: "model".into(),
         model: Some(cfg.model.clone()),
         at: crate::ask::now_rfc3339(),
     };
-    let sent = batches.len().min(max_requests);
     let progress = Mutex::new(ExplainProgress {
-        pieces: batches.iter().map(Vec::len).sum(),
-        requests: sent,
-        left: batches[sent..].iter().map(Vec::len).sum(),
+        pieces: todo.len(),
         ..ExplainProgress::default()
     });
-    on(&progress.lock().unwrap_or_else(|e| e.into_inner()));
-    let next = AtomicUsize::new(0);
-    // The changes this run made, from which request each: asked in parts, one may come back twice.
-    let fresh = out.changes.len();
-    // Each answer is bound once those before it are (docair-8l6.65): the review does not depend on
-    // which came first, and the changes bound so far go out with the progress as they are made.
-    let run = Mutex::new(RunState {
-        out,
-        taken,
-        from: HashSet::new(),
-        failed: None,
-        read: 0,
-        next: 0,
-        waiting: std::collections::BTreeMap::new(),
-    });
-    std::thread::scope(|s| {
-        for _ in 0..AT_ONCE.min(sent) {
-            s.spawn(|| {
-                loop {
-                    let k = next.fetch_add(1, Ordering::SeqCst);
-                    if k >= sent {
-                        break;
-                    }
-                    {
-                        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-                        p.started += 1;
-                        on(&p);
-                    }
-                    let messages = [
-                        Message::system(REVIEW_PROMPT),
-                        Message::user(format!(
-                            "The change from `{}` to `{}`:\n{}{}",
-                            changes.a,
-                            changes.b,
-                            digest(changes, a, b, &batches[k], intent, k == 0),
-                            elsewhere(&others_of(&batches, k))
-                        )),
-                    ];
-                    // Not reasoning first: grouping pieces, a reasoning model deliberates until max_tokens runs out (docair-8l6.36).
-                    let reply = chat_with(cfg, &messages, true, false).map(|r| r.content);
-                    let mut r = run.lock().unwrap_or_else(|e| e.into_inner());
-                    r.waiting.insert(k, reply);
-                    let mut bound = false;
-                    while let Some(reply) = {
-                        let at = r.next;
-                        r.waiting.remove(&at)
-                    } {
-                        let at = r.next;
-                        r.next += 1;
-                        bind_answer(
-                            &mut r,
-                            at,
-                            reply,
-                            (&batches[at], &others_of(&batches, at)),
-                            (changes, a, b),
-                            intent,
-                            &recorded,
-                        );
-                        bound = true;
-                    }
+    if !todo.is_empty() {
+        // Everything that changed, whole, in one request; past the limit an error, never a split.
+        let message = format!(
+            "The change from `{}` to `{}`:\n{}",
+            changes.a,
+            changes.b,
+            digest(changes, a, b, &todo, intent, true)
+        );
+        let size = REVIEW_PROMPT.len() + message.len();
+        if size > settings.max_chars {
+            bail!(
+                "the review needs {size} characters, more than [explain] max_chars ({}) allows: raise max_chars in docair.toml, or review a smaller range",
+                settings.max_chars
+            );
+        }
+        {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            (p.requests, p.started, p.chars) = (1, 1, size);
+            on(&p);
+        }
+        let messages = [Message::system(REVIEW_PROMPT), Message::user(message)];
+        let own: Vec<Piece> = todo.iter().map(|p| (*p).clone()).collect();
+        // Each change as soon as the answer holds it whole, bound as the whole answer will be.
+        let whole = AtomicUsize::new(0);
+        let reasoning = Some(settings.reasoning.as_str()).filter(|r| !r.is_empty());
+        let reply = chat_streamed(cfg, &messages, true, reasoning, &|text| {
+            let objects = complete_changes(text);
+            if objects.len() <= whole.load(Ordering::SeqCst) {
+                return;
+            }
+            whole.store(objects.len(), Ordering::SeqCst);
+            let (_, found, _) = bind(
+                changes,
+                (a, b),
+                &own,
+                &json!({ "changes": objects }),
+                &recorded,
+                &mut HashSet::new(),
+            );
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.found = found;
+            on(&p);
+        })?;
+        {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.answered = 1;
+            on(&p);
+        }
+        out.requests = 1;
+        let mut value = reply_json(&reply.content)
+            .ok_or_else(|| anyhow::anyhow!("the model's answer cannot be read as JSON"))?;
+        // Names that are no piece id go back to the model once, with the pieces to pick from (docair-8l6.81).
+        let wrong = misnamed(&value, &own);
+        if !wrong.is_empty() {
+            let fix = repair_names(&wrong);
+            let repair = [
+                messages[0].clone(),
+                messages[1].clone(),
+                Message::assistant(reply.content.clone()),
+                Message::user(fix.clone()),
+            ];
+            let size = size + reply.content.len() + fix.len();
+            if size > settings.max_chars {
+                out.problems.push(format!(
+                    "{} names that are no piece id were not sent back to fix: the request would need {size} characters, more than [explain] max_chars",
+                    wrong.len()
+                ));
+            } else {
+                {
                     let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-                    p.answered += 1;
-                    if bound {
-                        p.found = r.out.changes[fresh..].to_vec();
-                    }
+                    p.requests += 1;
+                    p.started += 1;
                     on(&p);
                 }
-            });
+                let fixed = chat_streamed(cfg, &repair, true, reasoning, &|_| {});
+                {
+                    let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                    p.answered += 1;
+                    on(&p);
+                }
+                out.requests += 1;
+                match fixed.ok().and_then(|r| reply_json(&r.content)) {
+                    Some(v) => value = v,
+                    None => out.problems.push(
+                        "the request to fix names that are no piece id failed; they are left out"
+                            .into(),
+                    ),
+                }
+            }
         }
-    });
-    let RunState {
-        mut out,
-        mut taken,
-        from,
-        failed,
-        read,
-        ..
-    } = run.into_inner().unwrap_or_else(|e| e.into_inner());
-    // The last request (docair-8l6.56): which changes came back twice, and where the pieces no
-    // change holds belong, with the model's words on them, or which changes of their own they make (8l6.63).
-    let left_now: HashSet<&str> = out.left.iter().map(String::as_str).collect();
-    let mut leftover: Vec<&Piece> = pieces
-        .iter()
-        .filter(|p| !taken.contains(p.id()) && !left_now.contains(p.id()))
-        .collect();
-    let fresh_n = out.changes.len() - fresh;
-    let mut settled = 0;
-    if fresh_n > 0 && (from.len() > 1 || !leftover.is_empty()) {
+        let (links, mut found, problems) =
+            bind(changes, (a, b), &own, &value, &recorded, &mut taken);
+        out.problems.extend(check_where(&mut found, intent));
+        out.links = links;
+        out.changes = found;
+        out.problems.extend(problems);
+    }
+    // The last request (docair-8l6.56, 8l6.69): where the pieces no change holds belong, with the
+    // model's words on them, or which changes of their own they make (8l6.63).
+    let leftover: Vec<&Piece> = pieces.iter().filter(|p| !taken.contains(p.id())).collect();
+    if !out.changes.is_empty() && !leftover.is_empty() {
         let texts: HashMap<&str, &PartText> =
             intent.code.iter().map(|t| (t.part.as_str(), t)).collect();
-        let mut sent_left: Vec<&Piece> = Vec::new();
-        let mut asked = settle_digest(&out.changes[fresh..], &[], a, b, &texts);
-        for p in leftover.drain(..) {
-            let mut next = sent_left.clone();
-            next.push(p);
-            let d = settle_digest(&out.changes[fresh..], &next, a, b, &texts);
-            if d.len() > MAX_CHARS {
-                break;
+        let asked = settle_digest(&out.changes, &leftover, a, b, &texts);
+        if SETTLE_PROMPT.len() + asked.len() > settings.max_chars {
+            out.problems.push(format!(
+                "the pieces left in no change would need {} characters, more than [explain] max_chars; each shows as a change of its own",
+                SETTLE_PROMPT.len() + asked.len()
+            ));
+        } else {
+            {
+                let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                p.requests += 1;
+                p.started += 1;
+                on(&p);
             }
-            (sent_left, asked) = (next, d);
-        }
-        {
-            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-            p.requests += 1;
-            p.started += 1;
-            on(&p);
-        }
-        let messages = [Message::system(SETTLE_PROMPT), Message::user(asked)];
-        let reply = chat_with(cfg, &messages, true, false).map(|r| r.content);
-        {
-            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-            p.answered += 1;
-            on(&p);
-        }
-        settled = 1;
-        match reply.ok().as_deref().and_then(reply_json) {
-            Some(v) => {
-                let mut mine = out.changes.split_off(fresh);
-                let (placed, problems) =
-                    place_left(&mut mine, &v, &sent_left, &known_ids((a, b), &pieces));
-                taken.extend(placed);
-                out.problems.extend(problems);
-                out.problems.extend(merge_same(&mut mine, &v));
-                // The left pieces part of none of them: changes of their own (docair-8l6.63), of the left
-                // pieces only, bound as the review's are.
-                if let Some(new) = v.get("new").filter(|n| n.is_array()) {
-                    let own: Vec<Piece> = sent_left.iter().map(|p| (*p).clone()).collect();
-                    let (_, mut made, problems) = bind(
-                        changes,
-                        (a, b),
-                        &own,
-                        &json!({ "changes": new }),
-                        &recorded,
-                        &mut taken,
+            let messages = [Message::system(SETTLE_PROMPT), Message::user(asked)];
+            let reasoning = Some(settings.reasoning.as_str()).filter(|r| !r.is_empty());
+            let reply = chat_streamed(cfg, &messages, true, reasoning, &|_| {}).map(|r| r.content);
+            {
+                let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                p.answered += 1;
+                on(&p);
+            }
+            out.requests += 1;
+            match reply.ok().as_deref().and_then(reply_json) {
+                Some(v) => {
+                    let (placed, problems) = place_left(
+                        &mut out.changes,
+                        &v,
+                        &leftover,
+                        &known_ids((a, b), &pieces),
                     );
+                    taken.extend(placed);
                     out.problems.extend(problems);
-                    out.problems.extend(check_where(&mut made, intent));
-                    mine.extend(made);
+                    // The left pieces part of none of them: changes of their own (docair-8l6.63), of
+                    // the left pieces only, bound as the review's are.
+                    if let Some(new) = v.get("new").filter(|n| n.is_array()) {
+                        let own: Vec<Piece> = leftover
+                            .iter()
+                            .filter(|p| !taken.contains(p.id()))
+                            .map(|p| (*p).clone())
+                            .collect();
+                        let (_, mut made, problems) = bind(
+                            changes,
+                            (a, b),
+                            &own,
+                            &json!({ "changes": new }),
+                            &recorded,
+                            &mut taken,
+                        );
+                        out.problems.extend(problems);
+                        out.problems.extend(check_where(&mut made, intent));
+                        out.changes.extend(made);
+                    }
                 }
-                out.changes.extend(mine);
+                None => out.problems.push(
+                    "the last request failed: each piece no change holds shows as a change of its own".into(),
+                ),
             }
-            None => out.problems.push(
-                "the last request failed: a change may show twice, and each piece no change holds shows as a change of its own".into(),
-            ),
         }
     }
-    for batch in &batches[sent..] {
-        out.left.extend(batch.iter().map(|p| p.id().to_string()));
-    }
-    out.requests = sent + settled;
-    if read == 0
-        && let Some(e) = failed
-    {
-        return Err(e);
-    }
-    // Every piece is a change: one no change holds, nor left for later, is kept in `other`, and shown as a
-    // change of its own (docair-8l6.63).
-    if stale || kept.is_none() {
-        let left: HashSet<&str> = out.left.iter().map(String::as_str).collect();
-        out.other = pieces
-            .iter()
-            .map(|p| p.id())
-            .filter(|p| !taken.contains(*p) && !left.contains(p))
-            .map(str::to_string)
-            .collect();
-    } else if let Some(k) = kept {
-        out.other = k.other.clone();
-    }
+    // Every piece is a change: one no change holds is kept in `other`, and shown as a change of its
+    // own (docair-8l6.63).
+    out.other = pieces
+        .iter()
+        .map(|p| p.id())
+        .filter(|p| !taken.contains(*p))
+        .map(str::to_string)
+        .collect();
     Ok(out)
 }
 
@@ -1180,7 +1111,7 @@ fn settle_digest(
                 "number": i + 1,
                 "title": c.title,
                 "why": c.why,
-                "pieces do": c.how.iter().take(8).map(|h| h.words.as_str()).collect::<Vec<_>>(),
+                "pieces do": c.how.iter().map(|h| h.words.as_str()).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -1256,71 +1187,6 @@ pub fn place_left(
     (placed, problems)
 }
 
-/***
- * Merge what the model says is one change (docair-8l6.56): `{"same": [[1, 4], …]}`, numbers from 1 into `changes`. Each group goes into its first change: the pieces in order without repeats, what was found off without repeats, the first title, why and check that are not empty. A group that names no change, only one, or a change already in another group is left out and said. Returns what was left out.
- ***/
-pub fn merge_same(changes: &mut Vec<ReviewChange>, answer: &Value) -> Vec<String> {
-    let mut problems = Vec::new();
-    let mut used: HashSet<usize> = HashSet::new();
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    for g in answer["same"].as_array().into_iter().flatten() {
-        let nums: Vec<Option<usize>> = g
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|n| n.as_u64().map(|n| n as usize))
-            .collect();
-        let mut group: Vec<usize> = Vec::new();
-        for n in nums.iter().flatten() {
-            if !group.contains(n) {
-                group.push(*n);
-            }
-        }
-        let fine = nums.iter().all(Option::is_some)
-            && group.len() >= 2
-            && group
-                .iter()
-                .all(|n| (1..=changes.len()).contains(n) && !used.contains(n));
-        if !fine {
-            problems.push(format!("the model's merge {g} names no two changes of this review, or one twice; left apart"));
-            continue;
-        }
-        used.extend(group.iter().copied());
-        groups.push(group.into_iter().map(|n| n - 1).collect());
-    }
-    let mut gone: HashSet<usize> = HashSet::new();
-    for group in &groups {
-        let (first, rest) = (group[0], &group[1..]);
-        for &i in rest {
-            let other = changes[i].clone();
-            let into = &mut changes[first];
-            for h in other.how {
-                if !into.how.iter().any(|x| x.piece == h.piece) {
-                    into.how.push(h);
-                }
-            }
-            for x in other.off {
-                if !into.off.contains(&x) {
-                    into.off.push(x);
-                }
-            }
-            if into.why.is_empty() {
-                into.why = other.why;
-            }
-            if into.check.is_empty() {
-                into.check = other.check;
-            }
-            gone.insert(i);
-        }
-    }
-    let mut i = 0;
-    changes.retain(|_| {
-        i += 1;
-        !gone.contains(&(i - 1))
-    });
-    problems
-}
-
 /// A piece in a few words, for a reader: its new, gone and edited parts by name.
 pub fn piece_words(p: &Piece, a: &Graph, b: &Graph) -> String {
     let name = |g: &Graph, id: &str| {
@@ -1361,34 +1227,13 @@ pub fn piece_words(p: &Piece, a: &Graph, b: &Graph) -> String {
 /// An off says where it was said only of what is there (docair-8l6.58): a commit by its subject, a doc by its
 /// path (made whole when the model gave its end); else its where is left out, and said.
 fn check_where(changes: &mut [ReviewChange], intent: &Intent) -> Vec<String> {
-    let plain = |t: &str| t.trim().trim_end_matches('.').trim().to_lowercase();
     let mut problems = Vec::new();
     for c in changes.iter_mut() {
         for d in &mut c.off {
             if d.place.is_empty() {
                 continue;
             }
-            let found = match d.source.as_str() {
-                "commit" => {
-                    let place = plain(&d.place);
-                    intent
-                        .commits
-                        .iter()
-                        .find(|m| {
-                            let subject = plain(&m.subject);
-                            subject == place || (place.len() >= 12 && subject.starts_with(&place))
-                        })
-                        .map(|m| m.subject.clone())
-                }
-                "doc" => intent
-                    .docs
-                    .iter()
-                    .chain(&intent.files)
-                    .find(|f| f.path == d.place || f.path.ends_with(&format!("/{}", d.place)))
-                    .map(|f| f.path.clone()),
-                _ => Some(d.place.clone()),
-            };
-            match found {
+            match cited(&d.source, &d.place, intent) {
                 Some(p) => d.place = p,
                 None => {
                     problems.push(format!(
@@ -1399,8 +1244,50 @@ fn check_where(changes: &mut [ReviewChange], intent: &Intent) -> Vec<String> {
                 }
             }
         }
+        // Its sources (docair-8l6.71): only those there are, as they are.
+        let title = c.title.clone();
+        c.sources
+            .retain_mut(|s| match cited(&s.source, &s.place, intent) {
+                Some(p) => {
+                    s.place = p;
+                    true
+                }
+                None => {
+                    problems.push(format!(
+                        "\"{title}\": a source it names, the {} \"{}\", is not there; left out",
+                        s.source, s.place
+                    ));
+                    false
+                }
+            });
     }
     problems
+}
+
+/// What a commit's subject or a doc's path names, as it is: a commit by its subject (its start, from 12
+/// characters), a doc by its path (its end); any other source as given; none when it is not there.
+fn cited(source: &str, place: &str, intent: &Intent) -> Option<String> {
+    let plain = |t: &str| t.trim().trim_end_matches('.').trim().to_lowercase();
+    match source {
+        "commit" => {
+            let place = plain(place);
+            intent
+                .commits
+                .iter()
+                .find(|m| {
+                    let subject = plain(&m.subject);
+                    subject == place || (place.len() >= 12 && subject.starts_with(&place))
+                })
+                .map(|m| m.subject.clone())
+        }
+        "doc" => intent
+            .docs
+            .iter()
+            .chain(&intent.files)
+            .find(|f| f.path == place || f.path.ends_with(&format!("/{place}")))
+            .map(|f| f.path.clone()),
+        _ => Some(place.to_string()),
+    }
 }
 
 /// Who said what an off sets against the code, and what: `the commit "Audit each order": every order is recorded`;
@@ -1484,6 +1371,20 @@ pub fn comment(changes: &Changes, review: &ChangeFindings, (a, b): (&Graph, &Gra
         }
         if !c.check.is_empty() {
             out.push_str(&format!("Check: {}\n\n", c.check));
+        }
+        // What the AI read for it, folded (docair-8l6.71).
+        if !c.sources.is_empty() {
+            out.push_str(&format!(
+                "<details><summary>Sources ({})</summary>\n\n",
+                c.sources.len()
+            ));
+            for s in &c.sources {
+                out.push_str(&match s.source.as_str() {
+                    "doc" => format!("- `{}`\n", s.place),
+                    _ => format!("- the commit \u{201c}{}\u{201d}\n", s.place),
+                });
+            }
+            out.push_str("\n</details>\n\n");
         }
         out.push_str("<details><summary>How</summary>\n\n");
         for h in &c.how {
@@ -1590,39 +1491,17 @@ mod tests {
     /// docair-8l6.20, 8l6.21, 8l6.55: the digest carries the pieces and the intent, the commits and
     /// docs without ids to cite; binding keeps a change with a known piece and words that name what
     /// there is, with what the model found off, and leaves out the rest.
-    /// Asked in parts, a request is told the others' pieces, and what it still names of them is left to
-    /// them, said once (docair-8l6.60).
+    /// A streamed answer gives out each change once it is whole (docair-8l6.79): braces and quotes
+    /// inside its strings do not end it early, and a change still arriving is not yet one.
     #[test]
-    fn a_request_leaves_the_others_pieces_to_them() {
-        let (before, after, changes, _) = two_changes();
-        let pieces = docair_core::review::pieces(&before, &after, &changes);
-        let write = pieces
-            .iter()
-            .find(|p| p.step.lines_added.iter().any(|l| l.contains("orders-db")))
-            .unwrap();
-        let code = pieces
-            .iter()
-            .find(|p| p.step.code.contains(&"shop-ui.cart.total".to_string()))
-            .unwrap();
-        let told = elsewhere(&[code]);
-        assert!(
-            told.contains("asked about in the other parts") && told.contains(code.id()),
-            "{told}"
-        );
-        assert_eq!(elsewhere(&[]), "", "one request is told nothing");
-        let mut answer = json!({ "changes": [
-            { "title": "Orders are kept.", "how": [ { "piece": code.id() }, { "piece": write.id() } ] },
-            { "title": "The cart costs more.", "how": [ { "piece": "path:shop-ui.cart.total" } ] },
-            { "title": "Names nothing known.", "how": [ { "piece": "path:nowhere" } ] }
-        ]});
-        assert_eq!(leave_elsewhere(&mut answer, &[write], &[code]), (2, 1));
-        let left = answer["changes"].as_array().unwrap();
-        assert_eq!(left.len(), 2, "{answer}");
-        assert_eq!(left[0]["how"], json!([{ "piece": write.id() }]));
-        assert_eq!(
-            left[1]["title"], "Names nothing known.",
-            "what no request holds stays, for bind to say"
-        );
+    fn a_streamed_answer_gives_out_each_whole_change() {
+        let so_far = r#"{"changes": [{"title": "A {not} \"q\"", "how": [{"piece": "p", "words": "x ]}"}]}, {"title": "B", "how": ["#;
+        let whole = complete_changes(so_far);
+        assert_eq!(whole.len(), 1, "{whole:?}");
+        assert_eq!(whole[0]["title"], "A {not} \"q\"");
+        let done = format!("{so_far}{{\"piece\": \"q\", \"words\": \"y\"}}]}}], \"links\": []}}");
+        assert_eq!(complete_changes(&done).len(), 2);
+        assert!(complete_changes("{\"links\": []").is_empty());
     }
 
     #[test]
@@ -1713,10 +1592,12 @@ mod tests {
                   { "source": "commit", "says": "Faster." },
                   { "kind": "contradicts", "code": "`orders.create` checks nothing." },
                   "A bare sentence." ],
-              "check": "Writing must not slow down `orders.create`." },
+              "check": "Writing must not slow down `orders.create`.",
+              "sources": [ { "source": "commit", "where": "Keep every order." }, { "source": "doc", "where": "README.md" }, "NOTES.md", "README.md" ] },
+            // A piece another change holds too: kept in both, each with its words (docair-8l6.76).
             { "title": "This one takes the same piece again.", "how": [ { "piece": write.id(), "words": "Again." } ] },
             { "title": "Names `nowhere.part`.", "how": [ { "piece": code.id(), "words": "x" } ] },
-            // A part's id where a piece's belongs: bound to the piece that holds that part.
+            // A part's id where a piece's belongs: no piece; the model was asked to fix it (docair-8l6.81).
             { "title": "The cart's total is worked out anew.", "how": [ { "piece": "shop-ui.cart.total", "words": "The total changed." } ] },
         ]});
         let mut taken = HashSet::new();
@@ -1730,10 +1611,30 @@ mod tests {
         );
         problems.extend(check_where(&mut found, &intent));
         assert_eq!(found.len(), 2, "{problems:#?}");
-        assert_eq!(
-            found[1].how[0].piece,
-            code.id(),
-            "the part's id binds to its piece"
+        assert_eq!(found[1].title, "This one takes the same piece again.");
+        assert_eq!(found[1].how[0].piece, write.id());
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("`shop-ui.cart.total` is no piece docair found")),
+            "only a piece's own id binds: {problems:#?}"
+        );
+        // Before binding, such a name goes back to the model with the pieces to pick from.
+        let wrong = misnamed(&reply, &pieces);
+        assert!(
+            wrong.contains(&(
+                "shop-ui.cart.total".to_string(),
+                vec![code.id().to_string()]
+            )),
+            "{wrong:?}"
+        );
+        let fix = repair_names(&wrong);
+        assert!(
+            fix.contains(&format!(
+                "\"shop-ui.cart.total\": not a piece id; the pieces that hold it: \"{}\"",
+                code.id()
+            )) && fix.contains("Answer again with the whole JSON"),
+            "{fix}"
         );
         let c = &found[0];
         assert_eq!(c.how.len(), 1);
@@ -1825,10 +1726,33 @@ mod tests {
                 .any(|p| p.contains("says nothing of the code"))
         );
         assert!(!c.check.is_empty() && !c.why.is_empty());
-        assert!(taken.contains(write.id()) && taken.contains(code.id()));
+        // docair-8l6.71: its sources, only those there are, as they are, once each.
+        assert_eq!(
+            c.sources,
+            [
+                ChangeSource {
+                    source: "commit".into(),
+                    place: "Keep every order".into()
+                },
+                ChangeSource {
+                    source: "doc".into(),
+                    place: "README.md".into()
+                },
+            ]
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("a source it names, the doc \"NOTES.md\", is not there")),
+            "{problems:#?}"
+        );
+        assert!(
+            taken.contains(write.id()) && !taken.contains(code.id()),
+            "a part's id took no piece"
+        );
         assert!(problems.iter().any(|p| p.contains("path:invented")));
         assert!(problems.iter().any(|p| p.contains("ghost.part")));
-        assert!(problems.iter().any(|p| p.contains("earlier change")));
+        assert!(!problems.iter().any(|p| p.contains("earlier change")));
         assert!(problems.iter().any(|p| p.contains("nowhere.part")));
         // The comment says it, and the edit no change holds is an other edit.
         let found: Vec<ReviewChange> = found.into_iter().take(1).collect();
@@ -1845,7 +1769,8 @@ mod tests {
         };
         let text = comment(&changes, &review, (&before, &after));
         assert!(
-            text.contains("**1. A placed order is now kept in the orders table.**"),
+            text.contains("**1. A placed order is now kept in the orders table.**")
+                && text.contains("<details><summary>Sources (2)</summary>\n\n- the commit \u{201c}Keep every order\u{201d}\n- `README.md`\n\n</details>"),
             "{text}"
         );
         assert!(
@@ -1870,7 +1795,7 @@ mod tests {
     /// left apart and said. A left piece goes into the change it names, once, with words that name
     /// what there is.
     #[test]
-    fn the_last_request_merges_and_places() {
+    fn the_last_request_places_the_left_pieces() {
         let c = |title: &str, why: &str, pieces: &[&str], off: &[&str]| ReviewChange {
             title: title.into(),
             how: pieces
@@ -1893,6 +1818,7 @@ mod tests {
                 })
                 .collect(),
             check: String::new(),
+            sources: vec![],
             recorded: rec(),
         };
         let mut changes = vec![
@@ -1911,10 +1837,9 @@ mod tests {
             sent.contains("\"number\": 3") && sent.contains("does p4"),
             "{sent}"
         );
-        // Placed first, by the numbers the model was given; then merged.
+        // Placed by the numbers the model was given.
         let ids: HashSet<&str> = ["p5", "p6", "shop.part"].into_iter().collect();
         let answer = json!({
-            "same": [[1, 3], [2, 9], [3, 2]],
             "place": [
                 { "piece": "p5", "change": 3, "words": "`shop.part` keeps the entry." },
                 { "piece": "p5", "change": 1, "words": "Again." },
@@ -1947,37 +1872,17 @@ mod tests {
         let (placed, missed) = place_left(&mut changes, &answer, &[&p5, &p6, &bx], &ids);
         assert_eq!(placed, ["p5", "box:shop.cart"]);
         assert_eq!(missed.len(), 3, "{missed:?}");
-        let problems = merge_same(&mut changes, &answer);
-        assert_eq!(changes.len(), 2, "{changes:?}");
-        let audit = &changes[0];
-        assert_eq!(audit.title, "Orders are audited");
-        assert_eq!(audit.pieces().collect::<Vec<_>>(), ["p1", "p2", "p4", "p5"]);
-        assert_eq!(
-            audit
-                .off
-                .iter()
-                .map(|o| o.code.as_str())
-                .collect::<Vec<_>>(),
-            ["no test", "the README is out of date"]
-        );
-        assert_eq!(
-            audit.why, "auditors asked",
-            "the first why that is not empty"
-        );
-        assert_eq!(changes[1].title, "The cart costs more");
+        assert_eq!(changes.len(), 3, "{changes:?}");
+        assert_eq!(changes[2].pieces().collect::<Vec<_>>(), ["p2", "p4", "p5"]);
         assert_eq!(
             changes[1].pieces().collect::<Vec<_>>(),
             ["p3", "box:shop.cart"]
         );
-        assert_eq!(
-            problems.len(),
-            2,
-            "9 is no change; 3 is already merged: {problems:?}"
-        );
     }
 
-    /// docair-8l6.21: a store that covers every piece is not asked again; one of another schema, or
-    /// one that misses a piece, is; a human's change is kept and its pieces are not asked about.
+    /// docair-8l6.21, 8l6.75, 8l6.79: a store that covers every piece is not asked again; one of another
+    /// schema, or one that misses a piece, is, whoever wrote its changes; a review past max_chars is an
+    /// error before anything is sent.
     #[test]
     fn the_store_is_asked_again_only_when_it_does_not_cover() {
         let (before, after, changes, intent) = two_changes();
@@ -2002,6 +1907,7 @@ mod tests {
             why: String::new(),
             off: vec![],
             check: String::new(),
+            sources: vec![],
             recorded: Recorded {
                 by: by.into(),
                 ..rec()
@@ -2027,7 +1933,15 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         let full = store(SCHEMA, vec![change("model", &[first])], rest.clone());
-        let found = explain(&off, (&before, &after), &changes, &intent, Some(&full), 8).unwrap();
+        let found = explain(
+            &off,
+            (&before, &after),
+            &changes,
+            &intent,
+            Some(&full),
+            &ReviewSettings::default(),
+        )
+        .unwrap();
         assert_eq!(found.requests, 0, "every piece is covered: not asked");
         assert_eq!(found.changes.len(), 1);
         // Made for a piece that is gone now: asked again (the model is unreachable here).
@@ -2035,12 +1949,28 @@ mod tests {
         more.push("path:gone.piece".into());
         let extra = store(SCHEMA, vec![change("model", &[first])], more);
         assert!(
-            explain(&off, (&before, &after), &changes, &intent, Some(&extra), 8).is_err(),
+            explain(
+                &off,
+                (&before, &after),
+                &changes,
+                &intent,
+                Some(&extra),
+                &ReviewSettings::default()
+            )
+            .is_err(),
             "a piece that is gone: asked"
         );
         let old = store("docair.explained/0", vec![], vec![]);
         assert!(
-            explain(&off, (&before, &after), &changes, &intent, Some(&old), 8).is_err(),
+            explain(
+                &off,
+                (&before, &after),
+                &changes,
+                &intent,
+                Some(&old),
+                &ReviewSettings::default()
+            )
+            .is_err(),
             "another schema: asked (unreachable)"
         );
         let missing = store(SCHEMA, vec![change("human", &[first])], vec![]);
@@ -2051,10 +1981,21 @@ mod tests {
                 &changes,
                 &intent,
                 Some(&missing),
-                8
+                &ReviewSettings::default()
             )
             .is_err(),
-            "a piece missing: asked"
+            "a piece missing: asked, a change by hand or not"
+        );
+        let small = ReviewSettings {
+            max_chars: 100,
+            ..ReviewSettings::default()
+        };
+        let err = explain(&off, (&before, &after), &changes, &intent, None, &small)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("more than [explain] max_chars (100)") && err.contains("raise max_chars"),
+            "{err}"
         );
     }
 }

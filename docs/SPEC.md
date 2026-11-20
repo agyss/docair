@@ -125,8 +125,9 @@ run_indexers = true                   # run rust-analyzer and scip-typescript wh
 scip = ["ci/rust.scip"]               # or read index files built elsewhere (CI), inside the root
 
 [explain]                             # docair explain (docs/EXPLAIN.md)
-store        = "docs/changes"         # where the findings about two commits are kept
-max_requests = 8                      # the most requests to the model per run
+store        = ".docair/changes"      # where the reviews of two commits are kept (default)
+max_chars    = 1000000                # the most a review sends in its one request; more is an error
+reasoning    = "low"                  # how much the model reasons first: low, medium, high
 
 [ai]                                  # the model that answers `docair ask` (§10.1)
 endpoint    = "https://api.together.xyz/v1"
@@ -153,7 +154,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair build` (also `docair scan`) | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
 | `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
 | `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
-| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`) with each changed part's whole text before and after, the changed files no part holds, the commit messages and the changed docs (as claims, without ids) go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why in its own words, what it found off (each a contradiction, what a commit message, a doc or a code comment says, and which one, against what the code clearly does otherwise; or what the code does that nothing mentions; or a risk in the code), and what to check; every claim bound against both graphs and the pieces, every piece a change, one the AI puts in none shown as a change of its own in docair's words; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`, `docair.explained/2`), asked again only when its changes and the pieces it put in none no longer cover the pieces, never about a human's change; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters, 3 at once, and one more that merges the changes that came back twice and places the pieces left or makes changes of them; progress on stderr; the review as a pull request comment on stdout |
+| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`) with each changed part's whole text before and after, the changed files no part holds, the commit messages and the changed docs (as claims, without ids) go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why in its own words, the commits and docs it read for each change, folded (docair-8l6.71), what it found off (each a contradiction, what a commit message, a doc or a code comment says, and which one, against what the code clearly does otherwise; or what the code does that nothing mentions; or a risk in the code), and what to check; every claim bound against both graphs and the pieces, every piece a change, one the AI puts in none shown as a change of its own in docair's words; kept in `[explain] store` (default `.docair/changes/<A>..<B>.json`, `docair.explained/2`; docair serve notices one stored there, docair-8l6.74), asked again whole when its changes and the pieces it put in none no longer cover the pieces, else kept as stored (no hand corrections, docair-8l6.75); everything that changed goes whole, nothing cut, in one request of at most `[explain] max_chars` (default 1,000,000 characters; a review that needs more is an error, never split, docair-8l6.79), its answer streamed, with `[explain] reasoning` (default low), and one more request that places the pieces left in no change or makes changes of them (docair-8l6.69); progress on stderr, each change as soon as it is whole; the review as a pull request comment on stdout |
 | `docair check`   | 1–6         | prints diagnostics; exits non-zero on errors (CI gate) |
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
 | `docair ask "<question>" [--follow-up] [--apply]` | 1–7 + AI | asks the configured model and prints the reply: answer, walkthrough (recorded in `walkthroughs/`), view changes, proposed edits (written to `.docair/docair.patch`). `--follow-up` continues the last conversation; `--apply` writes the edits into the files and the view changes into `docair.toml` (§10) |
@@ -935,12 +936,13 @@ into `docair.html`:
   (`/all`) and the whole flow (`/whole`). The list leads with the review
   (docs/EXPLAIN.md §9), when `docair explain` stored one: the AI's changes,
   each one difference in what the app does, at `#review/<n>` on a picture of
-  its pieces only, opening on *What and why* under its whole title (the AI's
+  its pieces and, faded, the parts one line away (docair-8l6.77), opening on *What and why* under its whole title (the AI's
   why, what it found off by kind: *Said, but the code does otherwise*, each
   *Said* over *The code*, then *Done, but said nowhere* and *Looks wrong or
   risky*, each *The code*, all with the parts where the code does it linked
   and their code folded, or that it found
-  nothing, what to check), then *How
+  nothing, what to check, and folded the sources it read: the commits by
+  subject, the docs by path, docair-8l6.71), then *How
   · k of n*, its pieces in the order they work together, each card the
   model's words over docair's; its details hold only what the card does not:
   which change, the flows it touches, who wrote it;
@@ -950,9 +952,11 @@ into `docair.html`:
   change, one the run did not reach and one newer than the review are each a
   change of its own after the AI's, in docair's words and marked so; a review
   older than the change says how many pieces it misses and, served, offers
-  *✦ Review again* (docair-8l6.67). Every piece, and every change step of a flow, folds out its code,
-  *The code · n parts*: each new, gone and edited part's file and line and its
-  whole text before and after, comments with it, as a line diff. Without a review the
+  *✦ Review again* (docair-8l6.67). Every piece, and every change step of a flow, lists its code,
+  *The code · n parts*: each new, gone and edited part with a link to its file
+  and line, at A on the repository host from the `origin` remote, at B there
+  or, for the working tree, in the editor; the file and line alone without a
+  link (docair-8l6.82). The page embeds no code. Without a review the
   list says the AI writes it, with the command, and served with `docair serve
   --changes <A>` a button that asks for it (`POST /api/explain`) and then shows
   under it how far the job is (`GET /api/explain/<job>`, its `html`, every

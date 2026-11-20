@@ -109,6 +109,56 @@ pub struct CommitPair {
     pub key: String,
     /// What was meant (docs/EXPLAIN.md §9.2): the commit messages, the changed docs, the doc blocks whose words changed.
     pub intent: docair_core::review::Intent,
+    /// Where a part's file opens at A and at B, for the page's links to the code (docair-8l6.82).
+    pub links: docair_viewer::doc_page::CodeLinks,
+}
+
+/***
+ * Where a part's file opens, at A and at B (docair-8l6.82): a commit on its repository host, from the
+ * `origin` remote (GitHub and GitLab, https or ssh), at that commit's sha, the project's folder before
+ * the path; the working tree in an editor (`vscode://file/<root>/<path>:<line>`), as its uncommitted text
+ * is on no host. None where neither is there.
+ ***/
+fn code_links(
+    top: &Path,
+    root: &Path,
+    prefix: &str,
+    sha_a: &str,
+    sha_b: Option<&str>,
+) -> docair_viewer::doc_page::CodeLinks {
+    let web = git(top, &["remote", "get-url", "origin"])
+        .ok()
+        .and_then(|u| web_of(u.trim()));
+    let at = |sha: &str| {
+        web.as_ref()
+            .map(|(base, blob)| format!("{base}/{blob}/{sha}/{prefix}{{path}}#L{{line}}"))
+    };
+    docair_viewer::doc_page::CodeLinks {
+        at_a: at(sha_a),
+        at_b: match sha_b {
+            Some(sha) => at(sha),
+            None => Some(format!("vscode://file{}/{{path}}:{{line}}", root.display())),
+        },
+    }
+}
+
+/// A git remote as its web address and the path part before a file: `git@github.com:o/r.git` →
+/// (`https://github.com/o/r`, `blob`); GitLab's is `-/blob`. None for another host.
+fn web_of(remote: &str) -> Option<(String, &'static str)> {
+    let rest = remote
+        .strip_prefix("https://")
+        .or_else(|| remote.strip_prefix("http://"))
+        .or_else(|| remote.strip_prefix("ssh://"))
+        .unwrap_or(remote);
+    let rest = rest.split_once('@').map_or(rest, |(_, r)| r);
+    let (host, path) = rest.split_once([':', '/'])?;
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    let blob = match host {
+        "github.com" => "blob",
+        "gitlab.com" => "-/blob",
+        _ => return None,
+    };
+    (!path.is_empty()).then(|| (format!("https://{host}/{path}"), blob))
 }
 
 /***
@@ -243,6 +293,13 @@ fn compare_inner(
         &read_b,
     );
     intent.files = other_files(&top, &range, &prefix, (&at_a.graph, &at_b.graph))?;
+    let links = code_links(
+        &top,
+        &root,
+        &prefix,
+        &sha_a,
+        range.get(1).map(String::as_str),
+    );
     Ok(CommitPair {
         root,
         a: at_a.graph,
@@ -250,6 +307,7 @@ fn compare_inner(
         changes,
         key,
         intent,
+        links,
     })
 }
 
@@ -257,7 +315,7 @@ fn compare_inner(
  * What was meant between two commits, or a commit and the working tree (docs/EXPLAIN.md §9.2): the messages of the commits in the range that touch the project, and the project's changed Markdown files as their added and removed lines, cut so they fit a request (`docair_core::review::MAX_BODY`, `MAX_DOC`, `MAX_DOCS`). With the working tree as B, the commits up to `HEAD`, and `uncommitted` set.
  ***/
 pub fn intent(top: &Path, range: &[String], prefix: &str) -> Result<docair_core::review::Intent> {
-    use docair_core::review::{CommitNote, DocChange, Intent, MAX_BODY, MAX_DOC, MAX_DOCS, cut};
+    use docair_core::review::{CommitNote, DocChange, Intent};
     let scope = if prefix.is_empty() {
         ".".to_string()
     } else {
@@ -280,7 +338,7 @@ pub fn intent(top: &Path, range: &[String], prefix: &str) -> Result<docair_core:
             (!id.is_empty()).then(|| CommitNote {
                 id: format!("commit:{id}"),
                 subject: subject.to_string(),
-                body: cut(f.next().unwrap_or("").trim(), MAX_BODY),
+                body: f.next().unwrap_or("").trim().to_string(),
             })
         })
         .collect();
@@ -317,16 +375,9 @@ pub fn intent(top: &Path, range: &[String], prefix: &str) -> Result<docair_core:
         docs.push(DocChange {
             id: format!("doc:{path}"),
             path,
-            lines: cut(&lines.join("\n"), MAX_DOC),
+            lines: lines.join("\n"),
         });
     }
-    // All docs together fit MAX_DOCS: the files that come last are cut first.
-    let mut room = MAX_DOCS;
-    for d in &mut docs {
-        d.lines = cut(&d.lines, room);
-        room = room.saturating_sub(d.lines.len());
-    }
-    docs.retain(|d| !d.lines.is_empty() && d.lines != "…");
     Ok(Intent {
         commits,
         uncommitted: range.len() == 1,
@@ -345,6 +396,7 @@ fn not_for_the_ai(path: &str) -> bool {
         || lower.ends_with("package-lock.json")
         || lower.ends_with(".jsonl")
         || lower.starts_with("docs/changes/")
+        || lower.starts_with(".docair/")
         || [
             ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".wasm", ".pdf", ".woff", ".woff2",
         ]
@@ -361,7 +413,7 @@ pub fn other_files(
     prefix: &str,
     (a, b): (&Graph, &Graph),
 ) -> Result<Vec<docair_core::review::DocChange>> {
-    use docair_core::review::{DocChange, MAX_FILE, MAX_FILES, cut};
+    use docair_core::review::DocChange;
     let held: std::collections::HashSet<&str> = a
         .nodes
         .iter()
@@ -378,10 +430,9 @@ pub fn other_files(
     args.extend(["--", scope.as_str()]);
     let names = git(top, &args)?;
     let mut out = Vec::new();
-    let mut room = MAX_FILES;
     for path in names.lines().map(str::trim).filter(|p| !p.is_empty()) {
         let rel = path.strip_prefix(prefix).unwrap_or(path);
-        if held.contains(rel) || not_for_the_ai(rel) || room == 0 {
+        if held.contains(rel) || not_for_the_ai(rel) {
             continue;
         }
         let mut args: Vec<&str> = vec!["diff", "-U0", "--no-color", "--no-ext-diff"];
@@ -399,24 +450,22 @@ pub fn other_files(
         if lines.is_empty() {
             continue;
         }
-        let text = cut(&cut(&lines.join("\n"), MAX_FILE), room);
-        room = room.saturating_sub(text.len());
         out.push(DocChange {
             id: format!("file:{rel}"),
             path: rel.to_string(),
-            lines: text,
+            lines: lines.join("\n"),
         });
     }
     Ok(out)
 }
 
-/// Where `docair explain` keeps the findings for this pair: in `[explain] store` (default `docs/changes`), `<key>.json`.
+/// Where `docair explain` keeps the findings for this pair: in `[explain] store` (default `.docair/changes`, docair-8l6.74), `<key>.json`.
 pub fn findings_file(pair: &CommitPair) -> PathBuf {
     let store = docair_core::config::load(&pair.root)
         .ok()
         .and_then(|c| c.explain)
         .and_then(|e| e.store)
-        .unwrap_or_else(|| "docs/changes".to_string());
+        .unwrap_or_else(|| docair_core::config::DEFAULT_STORE.to_string());
     pair.root.join(store).join(format!("{}.json", pair.key))
 }
 
@@ -433,7 +482,7 @@ pub fn changes_page(pair: &CommitPair) -> String {
         before: &pair.a,
         changes: &pair.changes,
         findings: findings.as_ref(),
-        code: &pair.intent.code,
+        links: &pair.links,
     };
     docair_viewer::doc_page::render_page_with(
         &pair.b,
@@ -445,6 +494,21 @@ pub fn changes_page(pair: &CommitPair) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A remote becomes the web address the page links into (docair-8l6.82); a token in it never does.
+    #[test]
+    fn a_remote_becomes_its_web_address() {
+        let gh = Some(("https://github.com/o/r".to_string(), "blob"));
+        assert_eq!(web_of("git@github.com:o/r.git"), gh);
+        assert_eq!(web_of("https://github.com/o/r.git"), gh);
+        assert_eq!(web_of("https://user:tok@github.com/o/r"), gh);
+        assert_eq!(web_of("ssh://git@github.com/o/r.git"), gh);
+        assert_eq!(
+            web_of("git@gitlab.com:g/sub/r.git"),
+            Some(("https://gitlab.com/g/sub/r".to_string(), "-/blob"))
+        );
+        assert_eq!(web_of("https://example.org/o/r.git"), None);
+    }
 
     fn run(dir: &Path, args: &[&str]) {
         let mut all = vec![

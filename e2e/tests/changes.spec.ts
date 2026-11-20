@@ -95,7 +95,7 @@ test.describe('what changed since a commit', () => {
    * @part-of e2e.changes
    * @covers  docair-viewer.page_changes.review_view "checks the review's change opens on its picture with its why, and a left piece is a change of its own"
    * @covers  docair-viewer.page_changes.changes_walk "checks the model's words show on the change's piece"
-   * @covers  docair-viewer.page_changes.piece_code "checks a piece's code shows, before and after"
+   * @covers  docair-viewer.page_changes.piece_code "checks a piece's parts link to their file and line"
    ***/
   test('a reviewed change opens on its own picture, with why, and every piece is a change', async ({ page }) => {
     test.skip(!withFakeAi, 'needs the fake model');
@@ -127,6 +127,8 @@ test.describe('what changed since a commit', () => {
     await expect(page.getByTestId('step-card')).toContainText('Audit every order');
     // The AI's own why, and what it found off, on the card (docair-8l6.55).
     await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('Checkout now goes one step further');
+    // What it read for it, folded: the commit and the README (docair-8l6.71).
+    await expect(page.getByTestId('step-card').getByTestId('review-sources').locator('summary')).toHaveText('Sources · 2');
     // Found off by kind, each under its heading, the clear contradictions first (docair-8l6.62).
     const groups = page.getByTestId('step-card').getByTestId('off-group');
     await expect(groups.locator('h5')).toHaveText([/^Said, but the code does otherwise/, /^Done, but said nowhere/, /^Looks wrong or risky/]);
@@ -143,9 +145,9 @@ test.describe('what changed since a commit', () => {
     const risk = page.getByTestId('step-card').locator('[data-test="off-item"][data-kind="risk"]');
     await expect(risk.getByTestId('off-said')).toHaveCount(0);
     await expect(risk.getByTestId('off-code')).toContainText('Nothing tests orders.audit.');
-    // ... and its code folded: the cart's edit, before and after.
-    await unsaid.getByTestId('piece-code').locator('summary').click();
-    await expect(unsaid.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
+    // ... and where its code is: the cart's file, after as a link to the working tree (docair-8l6.82).
+    await expect(unsaid.getByTestId('piece-code').getByTestId('code-link')).toHaveAttribute('href', /^vscode:\/\/file\/.*\/ui\/src\/cart\.ts:\d+$/);
+    await expect(unsaid.locator('.code-diff')).toHaveCount(0);
     await expect(page.getByTestId('step-card')).not.toContainText('commit:');
     // The details below hold only what the card does not (docair-8l6.54).
     await expect(page.getByTestId('review-meta')).toContainText('change 1 of 2');
@@ -155,23 +157,21 @@ test.describe('what changed since a commit', () => {
     await expect(page.getByTestId('step-card')).toContainText('How · 1 of 2');
     await expect(page.getByTestId('step-words')).toContainText('now reaches');
     await expect(page.getByTestId('route-after')).toContainText('audit');
-    // The new step's code on its card: the whole function with its doc block, all of it new.
+    // The new step's code on its card: a link to where the new function is.
     const auditCode = page.getByTestId('step-card').getByTestId('piece-code');
-    await auditCode.locator('summary').click();
-    await expect(auditCode.locator('.code-diff .add', { hasText: 'Keep an audit entry of the order.' })).toBeVisible();
-    await expect(auditCode.locator('.code-diff .add', { hasText: 'pub fn audit()' })).toHaveCount(1);
+    await expect(auditCode.getByTestId('code-part')).toContainText('new');
+    await expect(auditCode.getByTestId('code-link')).toHaveAttribute('href', /^vscode:\/\/file\/.*:\d+$/);
     await expect(page.locator('#pic g.part.flow-current[data-id="orders.audit"]')).toHaveCount(1);
     await expect(page.getByTestId('review-flows')).toContainText('Scenario checkout');
-    // The cart's change, down to the code (docair-8l6.49): its whole text before and after, folded.
+    // The cart's change, down to the code (docair-8l6.49, 8l6.82): where it is, before and after.
     await page.evaluate(() => (location.hash = '#review/2'));
     await expect(page.getByTestId('step-card')).toContainText('An item in the cart costs more.');
     await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('The price of an item went up.');
     await page.getByTestId('step-card').locator('[data-step="1"]').click();
     await expect(page.getByTestId('step-words')).toContainText('Each item now counts for more in the total.');
-    const cartCode = page.getByTestId('step-card').getByTestId('piece-code').filter({ hasText: 'shop-ui.cart.total' }).first();
-    await cartCode.locator('summary').click();
-    await expect(cartCode).toContainText('ui/src/cart.ts');
-    await expect(cartCode.locator('.code-diff .del', { hasText: '* 100' })).toHaveCount(1);
-    await expect(cartCode.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
+    const cartCode = page.getByTestId('step-card').getByTestId('piece-code').filter({ hasText: 'edited' }).first();
+    // No remote in the test repository: before is its file and line, after a link to the working tree.
+    await expect(cartCode).toContainText('ui/src/cart.ts:');
+    await expect(cartCode.getByTestId('code-link')).toHaveText(/^after, ui\/src\/cart\.ts:\d+$/);
   });
 });

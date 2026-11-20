@@ -444,8 +444,25 @@ pub struct Changed<'a> {
     pub changes: &'a docair_core::changes::Changes,
     /// The stored findings (`docair_ai::explain::ChangeFindings` as JSON), when there are any.
     pub findings: Option<&'a Value>,
-    /// Each changed part's whole text before and after, comments with it: the review's pieces show their code (docair-8l6.49).
-    pub code: &'a [docair_core::review::PartText],
+    /// Where a part's file opens, at A and at B: the review links each piece's parts there instead of
+    /// embedding their code (docair-8l6.82).
+    pub links: &'a CodeLinks,
+}
+
+/// Where a part's file and line open, at A and at B (docair-8l6.82): a URL with `{path}` and `{line}`,
+/// e.g. `https://github.com/o/r/blob/<sha>/{path}#L{line}`, or `vscode://file/<root>/{path}:{line}` for
+/// the working tree; none shows the file and line alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodeLinks {
+    pub at_a: Option<String>,
+    pub at_b: Option<String>,
+}
+
+impl CodeLinks {
+    /// The link to `path` at `line` from a version's template; none without one.
+    pub fn to(template: Option<&String>, path: &str, line: usize) -> Option<String> {
+        template.map(|t| t.replace("{path}", path).replace("{line}", &line.to_string()))
+    }
 }
 
 /// As `render_page_keeping`, with the changes section when `changed` is given (`docair build

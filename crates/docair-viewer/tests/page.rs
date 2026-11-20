@@ -607,7 +607,7 @@ fn a_changed_flow_shows_before_and_after() {
         before: &before,
         changes: &changes,
         findings: None,
-        code: &[],
+        links: &docair_viewer::doc_page::CodeLinks::default(),
     };
     let page = docair_viewer::doc_page::render_page_with(&after, None, Some(&changed));
     assert!(page.contains(r#"data-test="changes-button""#) && page.contains("Δ Changes · 1"));
@@ -728,25 +728,22 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
                 { "kind": "unsaid", "source": "commit", "says": "Dropped.", "code": "An empty cart is now turned away, and nothing says so." }
             ],
             "check": "That `orders.create` still answers fast.",
+            "sources": [{ "source": "doc", "where": "README.md" }, { "source": "commit", "where": "Check the cart first" }],
             "recorded": recorded
         }],
         "problems": [], "left": [], "requests": 1
     });
-    // docair-8l6.49: the changed part's whole text before and after, to get down to the code.
-    let code = vec![docair_core::review::PartText {
-        part: "orders.create".to_string(),
-        before: Some("/// Place an order.\npub fn create() {\n    store();\n}".to_string()),
-        after: Some(
-            "/// Place an order.\npub fn create() {\n    check_cart();\n    store();\n}"
-                .to_string(),
-        ),
-    }];
+    // docair-8l6.49, 8l6.82: down to the code, as links to each version's file and line.
+    let links = docair_viewer::doc_page::CodeLinks {
+        at_a: Some("https://example.test/A/{path}#L{line}".into()),
+        at_b: Some("https://example.test/B/{path}#L{line}".into()),
+    };
     let render = |findings: Option<&Value>| {
         let changed = docair_viewer::doc_page::Changed {
             before: &before,
             changes: &changes,
             findings,
-            code: &code,
+            links: &links,
         };
         docair_viewer::doc_page::render_page_with(&after, None, Some(&changed))
     };
@@ -802,7 +799,7 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             && intro.contains(r#"<section class="off-group" data-test="off-group" data-kind="contradicts"><h5>Said, but the code does otherwise <span class="muted">· 1</span></h5><dl class="off-item" data-test="off-item" data-kind="contradicts" data-source="doc"><dt>Said</dt><dd data-test="off-said"><span class="off-who"><code>README.md</code>:</span> The cart checks itself before it posts.</dd><dt>The code</dt><dd data-test="off-code">The cart is checked in "#)
             // docair-8l6.61: where the code does it, a link to the part, and its code folded.
             && intro.contains(r#"<div class="off-parts" data-test="off-parts">in <code class="node-ref" data-node="orders.create" tabindex="0" title="orders.create">"#)
-            && intro.contains(r#"</div><details class="piece-code" data-test="piece-code"><summary>The code · 1 part</summary>"#)
+            && intro.contains(r#"</div><div class="piece-code" data-test="piece-code"><span class="muted">The code · 1 part:</span>"#)
             && intro.contains(r#"<section class="off-group" data-test="off-group" data-kind="unsaid"><h5>Done, but said nowhere <span class="muted">· 1</span></h5><dl class="off-item" data-test="off-item" data-kind="unsaid" data-source="none"><dt>The code</dt><dd data-test="off-code">An empty cart is now turned away, and nothing says so.</dd>"#)
             && intro.contains(r#"<section class="off-group" data-test="off-group" data-kind="risk"><h5>Looks wrong or risky <span class="muted">· 1</span></h5><dl class="off-item" data-test="off-item" data-kind="risk" data-source="none"><dt>The code</dt><dd data-test="off-code">Nothing tests an empty cart.</dd>"#)
             && intro.find(r#"data-kind="contradicts""#) < intro.find(r#"data-kind="unsaid""#)
@@ -810,6 +807,8 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             && !intro.contains("Dropped.")
             && !intro.contains("Nothing: no commit")
             && intro.contains(r#"data-test="review-check""#)
+            // docair-8l6.71: what the AI read for it, folded.
+            && intro.contains("<details class=\"review-sources\" data-test=\"review-sources\"><summary>Sources · 2</summary><ul><li><code>README.md</code></li><li>The commit \u{201c}Check the cart first\u{201d}</li></ul></details>")
             && !intro.contains("review-ok")
             && !intro.contains("commit:")
             && !intro.contains("This change"),
@@ -849,12 +848,12 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
         assert!(!details.contains(gone), "{gone} is on the card: {details}");
     }
     assert!(details.contains("change 1 of 1") && details.contains("by fake-model · 2026-11-19"));
-    // Down to the code, on the piece's card: its part, file and line, its text as a line diff, folded.
+    // Down to the code, on the piece's card: its part, and links to its file and line before and after (docair-8l6.82).
     assert!(
-        card.contains(r#"data-test="piece-code"><summary>The code · 1 part</summary>"#)
-            && card.contains(r#"<span class="same">  /// Place an order.</span>"#)
-            && card.contains(r#"<span class="add">+     check_cart();</span>"#)
-            && !card.contains(r#"class="del""#),
+        card.contains(r#"data-test="piece-code"><span class="muted">The code · 1 part:</span>"#)
+            && card.contains(r#"<a class="link" href="https://example.test/A/api/src/lib.rs#L1" target="_blank" rel="noopener" data-test="code-link" title="api/src/lib.rs:1">before</a>"#)
+            && card.contains(r#"<a class="link" href="https://example.test/B/api/src/lib.rs#L1" target="_blank" rel="noopener" data-test="code-link" title="api/src/lib.rs:1">after, api/src/lib.rs:1</a>"#)
+            && !card.contains("code-diff"),
         "{card}"
     );
     assert!(
