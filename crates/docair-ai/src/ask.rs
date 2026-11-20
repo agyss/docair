@@ -494,9 +494,10 @@ fn check_draft(
             let item = code_item(n).unwrap_or_default();
             let (bad, good): (Vec<String>, Vec<String>) =
                 std::mem::take(&mut c.add).into_iter().partition(|t| {
-                    ["@in ", "@out ", "@calls "]
-                        .iter()
-                        .any(|k| t.trim_start().starts_with(k))
+                    // By the tag's name, however it is spaced or written.
+                    t.split_whitespace().next().is_some_and(|w| {
+                        ["@in", "@out", "@calls"].contains(&w.to_lowercase().as_str())
+                    })
                 });
             c.add = good;
             for t in bad {
@@ -831,7 +832,7 @@ mod tests {
         cli.tags.clear();
         g.nodes.push(cli);
         let draft: DraftReply = serde_json::from_str(
-            r#"{"answer":"A.","changes":[{"node":"cli","summary":"The parsed command line.","add":["@out args: Cli to a","@part-of a"],"why":"w"},{"node":"cli","add":["@in x: X from a"],"why":"w"}]}"#,
+            r#"{"answer":"A.","changes":[{"node":"cli","summary":"The parsed command line.","add":["@out args: Cli to a","@part-of a"],"why":"w"},{"node":"cli","add":["@IN\tx: X from a"],"why":"w"}]}"#,
         )
         .unwrap();
         let (reply, repair) = check_draft(draft, &g, "q", &cfg());

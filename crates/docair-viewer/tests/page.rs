@@ -937,7 +937,7 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     .unwrap();
     let list = panels["changes"].as_str().unwrap();
     assert!(
-        list.contains(r#"data-test="review-stale">The review is older than these changes: 1 piece it does not cover is in docair's words."#)
+        list.contains(r#"data-test="review-stale">The review is older than these changes: 1 piece it does not cover is in docair's words; 1 of its changes, about pieces gone now, is left out with what it found off."#)
             && list.contains(r#"data-test="explain" data-served hidden data-a="0123456789abcdef0123456789abcdef01234567""#)
             && list.contains("✦ Review again")
             && !list.contains("Gone by now.")

@@ -947,6 +947,7 @@ fn review_view(
         })
         .cloned()
         .collect();
+    let dropped = stored.len() - found.len();
     let left = review_ids(changed.findings, "left");
     let held: HashSet<&str> = stored
         .iter()
@@ -970,13 +971,28 @@ fn review_view(
             }));
         }
     }
-    // A review older than the change says so, and offers to review again (docair-8l6.67).
-    if !newer.is_empty() {
+    // A review older than the change says so, what it misses and what it left out, and offers to
+    // review again (docair-8l6.67).
+    if !newer.is_empty() || dropped > 0 {
+        let mut said = Vec::new();
+        if !newer.is_empty() {
+            said.push(format!(
+                "{} it does not cover {} in docair's words",
+                count(newer.len(), "piece"),
+                if newer.len() == 1 { "is" } else { "are" }
+            ));
+        }
+        if dropped > 0 {
+            said.push(format!(
+                "{} of its changes, about pieces gone now, {} left out with what it found off",
+                dropped,
+                if dropped == 1 { "is" } else { "are" }
+            ));
+        }
         let _ = write!(
             out.list,
-            r#"<p class="muted" data-test="review-stale">The review is older than these changes: {} it does not cover {} in docair's words. {command} reviews them again.</p>{}"#,
-            count(newer.len(), "piece"),
-            if newer.len() == 1 { "is" } else { "are" },
+            r#"<p class="muted" data-test="review-stale">The review is older than these changes: {}. {command} reviews them again.</p>{}"#,
+            said.join("; "),
             button("✦ Review again")
         );
     }

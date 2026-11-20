@@ -489,14 +489,36 @@ fn insert_block(text: &str, c: &Change) -> Result<String, String> {
     if c.line == 0 || c.line > lines.len() {
         return Err("the code line is outside the file".into());
     }
-    // Above attributes and decorators that belong to the item.
+    // Above attributes and decorators that belong to the item, also one that spans lines,
+    // `#[command(` … `)]` or `@Component({` … `})` (docair-0mw).
+    let opens = |l: &str| l.starts_with("#[") || (lang.name == "typescript" && l.starts_with('@'));
     let mut at = c.line - 1;
     while at > 0 {
         let prev = lines[at - 1].trim_start();
-        if prev.starts_with("#[") || (lang.name == "typescript" && prev.starts_with('@')) {
+        if opens(prev) {
             at -= 1;
-        } else {
+            continue;
+        }
+        let ends = prev.trim_end();
+        if !(ends.ends_with(']') || ends.ends_with(')')) {
             break;
+        }
+        // Up to the line it opens on, its brackets balanced; at most 40 lines.
+        let mut depth = 0i32;
+        let start = (at.saturating_sub(40)..at).rev().find(|&k| {
+            let l = lines[k].trim_start();
+            for ch in l.chars() {
+                match ch {
+                    ']' | ')' | '}' => depth += 1,
+                    '[' | '(' | '{' => depth -= 1,
+                    _ => {}
+                }
+            }
+            depth == 0 && opens(l)
+        });
+        match start {
+            Some(k) => at = k,
+            None => break,
         }
     }
     let indent = indent_of(&lines[at]);
@@ -722,6 +744,36 @@ mod tests {
         assert_eq!(
             r.files[0].after,
             "fn a() {}\n\n    /***\n     * Do the plain thing.\n     *\n     * @calls srv.config\n     ***/\n    #[inline]\n    pub fn plain() {}\n"
+        );
+    }
+
+    /// An attribute that spans lines stays with its item: the block goes above all of it (docair-0mw).
+    #[test]
+    fn a_block_goes_above_an_attribute_that_spans_lines() {
+        let text = "use x;\n#[derive(Parser)]\n#[command(\n    name = \"docair\",\n    about = \"a [b] c\"\n)]\nstruct Cli {\n    n: u8,\n}\n";
+        let nodes = [node("cli.cli", "src/main.rs", 7, Origin::Inferred)];
+        let mut c = change("cli.cli", &[], &[]);
+        c.summary = Some("The command line.".into());
+        let c = resolve(&c, &nodes).unwrap();
+        let r = patch(&[c], &|_| Some(text.to_string()), &ids());
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert_eq!(
+            r.files[0].after,
+            "use x;\n/***\n * The command line.\n ***/\n#[derive(Parser)]\n#[command(\n    name = \"docair\",\n    about = \"a [b] c\"\n)]\nstruct Cli {\n    n: u8,\n}\n"
+        );
+        // A line that only ends in a bracket, with no attribute above it, keeps the block where it was.
+        let plain = "let v = [\n    1,\n];\nfn f() {}\n";
+        let nodes = [node("cli.f", "src/main.rs", 4, Origin::Inferred)];
+        let mut c = change("cli.f", &[], &[]);
+        c.summary = Some("F.".into());
+        let c = resolve(&c, &nodes).unwrap();
+        let r = patch(&[c], &|_| Some(plain.to_string()), &ids());
+        assert!(
+            r.files[0]
+                .after
+                .contains("];\n/***\n * F.\n ***/\nfn f() {}"),
+            "{}",
+            r.files[0].after
         );
     }
 

@@ -24,6 +24,8 @@ pub const SCHEMA: &str = "docair.explained/2";
 pub const MAX_CHARS: usize = 60_000;
 /// A run asks the model at most this often, unless `[explain] max_requests` says otherwise.
 pub const MAX_REQUESTS: usize = 8;
+/// A request of a review asked in parts names the others' pieces in at most this many characters (docair-8l6.60).
+pub const MAX_ELSEWHERE: usize = MAX_CHARS / 4;
 /// At most this many requests of one explain go to the model at once (docair-8l6.14).
 pub const AT_ONCE: usize = 3;
 
@@ -745,15 +747,30 @@ fn others_of<'p>(batches: &[Vec<&'p Piece>], k: usize) -> Vec<&'p Piece> {
         .collect()
 }
 
-/// What a request is told of the others (docair-8l6.60): the pieces they hold, to leave to them.
+/// What a request is told of the others (docair-8l6.60): the pieces they hold, to leave to them; at
+/// most `MAX_ELSEWHERE` characters of their ids, then how many more.
 fn elsewhere(others: &[&Piece]) -> String {
     if others.is_empty() {
         return String::new();
     }
+    let mut ids: Vec<&str> = Vec::new();
+    let mut size = 0;
+    for p in others {
+        size += p.id().len() + 3;
+        if size > MAX_ELSEWHERE {
+            break;
+        }
+        ids.push(p.id());
+    }
+    let more = others.len() - ids.len();
     format!(
-        "\n\nThe review is asked in parts. These pieces are asked about in the other parts, not here: never put them, or the parts they hold, into \"how\"; a change that needs them is made there, and the last request merges it with yours.\n{}",
-        serde_json::to_string(&others.iter().map(|p| p.id()).collect::<Vec<_>>())
-            .unwrap_or_default()
+        "\n\nThe review is asked in parts. These pieces are asked about in the other parts, not here: never put them, or the parts they hold, into \"how\"; a change that needs them is made there, and the last request merges it with yours.\n{}{}",
+        serde_json::to_string(&ids).unwrap_or_default(),
+        if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        }
     )
 }
 
@@ -959,10 +976,10 @@ pub fn explain_with(
         batches
     };
     // Asked in parts, each request also names the pieces the others hold (docair-8l6.60): room for them.
+    // The room is what that list says at most, its words included, so no request goes past MAX_CHARS.
     let mut batches = pack(MAX_CHARS);
     if batches.len() > 1 {
-        let ids: usize = todo.iter().map(|p| p.id().len() + 4).sum();
-        batches = pack(MAX_CHARS.saturating_sub(ids).max(MAX_CHARS / 2));
+        batches = pack(MAX_CHARS - elsewhere(&todo).len());
     }
     let recorded = Recorded {
         by: "model".into(),

@@ -275,8 +275,10 @@ does.
 
 A review too big for one request is asked in parts, the pieces in their
 order, the intent with each part, and with each part the ids of the pieces
-the other parts hold, to leave to them (decision docair-rl6, docair-8l6.60);
-a split review keeps room for that list. What a part's answer still puts
+the other parts hold, to leave to them (decision docair-rl6, docair-8l6.60),
+at most `MAX_ELSEWHERE` (a quarter of a request) of their ids, then how many
+more; a split review keeps room for that list with its words, so no request
+passes 60,000 characters (docair-8l6.68). What a part's answer still puts
 into *how* of another part's pieces is left to that part before binding, and
 a change left with nothing goes; each part says so once among the problems. Then one last request (decision
 docair-8l6.56, replacing 8l6.31, 8l6.41 and 8l6.50) gets every change by
@@ -310,7 +312,7 @@ than the stored review, when the change moved on after `docair explain`
 (docair-8l6.67): each is a change of its own in docair's words, marked so.
 A review that does not cover every piece says how many it misses and offers,
 served, *✦ Review again*; a stored change none of whose pieces are there now
-is left out.
+is left out with what it found off, and the notice says how many (docair-8l6.68).
 
 ### 9.3 What the AI gives back
 
