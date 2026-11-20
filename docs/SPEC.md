@@ -90,7 +90,7 @@ Each stage has one job. A stage only consumes the output of the stage before it.
 
 ### 1.1 Configuration: `docair.toml`
 
-Optional, at the project root. Without it, docair scans the root and names the
+Optional, at the project root. Without it, docair builds the root and names the
 system after the directory.
 
 ```toml
@@ -152,7 +152,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 
 | Command          | Runs stages | Result |
 |------------------|-------------|--------|
-| `docair build` (also `docair scan`) | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
+| `docair build` | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
 | `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
 | `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
 | `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`) with each changed part's whole text before and after, the changed files no part holds, the commit messages and the changed docs (as claims, without ids) go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why in its own words, the commits and docs it read for each change, folded (docair-8l6.71), what it found off (each a contradiction, what a commit message, a doc or a code comment says, and which one, against what the code clearly does otherwise; or what the code does that nothing mentions; or a risk in the code), and what to check; every claim bound against both graphs and the pieces, every piece a change, one the AI puts in none shown as a change of its own in docair's words; kept in `[explain] store` (default `.docair/changes/<A>..<B>.json`, `docair.explained/2`; docair serve notices one stored there, docair-8l6.74), asked again whole when its changes and the pieces it put in none no longer cover the pieces, else kept as stored (no hand corrections, docair-8l6.75); everything that changed goes whole, nothing cut, in one request of at most `[explain] max_chars` (default 1,000,000 characters; a review that needs more is an error, never split, docair-8l6.79), its answer streamed, with `[explain] reasoning` (default low), and one more request that places the pieces left in no change or makes changes of them (docair-8l6.69); progress on stderr, each change as soon as it is whole; the review as a pull request comment on stdout |
@@ -559,9 +559,10 @@ move.
   bundles: drawn once per pair and direction, thicker the more edges it stands
   for, and labelled with what they carry (`POST /api/scan · POST /api/ask +4`,
   `scan() · write_json()`, `NodePort 30080 → :8000`).
-* On the chart, a label has at most 48 characters, broken into lines of about
-  28 so a long label makes the picture taller, not wider; the tip has every
-  word.
+* On the chart, a label is whole, broken into lines of about 28 characters so
+  a long label makes the picture taller, not wider (docair-702.43). A bundled
+  line, one drawn line for several of the graph's, names two of them and
+  counts the rest; the tip has every word.
 * **Lines at right angles.** A line is drawn exactly on its route: only
   horizontal and vertical pieces, both ends pinned where the router ends it
   (left to itself, Cytoscape aims from a part's centre at the first bend,
@@ -810,8 +811,10 @@ by docair.
   dashed, one that only may reach its part (`could`) dashed.
 * A call through a trait or an interface says how many parts it may reach:
   `calls one of 5` (docs/ADAPTERS.md §5.5).
-* A line's words take at most two lines of 28 columns, the second cut with
-  `…` (docair-702.34; the whole words are in the line's tip and details).
+* A line's words show whole, in lines of 28 columns, however many they take;
+  the layout gives each gap between rows room for its lines' words
+  (docair-702.43, replacing the two-line cut of 702.34). On docair's page this
+  makes the pictures 1.7% bigger together and puts no words on a part.
   The layout puts them on or beside their line where they cover no part, no
   other words and no other line, else where they cover least, each other
   line under them costing the same; they stand on an opaque tag with a thin
@@ -830,7 +833,7 @@ by docair.
 * Golden pictures: every layer of each e2e fixture and every slice of the
   shop, in `crates/docair-viewer/tests/golden`; `DOCAIR_BLESS=1` rewrites them.
 
-**The documentation page** (docs/SLICES.md §4). `docair scan` (and `docair
+**The documentation page** (docs/SLICES.md §4). `docair build` (and `docair
 serve`, and the server for an upload) writes every picture a reader can reach
 into `docair.html`:
 
@@ -904,7 +907,10 @@ into `docair.html`:
   part, the datum's page, the term's entry, the line when the picture draws
   it), kept with the conversation; the chips put in leave the box above, the
   selection's stays (decision docair-t2z). Each earlier turn carries its
-  refs, so a follow-up's input still says what it pointed at (docair-rgz). On a
+  refs, so a follow-up's input still says what it pointed at (docair-rgz).
+  ⟲ in the chat's header starts a new conversation: the questions and answers
+  and the chips put in go, also from the kept log, and the next question goes
+  without the earlier ones, its edits waiting afresh (docair-702.38). On a
   wide screen the open chat takes its own room beside the details. Word the
   lines and Explain the terms go to
   `/api/word` and `/api/glossary`. The server writes each reply as HTML
@@ -986,7 +992,7 @@ into `docair.html`:
 | addresses | 1 266: 6 layers, 184 sections, 1 076 slices |
 | pictures drawn | 1 317, of which 51 twice (tests) |
 | the page | 6.3 MB with the panels and walks (pictures 3.8 MB; details, tips, search words, glossary, data, docs and walks 1.5 MB; the tree 0.6 MB), nothing loaded from elsewhere; the viewer's page: 4.7 MB |
-| `docair scan .` with the page, layouts and code index kept | 2.4 s (0.67 s with the old page, which laid out in the browser) |
+| `docair build .` with the page, layouts and code index kept | 2.4 s (0.67 s with the old page, which laid out in the browser) |
 | … with no layout kept | 24.5 s |
 | the page ready in the browser; a section shown after its link | about 150 ms (the old page: seconds of layout); 45 ms |
 
@@ -1456,7 +1462,7 @@ topic is touched.
 |-------------|----------|---------|
 | `@scenario` | `<name>` | This block describes scenario `<name>`. Its summary is the title, its description says what the reader learns. |
 | `@actor`    | text     | Who or what starts it: `shopper`, `developer`, `CI`, `cron`. |
-| `@trigger`  | text     | What starts it: `clicks "Buy" on the cart page`, `docair scan .`, `every night at 02:00`. |
+| `@trigger`  | text     | What starts it: `clicks "Buy" on the cart page`, `docair build .`, `every night at 02:00`. |
 
 A scenario block is a free block, usually a fenced `docair` block in a README.
 It describes the scenario, not a node, so it needs no `@id`.

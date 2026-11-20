@@ -12,7 +12,7 @@ npm ci && npx playwright install chromium   # once
 npm run build                               # docair, docair-server, the web app
 npm test                                    # starts docair-server and the fake model itself
 E2E_BASE_URL=http://localhost:8080 npm test # against the kind cluster (skips the fake-model tests)
-npm run docs                                # docair scan of the repo: the results show on the test nodes
+npm run docs                                # docair build of the repo: the results show on the test nodes
 ```
 
 Each test has a docair block: `@kind test` and `@covers` what it exercises,

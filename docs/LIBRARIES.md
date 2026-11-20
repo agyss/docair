@@ -1,7 +1,7 @@
 # Libraries
 
 Decision record for docair's dependencies (2026-11-14). The choices are verified
-by the proof of concept in this repository: `docair scan .` run on docair itself.
+by the proof of concept in this repository: `docair build .` run on docair itself.
 
 ## What drives the choice
 
@@ -108,7 +108,7 @@ code.
 
 ## Proof of concept, verified on docair itself
 
-`docair scan .` writes `.docair/docair.graph.json` and `.docair/docair.html`.
+`docair build .` writes `.docair/docair.graph.json` and `.docair/docair.html`.
 docair's own sources are documented in docair format in every comment family:
 Rust, JavaScript, TOML (`Cargo.toml`, `docair.toml`) and HTML. Markdown is used in
 all three ways: README group docs, a sibling file (`resolve.md`) with an

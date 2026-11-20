@@ -296,6 +296,29 @@ test.describe('clarify with AI', () => {
     expect(earlier).toContain('- part `orders.create`');
     expect(earlier).toContain('- datum `data.order`');
   });
+
+  /***
+   * New conversation starts over: the questions and answers go, also after a reload, and the next question goes to the model without the earlier ones.
+   *
+   * @part-of e2e.ask
+   * @covers  docair-viewer.doc-page.chat "checks New conversation starts over"
+   ***/
+  test('New conversation starts over', async ({ page }) => {
+    await ask(page, 'What does the cart do, before starting over?');
+    await expect(page.getByTestId('msg-user')).toHaveCount(1);
+    await page.getByTestId('new-chat').click();
+    await expect(page.getByTestId('msg-user')).toHaveCount(0);
+    await expect(page.getByTestId('msg-ai')).toHaveCount(0);
+    await page.reload();
+    await ready(page);
+    await expect(page.getByTestId('msg-user')).toHaveCount(0);
+    await ask(page, 'And a first question after starting over?');
+    const sent = (await (await page.request.get(`${fakeAi}/requests`)).json())
+      .filter((r: any) => (r.messages.at(-1)?.content || '').includes('after starting over?'))
+      .at(-1);
+    // The prompt, the graph and its answer, then the question: no earlier turn.
+    expect(sent.messages.filter((m: any) => m.role === 'user')).toHaveLength(2);
+  });
 });
 
 /***

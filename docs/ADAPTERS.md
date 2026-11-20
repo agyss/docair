@@ -14,7 +14,7 @@ parts that have no code (external systems, data, people).
 
 ## 1. Where we are
 
-Measured on docair's own repository (`docair scan .`, 2026-11-17):
+Measured on docair's own repository (`docair build .`, 2026-11-17):
 
 | | |
 |---|---|
@@ -328,7 +328,7 @@ Division of work:
 | tree-sitter adapter + rules | symbols, spans, framework facts (routes, requests), calls the syntax makes certain | nothing: works on any folder, also an upload that cannot build |
 | SCIP index | every call and reference, with types | the project's toolchain: Cargo and its dependencies, Node and `node_modules` |
 
-`docair scan` runs the indexers it finds installed, or reads index files named
+`docair build` runs the indexers it finds installed, or reads index files named
 in docair.toml (built in CI, for example). Without an index, the syntax still
 shows many types: Rust declares them on parameters and fields, and
 `let mut parser = Parser::new()` with `use tree_sitter::Parser` makes
@@ -553,7 +553,7 @@ found 4 (two `@in … from`, two `@calls` without words), and removed them.
 | details, Tags tab | a repeated tag is marked **✂ the code says this**, linked to that code, with *Tidy this tag* |
 | in the web app | **Apply** writes the edits through `/api/patch` and regenerates the page, like the AI's edits |
 | page opened as a file | **Copy command** (`docair tidy --apply`) and **Download patch** |
-| CLI | `docair tidy` lists them and writes `.docair/docair.patch`; `--apply` writes them into the files. `docair scan` and `docair check` end with one line: "58 tags repeat the code: run `docair tidy`" |
+| CLI | `docair tidy` lists them and writes `.docair/docair.patch`; `--apply` writes them into the files. `docair build` and `docair check` end with one line: "58 tags repeat the code: run `docair tidy`" |
 
 ---
 

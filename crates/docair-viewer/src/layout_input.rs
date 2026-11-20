@@ -10,8 +10,6 @@ use docair_core::layer_view::{LayerLine, LayerPart, LayerPicture, route_path};
 use docair_core::model::{Edge, EdgeKind, Graph, Node, Reach};
 use docair_layout::{Input, Layout, Line, Monospace, Options, Part, Placement};
 
-/// The most characters a line's words have in the picture.
-const LABEL_MAX: usize = 48;
 /// The size of a part's name, in px (a line's words: docair_layout::words_size).
 const PART_FONT: f64 = 12.0;
 /// The kinds of lines that say who depends on whom: the way things happen.
@@ -60,17 +58,6 @@ fn verb(kind: EdgeKind) -> &'static str {
         EdgeKind::Select => "selects",
         EdgeKind::Create => "creates",
         EdgeKind::Cover => "tests",
-    }
-}
-
-/// `text` cut to `max` characters, with an ellipsis.
-fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() > max {
-        let mut out: String = text.chars().take(max - 1).collect();
-        out.push('…');
-        out
-    } else {
-        text.to_string()
     }
 }
 
@@ -181,7 +168,8 @@ fn short_words(g: &GraphLookup, e: &Edge) -> String {
             .unwrap_or_default();
         return format!("{method} {path}").trim().to_string();
     }
-    clip(&describe_edge(g, e), 30)
+    // Whole, however long (docair-702.43).
+    describe_edge(g, e)
 }
 
 /// The parts a line passes, in a few words: its gateways when it has any, else every part.
@@ -315,14 +303,14 @@ fn line_words(g: &GraphLookup, l: &LayerLine) -> String {
         Some(n) => format!("{what} · one of {n}"),
         None => what,
     };
-    let what = clip(&what, LABEL_MAX);
     let all = if l.via.is_empty() {
         what
     } else {
         format!("{what} · via {}", via_words(g, &l.via))
     };
-    // At most two lines in the picture; the whole words stay in the line's tip (docair-702.34).
-    docair_layout::text::cut(&all, docair_layout::text::WORDS_COLUMNS, 2)
+    // Whole in the picture, however many lines they take; the layout makes room for them
+    // (docair-702.43, replacing the two-line cut of 702.34).
+    all
 }
 
 /// The size of a part of a kind, for its words.

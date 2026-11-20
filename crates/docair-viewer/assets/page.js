@@ -287,13 +287,11 @@ function wireChat() {
   };
   state.log.forEach(add);
   const say = (e) => (state.log.push(e), add(e), save());
-  const open = (on) => {
-    chat.hidden = !on;
-    state.open = on;
-    save();
-  };
+  const open = (on) => ((chat.hidden = !on), (state.open = on), save());
   $('#btn-ask')?.addEventListener('click', () => open(chat.hidden));
   chat.querySelector('[data-chat-close]').addEventListener('click', () => open(false));
+  // New conversation (docair-702.38): the log, the history and the chips put in go; the next question starts afresh.
+  chat.querySelector('[data-chat-new]').addEventListener('click', () => ((state.log = []), (state.history = []), log.querySelectorAll('.msg').forEach((m) => m.remove()), (S.refs = []), context(), save()));
   chat.hidden = !state.open;
   // Off, the panel says why: its own words, or the server's (an upload it no longer keeps).
   const off = (which, said) => {

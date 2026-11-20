@@ -201,6 +201,40 @@ fn a_line_for_one_test_shows_its_words() {
     assert!(drawn.contains(">1 test<"), "one without words says 1 test");
 }
 
+/// A line's words show whole in the picture, however many lines they take (docair-702.43).
+#[test]
+fn a_lines_words_show_whole() {
+    let dir = std::env::temp_dir().join(format!("docair-whole-words-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("README.md"),
+        "# Shop\n\n```docair\nThe cart.\n\n@id      cart\n@kind    component\n@calls   store (the cart with every item the shopper picked and the coupon they typed in) -> a receipt the shop keeps\n```\n\n```docair\nThe store.\n\n@id      store\n@kind    store\n```\n",
+    )
+    .unwrap();
+    let g = scan(&dir, docair_adapters::all(), &Options::default()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut drawn = String::new();
+    for l in layers(&g) {
+        if let Some(p) = picture(&g, l.key, &[], Some(true)) {
+            drawn.push_str(&svg::draw(&g, &p, &layout_input::lay_out(&g, &p)));
+        }
+    }
+    let words = drawn
+        .split(r#"<g class="words"#)
+        .skip(1)
+        .find(|w| w.contains("coupon"))
+        .unwrap_or_else(|| panic!("the words are drawn: {drawn}"));
+    let words = &words[..words.find("</g>").unwrap()];
+    assert!(
+        words.matches("<tspan").count() > 2,
+        "more than two lines: {words}"
+    );
+    assert!(
+        words.contains("receipt") && !words.contains('…'),
+        "whole, not cut: {words}"
+    );
+}
+
 /// The check for colours written out finds a colour and passes a line's ids.
 #[test]
 fn a_colour_written_out_is_found_and_a_lines_ids_are_not() {

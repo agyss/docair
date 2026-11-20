@@ -68,7 +68,7 @@
 | `docair-layout`| lays out nested boxes: own layered placement per box, top-down sizing, the right-angled router; no docair dependency, a library of its own ([SLICES.md](SLICES.md) §5) | PoC |
 | `docair-layout-wasm`| docair-layout's move of a part by hand, built to WebAssembly for the page: the moved part's lines routed again by the same router; the crate's build script builds the module for wasm32 with every build, from the code as it is (docair-702.42; a build needs the wasm32 target) ([SLICES.md](SLICES.md) §7) | PoC |
 | `docair-viewer`| the documentation as one self-contained HTML page: maps layers, sections and slices to `docair-layout`, draws every picture as SVG, writes the panels (details, tree, glossary, walks, the AI panel for `docair serve`) and packs it all with a thin script; no library in the page ([SLICES.md](SLICES.md) §4, §6, §7) | PoC |
-| `docair-cli`   | `docair scan`, `docair check`, `docair slice`, `docair layer`, `docair ask` and the other AI commands, `docair serve` (later: `docair mermaid`) | PoC |
+| `docair-cli`   | `docair build`, `docair check`, `docair slice`, `docair layer`, `docair ask` and the other AI commands, `docair serve` (later: `docair mermaid`) | PoC |
 | `docair-server`| the HTTP server, one router for two programs: the docair-server program (uploads: `POST /api/scan` turns an uploaded folder into a docair page) and `docair serve` (a project: its documentation at `/`, the AI routes on its own graph, `/api/version`, `/api/apply`); `project` holds the steps both share with the CLI (an answer taken in, edits applied, the documentation written again) | PoC |
 
 Around the crates:
@@ -81,7 +81,7 @@ Around the crates:
 | `infra/terraform/` | a kind cluster, the images, Traefik and the chart, from one `terraform apply` |
 
 The system is documented in its own format, from the machine down to the
-code: `docair scan .` draws the workstation, Docker, the kind network and
+code: `docair build .` draws the workstation, Docker, the kind network and
 cluster, the namespaces and their objects, the containers, the apps and their
 functions, as one tree you can zoom through.
 

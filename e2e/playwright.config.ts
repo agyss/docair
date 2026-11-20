@@ -6,7 +6,7 @@ import { defineConfig, devices } from '@playwright/test';
  * E2E_BASE_URL (e.g. http://localhost:8080, the kind cluster) to test a running
  * deployment instead; the tests that need the fake model are skipped there.
  *
- * The JSON report lands in test-results/results.json; `docair scan` puts the
+ * The JSON report lands in test-results/results.json; `docair build` puts the
  * results on the test nodes of docair's own docs (docair.toml [tests]).
  */
 const external = process.env.E2E_BASE_URL;

@@ -147,7 +147,7 @@ pub struct Options {
  * @flow  scan 2 "the pipeline starts"
  * @flow  check 2 "stages 1 to 6 run"
  * @flow  ask 2 "stages 1 to 6 run"
- * @flow  upload 14 "docair scans the uploaded folder"
+ * @flow  upload 14 "docair builds the uploaded folder"
  * @calls docair-core.config.load "reads docair.toml or the defaults"
  * @calls docair-core.adapter.collect "lets the adapters read the code"
  * @calls docair-core.env.link "gives reads of environment variables lines from what sets them"

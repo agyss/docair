@@ -4,7 +4,7 @@ import path from 'node:path';
 import { docair, fixture, graphOf, openStatic, out } from './helpers';
 
 test.beforeAll(() => {
-  execFileSync(docair, ['scan', fixture('apis'), '--out', path.join(out, 'apis')]);
+  execFileSync(docair, ['build', fixture('apis'), '--out', path.join(out, 'apis')]);
 });
 
 /***

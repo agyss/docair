@@ -5,7 +5,7 @@
   "scripts": {
     "build": "cargo build --release -p docair-cli -p docair-server && npm --prefix ../web run build",
     "test": "playwright test",
-    "docs": "cd .. && ./target/release/docair scan ."
+    "docs": "cd .. && ./target/release/docair build ."
   },
   "devDependencies": {
     "@playwright/test": "1.64.1"

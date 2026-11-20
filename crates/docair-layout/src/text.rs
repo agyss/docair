@@ -66,27 +66,10 @@ fn is_wide(u: u32) -> bool {
     )
 }
 
-/// A text in lines of about `width` columns, broken between words, so a long text makes a picture taller, not wider.
 /// How wide a line's words wrap in a picture, in columns.
 pub const WORDS_COLUMNS: usize = 28;
 
-/// The words wrapped at `width` columns and cut to `lines` lines: the last one ends in `…` when
-/// words were left out (docair-702.34). Wrapped again, the result keeps the same lines.
-pub fn cut(text: &str, width: usize, lines: usize) -> String {
-    let wrapped = wrap(text, width);
-    if wrapped.len() <= lines || lines == 0 {
-        return text.to_string();
-    }
-    let mut kept: Vec<String> = wrapped[..lines].to_vec();
-    if let Some(last) = kept.last_mut() {
-        while !last.is_empty() && columns(last) + 1 > width {
-            last.pop();
-        }
-        *last = format!("{}…", last.trim_end());
-    }
-    kept.join(" ")
-}
-
+/// A text in lines of about `width` columns, broken between words, so a long text makes a picture taller, not wider.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split(' ') {
@@ -104,20 +87,6 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Cut to two lines, words keep two lines and end in …; wrapped again, they stay two lines.
-    #[test]
-    fn words_cut_to_two_lines_end_in_an_ellipsis() {
-        let long = "config: Config · graph : Graph +1 · via docair-ai › docair-viewer › docair-cli";
-        let cut2 = cut(long, 28, 2);
-        let lines = wrap(&cut2, 28);
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(
-            cut2.ends_with('…') && lines.iter().all(|l| columns(l) <= 28),
-            "{cut2}"
-        );
-        assert_eq!(cut("calls", 28, 2), "calls", "short words stay as they are");
-    }
 
     #[test]
     fn a_word_is_its_columns_times_the_advance() {

@@ -30,7 +30,7 @@ See: docair-core.scan, graph-json
 Everything docair knows about a system: the nodes (its parts), the edges
 between them, the scenarios, the walkthroughs and the diagnostics.
 
-`docair scan` writes it as `docair.graph.json`, the contract between the
+`docair build` writes it as `docair.graph.json`, the contract between the
 backend and the viewer: [SPEC §9](SPEC.md#9-output-docairgraphjson-stage-7-emit).
 
 ## node

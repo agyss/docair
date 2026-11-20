@@ -22,7 +22,7 @@ test.describe('tidy the tags the code repeats', () => {
   test('a page opened as a file counts them and offers the command', async ({ page }) => {
     const folder = copyOf('tidy');
     const out = path.join(path.dirname(folder), 'out');
-    execFileSync(docair, ['scan', folder, '--out', out]);
+    execFileSync(docair, ['build', folder, '--out', out]);
     await page.goto(pathToFileURL(path.join(out, 'docair.html')).href);
     await ready(page);
     await expect(page.getByTestId('tidy-button')).toHaveText('✂ Tidy · 1');

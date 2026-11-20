@@ -19,7 +19,7 @@ test.describe('what the words mean, the code first', () => {
   test.describe.configure({ mode: 'serial' });
 
   test.beforeAll(() => {
-    execFileSync(docair, ['scan', fixture('words'), '--out', path.join(out, 'words')]);
+    execFileSync(docair, ['build', fixture('words'), '--out', path.join(out, 'words')]);
   });
 
   /***

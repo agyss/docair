@@ -139,7 +139,7 @@ that a page updated in place equals a new page of the same graph.
   which matters only on a slow link.
 * **An answer without the page:** with §4, the app needs 2.1 MB of the
   6.6 MB answer.
-* **The CLI's code index:** `docair scan .` takes 6.0 s, 5.5 s of it
+* **The CLI's code index:** `docair build .` takes 6.0 s, 5.5 s of it
   `rust-analyzer scip`. Keeping the index by a hash of the Rust files is
   the cache per file hash that ADAPTERS.md §11 plans for later.
 

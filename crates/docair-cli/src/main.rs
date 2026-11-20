@@ -27,7 +27,6 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Build the documentation, on demand: run all stages, write docair.graph.json and docair.html.
-    #[command(visible_alias = "scan")]
     Build {
         /// Project root.
         #[arg(default_value = ".")]
@@ -383,9 +382,9 @@ fn main() -> ExitCode {
 }
 
 /***
- * `docair scan`: build the graph, then write the JSON file and the HTML page.
+ * `docair build`: build the graph, then write the JSON file and the HTML page.
  *
- * @flow  scan 1 "the user runs docair scan"
+ * @flow  scan 1 "the user runs docair build"
  * @calls docair-core.scan "builds the graph of the project"
  * @calls docair-core.emit.write_json "saves the graph for other tools"
  * @calls docair-viewer.write_html "renders the viewer page"

@@ -67,7 +67,7 @@ cargo test --workspace                      # unit tests and the golden graphs
 cargo clippy --workspace --all-targets      # no warnings
 cargo fmt --all --check
 cargo run -p docair-cli -- check .          # docair on itself: 0 errors, 0 warnings
-cargo run -p docair-cli -- scan .           # .docair/docair.html, docair's own page
+cargo run -p docair-cli -- build .           # .docair/docair.html, docair's own page
 ```
 
 - Golden graphs: `crates/docair-adapters/tests/golden/*.graph.json`. A change that

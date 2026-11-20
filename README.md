@@ -3,7 +3,7 @@
 docair reads doc blocks, Markdown and code, and draws how a whole system works:
 from the machine and the Kubernetes cluster down to single functions, in one
 self-contained HTML page. This repository is documented in docair's own format,
-so `docair scan .` draws docair itself.
+so `docair build .` draws docair itself.
 
 ```
                  ┌──────────────────────────── workstation (Docker) ─────────────────────────────┐
@@ -46,7 +46,7 @@ DOCAIR_BIND=127.0.0.1:8081 DOCAIR_STATIC_DIR=web/dist/docair-web/browser cargo r
 
 ```bash
 cargo run -p docair-cli -- check .          # diagnostics, non-zero exit on errors
-cargo run -p docair-cli -- scan .           # .docair/docair.graph.json and .docair/docair.html
+cargo run -p docair-cli -- build .           # .docair/docair.graph.json and .docair/docair.html
 ```
 
 **Clarify with AI** (docs/SPEC.md §10): ask how something works, say what you
@@ -71,12 +71,12 @@ then applied and the page regenerated.
 
 **The e2e tests** (e2e/README.md): `cd e2e && npm ci && npm run build && npm test`.
 They run against a fake AI endpoint, so they are repeatable; afterwards
-`docair scan .` shows every test on the page, next to what it covers, with its
+`docair build .` shows every test on the page, next to what it covers, with its
 result.
 
 ## Look around
 
-Open `.docair/docair.html` after `docair scan .`. The header's **Layer** switch
+Open `.docair/docair.html` after `docair build .`. The header's **Layer** switch
 shows one concern at a time (docs/SPEC.md §3.4):
 
 | Layer | Answers |
