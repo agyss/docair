@@ -40,6 +40,8 @@ struct TfBlock {
     file: String,
     /// 1-based line of the block's first line.
     line: usize,
+    /// 1-based line of its closing brace (docair-zrr.33).
+    end: usize,
     kind: String,
     labels: Vec<String>,
     body: Vec<String>,
@@ -112,6 +114,7 @@ fn tf_blocks(file: &str, text: &str) -> Vec<TfBlock> {
             out.push(TfBlock {
                 file: file.to_string(),
                 line: i + 1,
+                end: j.max(i + 1),
                 kind: first.to_string(),
                 labels,
                 body,
@@ -130,6 +133,8 @@ struct K8sObject {
     file: String,
     /// 1-based line where the object starts (its `apiVersion:`).
     line: usize,
+    /// 1-based line of its document's last line that is not blank (docair-zrr.33).
+    end: usize,
     kind: String,
     name: String,
     namespace: Option<String>,
@@ -443,9 +448,14 @@ fn k8s_doc(file: &str, lines: &[&str], offset: usize) -> Option<K8sObject> {
         name = stem;
     }
     routes.retain(|(_, _, s, _)| !s.contains("{{"));
+    let last = lines
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .unwrap_or(api);
     Some(K8sObject {
         file: file.to_string(),
         line: offset + api + 1,
+        end: offset + last.max(api) + 1,
         kind,
         name,
         namespace,
@@ -1659,6 +1669,8 @@ impl Index {
                         "terraform resource",
                     );
                     s.display = Some(format!("{} {}", r.kind, r.address()));
+                    // Its last line too, so an edit anywhere in it is a change (docair-zrr.33).
+                    s.end = Some(r.end);
                     out.add(s, self.resource_relations(r, None));
                 }
                 for s in self.created(r) {
@@ -1697,6 +1709,7 @@ impl Index {
                     &format!("Kubernetes kind `{}`", o.kind),
                 );
                 s.display = Some(o.symbol());
+                s.end = Some(o.end);
                 let key = out.add(s, self.object_relations(o));
                 out.sets(&key, self.env_set_by(o));
             }
@@ -1760,6 +1773,20 @@ impl Adapter for InfraAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Terraform block and a Kubernetes object know their last line, so an edit anywhere in them is
+    /// a change (docair-zrr.33).
+    #[test]
+    fn blocks_and_objects_know_their_last_line() {
+        let tf = "resource \"kind_cluster\" \"shop\" {\n  name = \"shop\"\n  node {\n    role = \"cp\"\n  }\n}\n\nresource \"x\" \"y\" {\n}\n";
+        let b = tf_blocks("main.tf", tf);
+        assert_eq!((b[0].line, b[0].end), (1, 6));
+        assert_eq!((b[1].line, b[1].end), (8, 9));
+        let yaml = "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\n\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\ndata:\n  A: b\n";
+        let o = k8s_objects("k.yaml", yaml);
+        assert_eq!((o[0].line, o[0].end), (1, 4));
+        assert_eq!((o[1].line, o[1].end), (7, 12));
+    }
 
     #[test]
     fn terraform_blocks_attributes_and_references() {

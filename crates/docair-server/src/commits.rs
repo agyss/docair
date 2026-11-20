@@ -12,8 +12,8 @@ use docair_core::model::Graph;
 use docair_core::{Options, scan};
 use serde::{Deserialize, Serialize};
 
-/// A commit's graph and its parts' fingerprints, as kept in the cache.
-#[derive(Serialize, Deserialize)]
+/// A commit's graph and its parts' fingerprints, as built and written to `.docair/changes/graphs`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KeptGraph {
     pub graph: Graph,
     pub fingerprints: HashMap<String, String>,
@@ -36,7 +36,13 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-/// The key a commit's graph is kept under: the commit, docair's version and the commit's docair.toml.
+/// The graphs this process built, by `graph_key` (docair-zrr.30): a commit's files never change, and
+/// neither does the docair that runs, so one built here is never stale. Nothing is read from an
+/// earlier run.
+static BUILT: std::sync::OnceLock<std::sync::Mutex<HashMap<String, KeptGraph>>> =
+    std::sync::OnceLock::new();
+
+/// The key a commit's graph is known by in this process: the commit, docair's version and the commit's docair.toml.
 fn graph_key(top: &Path, sha: &str, prefix: &str) -> String {
     let toml = git(top, &["show", &format!("{sha}:{prefix}docair.toml")]).unwrap_or_default();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -53,18 +59,16 @@ fn graph_key(top: &Path, sha: &str, prefix: &str) -> String {
 }
 
 /***
- * A commit's graph: kept in the cache folder, else scanned from a detached git worktree in a scratch folder that is removed afterwards.
+ * A commit's graph, built fresh (docair-zrr.30): scanned from a detached git worktree in a scratch folder that is removed afterwards, never taken from a cache of an earlier run, since one may no longer be right. It is written to the project's `.docair/changes/graphs/<commit>.graph.json` for a reader, never read back; within one process a graph already built for the same commit and docair.toml is used again.
  *
  * @calls docair-core.scan "scans the commit"
  * @calls docair-core.diff.fingerprints "fingerprints its parts"
  ***/
 pub fn graph_at(top: &Path, prefix: &str, sha: &str, lenient: bool) -> Result<KeptGraph> {
-    let keep = docair_scip::cache_dir().join("graphs");
-    let path = keep.join(format!("{}.json", graph_key(top, sha, prefix)));
-    if let Ok(text) = std::fs::read_to_string(&path)
-        && let Ok(kept) = serde_json::from_str::<KeptGraph>(&text)
-    {
-        return Ok(kept);
+    let key = format!("{}-{lenient}", graph_key(top, sha, prefix));
+    let built = BUILT.get_or_init(Default::default);
+    if let Some(k) = built.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(k.clone());
     }
     let scratch = tempfile::Builder::new().prefix("docair-diff-").tempdir()?;
     let tree = scratch.path().join("tree");
@@ -94,8 +98,23 @@ pub fn graph_at(top: &Path, prefix: &str, sha: &str, lenient: bool) -> Result<Ke
         graph: scanned?,
         fingerprints,
     };
-    std::fs::create_dir_all(&keep)?;
-    std::fs::write(&path, serde_json::to_string(&kept)?)?;
+    // Where a reader finds it, beside the reviews; never read back. A project docair cannot write
+    // into still compares.
+    let dir = top
+        .join(prefix)
+        .join(docair_core::config::DEFAULT_STORE)
+        .join("graphs");
+    let short = &sha[..sha.len().min(12)];
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(
+            dir.join(format!("{short}.graph.json")),
+            serde_json::to_string_pretty(&kept)? + "\n",
+        );
+    }
+    built
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, kept.clone());
     Ok(kept)
 }
 
@@ -140,6 +159,28 @@ fn code_links(
             None => Some(format!("vscode://file{}/{{path}}:{{line}}", root.display())),
         },
     }
+}
+
+/// The lines of a docair.toml that changed, `- ` for one only A has and `+ ` for one only B has, in
+/// their order; blank lines and comments left out (docair-zrr.31).
+fn toml_changed(a: &str, b: &str) -> Vec<String> {
+    let lines = |t: &str| -> Vec<String> {
+        t.lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .map(str::to_string)
+            .collect()
+    };
+    let (la, lb) = (lines(a), lines(b));
+    la.iter()
+        .filter(|l| !lb.contains(l))
+        .map(|l| format!("- {l}"))
+        .chain(
+            lb.iter()
+                .filter(|l| !la.contains(l))
+                .map(|l| format!("+ {l}")),
+        )
+        .collect()
 }
 
 /// A git remote as its web address and the path part before a file: `git@github.com:o/r.git` →
@@ -260,11 +301,22 @@ fn compare_inner(
                 c
             })
             .collect();
-    let graph = docair_core::diff::diff(
+    let mut graph = docair_core::diff::diff(
         &at_a.graph,
         &at_b.graph,
         &at_a.fingerprints,
         &at_b.fingerprints,
+    );
+    // Each commit is read with its own docair.toml: what changed in it is shown first (docair-zrr.31).
+    let toml_of = |rev: Option<&str>| match rev {
+        Some(sha) => {
+            git(&top, &["show", &format!("{sha}:{prefix}docair.toml")]).unwrap_or_default()
+        }
+        None => std::fs::read_to_string(root.join("docair.toml")).unwrap_or_default(),
+    };
+    graph.toml = toml_changed(
+        &toml_of(Some(&sha_a)),
+        &toml_of(range.get(1).map(String::as_str)),
     );
     let mut changes =
         docair_core::changes::changes(&at_a.graph, &at_b.graph, graph, &lines, (a, &name_b));
@@ -494,6 +546,23 @@ pub fn changes_page(pair: &CommitPair) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// docair.toml's changed lines, as - and +; comments and blank lines do not count (docair-zrr.31).
+    #[test]
+    fn a_changed_docair_toml_is_its_lines() {
+        let a = "system = \"shop\"\n# a note\n\n[view]\nhide = [\"web\"]\n";
+        let b = "system = \"shop\"\n\n[view]\nhide = [\"web\", \"infra\"]\n[code]\nrun_indexers = true\n";
+        assert_eq!(
+            toml_changed(a, b),
+            [
+                "- hide = [\"web\"]",
+                "+ hide = [\"web\", \"infra\"]",
+                "+ [code]",
+                "+ run_indexers = true"
+            ]
+        );
+        assert!(toml_changed(a, a).is_empty());
+    }
 
     /// A remote becomes the web address the page links into (docair-8l6.82); a token in it never does.
     #[test]

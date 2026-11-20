@@ -1413,6 +1413,23 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
             format!("{} changed", count(n, "flow"))
         }
     );
+    // Each commit is read with its own docair.toml: what changed in it comes first (docair-zrr.31).
+    if !c.graph.toml.is_empty() {
+        let lines: Vec<String> = c
+            .graph
+            .toml
+            .iter()
+            .map(|l| {
+                let class = if l.starts_with('+') { "add" } else { "del" };
+                format!(r#"<span class="{class}">{}</span>"#, escape_text(l))
+            })
+            .collect();
+        let _ = write!(
+            list,
+            r#"<div class="warn" data-test="toml-changed"><b>docair.toml changed</b>, so some differences may come from how docair read the code, not from the code:<pre class="toml-diff">{}</pre></div>"#,
+            lines.join("\n")
+        );
+    }
     if !c.graph.reading.is_empty() {
         let _ = write!(
             list,
@@ -1459,11 +1476,16 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
         let mut item = String::new();
         let _ = write!(
             item,
-            r#"<li><a class="link" href="{}">{}</a> <span class="badge ch-{}">{}</span>{uncertain}"#,
+            r#"<li><a class="link" href="{}">{}</a> <span class="badge ch-{}">{}</span>{}{uncertain}"#,
             href(&addr),
             escape_text(&title),
             how(f),
-            how(f)
+            how(f),
+            // Matched by its parts when its seed was renamed (docair-zrr.32).
+            f.renamed_from.as_ref().map_or(String::new(), |was| format!(
+                r#" <span class="muted" data-test="renamed-from">renamed from <code>{}</code></span>"#,
+                escape_text(was)
+            ))
         );
         let mut gained = Vec::new();
         if !f.parts_added.is_empty() {
@@ -1528,7 +1550,8 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
             .as_ref()
             .map(|m| change_steps::marks(m, f, &inside.code));
         let flow_steps = match (&one, &marked) {
-            (Some(m), Some(mk)) => change_steps::steps(m, f, mk),
+            // One step per changed part (docair-zrr.35).
+            (Some(m), Some(mk)) => change_steps::part_steps(m, f, mk),
             _ => Vec::new(),
         };
         // A big flow (docair-zrr.27): each change on its own picture, the rest folded away, Back and Next
@@ -1691,6 +1714,48 @@ mod tests {
         .unwrap()
     }
 
+    /// A changed docair.toml comes first in the changes, as its lines (docair-zrr.31).
+    #[test]
+    fn a_changed_docair_toml_comes_first() {
+        let g = shop();
+        let changes = docair_core::changes::Changes {
+            schema: docair_core::changes::SCHEMA.into(),
+            a: "A".into(),
+            b: "B".into(),
+            working_tree: false,
+            graph: docair_core::diff::GraphDiff {
+                toml: vec!["- hide = [\"web\"]".into(), "+ hide = []".into()],
+                ..Default::default()
+            },
+            parts: vec![],
+            flows: vec![],
+        };
+        let changed = crate::doc_page::Changed {
+            before: &g,
+            changes: &changes,
+            findings: None,
+            links: &crate::doc_page::CodeLinks::default(),
+        };
+        let view = change_view(&g, &changed, None);
+        let toml = view
+            .list
+            .find(r#"data-test="toml-changed""#)
+            .expect("shown");
+        assert!(
+            view.list.contains(
+                r#"<pre class="toml-diff"><span class="del">- hide = [&quot;web&quot;]</span>"#
+            ) || view
+                .list
+                .contains(r#"<pre class="toml-diff"><span class="del">- hide = ["web"]</span>"#),
+            "{}",
+            view.list
+        );
+        assert!(
+            view.list.find("review-needs-ai").is_none_or(|r| toml < r),
+            "first, before the review"
+        );
+    }
+
     /// The shop without its line from `orders.create` to `orders-db`, and the change of its order's flow.
     fn a_new_line() -> (Graph, Graph, FlowChange) {
         let after = shop();
@@ -1710,6 +1775,7 @@ mod tests {
             lines_removed: vec![],
             through: vec![],
             certain: true,
+            renamed_from: None,
         };
         (before, after, f)
     }

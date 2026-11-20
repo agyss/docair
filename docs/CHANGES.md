@@ -116,7 +116,7 @@ from, and stay as a view of their own.
 | Step | Issue | What |
 |------|-------|------|
 | 0 | docair-zrr.1 | once the slices are done: discuss this doc and docs/EXPLAIN.md, update both and their steps |
-| 1 | docair-zrr.2 | parts know where they end: an end line on `SourceRef`, from every adapter; the golden graphs move |
+| 1 | docair-zrr.2 | parts know where they end: an end line on `SourceRef`, from every adapter; the golden graphs move. Terraform blocks and Kubernetes objects found without a doc block too: a block's closing brace, an object's document's last line (docair-zrr.33), so an edit anywhere in them is a change and a review shows their text |
 | 2 | docair-zrr.3 | a fingerprint of each part's body |
 | 3 | docair-zrr.4 | the graph diff in core, moves linked by fingerprint, golden tests on two graphs |
 | 4 | docair-zrr.5 | `docair diff <A> <B>` builds both graphs and keeps a graph for each commit |
@@ -135,9 +135,9 @@ Step 5 also needs the slices (docair-702.1), step 6 the generated HTML
 |---|----------|---------|
 | 1 | how commit A's files are read | `git worktree add --detach` of each commit into a scratch folder, removed afterwards; an untracked file of the working tree is never read for a commit |
 | 2 | can uncommitted work be B? | yes: `docair diff <A>` compares A with the working tree, `docair diff <A> <B>` two commits |
-| 3 | a change in what docair reads (a new adapter, a changed `docair.toml`) | the two graphs' `generator` and `docair.toml` are compared; a difference is reported first, as *the reading changed*, so it is not taken for a change in the code |
-| 4 | code indexers (SCIP) are slow; two commits double it | the graph of a commit is kept in the cache folder under the commit, docair's version and the `docair.toml` (`graphs/<key>.json`); the code index is kept by its sources already |
-| 5 | how far a flow reaches from a changed part | the slices whose parts hold a changed part, from `slice::all`, compared by seed |
+| 3 | a change in what docair reads (a new adapter, a changed `docair.toml`) | each commit is read with its own `docair.toml`; the lines that changed in it come first, with `-` and `+` (`GraphDiff.toml`, docair-zrr.31), so they are not taken for a change in the code. Both commits are built by the same docair (row 4), so docair's version cannot differ; the `generator` is still compared |
+| 4 | code indexers (SCIP) are slow; two commits double it | both commits are built fresh each time, never taken from a cache of an earlier run, which may no longer be right (docair-zrr.30, replacing the kept `graphs/<key>.json`); each graph is written to `.docair/changes/graphs/<commit>.graph.json` for a reader, never read back. Within one process (`docair serve` writing its page again) a graph already built for the same commit and `docair.toml` is used again. The code index is kept by its sources' content, so it is always right |
+| 5 | how far a flow reaches from a changed part | the slices whose parts hold a changed part, from `slice::all`, compared by seed; a flow whose seed was renamed (a scenario renamed, a datum's id changed) is matched by its parts: one only A has and one only B has, of the same kind, each the other's only candidate, sharing at least half of each one's parts, shown as one changed flow *renamed from* its old seed (`FlowChange.renamed_from`, docair-zrr.32) |
 | 6 | (new) the changes section in the HTML | a picture per changed flow at A and at B, drawn by docair like every slice; built in the page's files (the other session's), from the JSON this epic writes |
 
 ## 8. One picture of before and after (docair-zrr.18, zrr.19, zrr.22)
@@ -193,20 +193,24 @@ it at a size to read, its card (*change 2 of 5*, Back, Next) above the
 flow's details; Fit shows the whole flow. A new or gone flow has no walk:
 the whole picture is the change.
 
+The page walks a changed flow one part at a time (docair-zrr.35, replacing the
+stretches of zrr.25 for the walk): every new, gone or code-changed part is its
+own step, in the picture's order, with the new and gone lines that touch it
+and the unchanged parts on them as its ends (`change_steps::part_steps`).
+
 | A step is … | Its card says |
 |-------------|---------------|
-| a stretch of the path: new and gone parts joined by new or gone lines, with the shared parts it forks off and rejoins at | *Now goes through `a` and `b`; no longer through `c`, at `x`* |
-| a line alone, new or gone, between two shared parts | *A new line `x` → `y`* |
-| the parts of one box whose code changed | *Code changed in `a` and `b` (in `box`)* |
+| a new or gone part, with its new or gone lines | *Now goes through `a`, at `x`* |
+| a line alone, new or gone, between two unchanged parts | *A new line `x` → `y`* |
+| a part whose code changed | *Code changed in `a` (in `box`)* |
 | an open box whose own block changed | *`browser` itself changed, not the parts drawn in it* |
 
-A shared part is only an end, never a joint: two changes that touch one
-shared part stay two steps. A gone stretch and a new stretch that share an
-end are one step, the fork; a gone or new line alone counts too, so a
-function put in between, or taken out, is one step with the line it
-replaced (docair-zrr.26). A stretch with more than 8 new or gone parts is
-told box by box; a card names at most 8 parts (docair-zrr.25). Path steps
-come first, then code steps, each in reading order.
+Long walks for big changes are accepted. The review's pieces (EXPLAIN §9) are
+still made by stretches (`change_steps::steps`): a stretch of the path is new
+and gone parts joined by new or gone lines, with the shared parts it forks off
+and rejoins at; a gone stretch and a new one that share an end are one piece,
+the fork (docair-zrr.26); a stretch with more than 8 new or gone parts is cut
+box by box.
 
 **Before and after on the card** (docair-zrr.26). A path or line step's card
 also shows its route as chains of parts, from where its lines start to

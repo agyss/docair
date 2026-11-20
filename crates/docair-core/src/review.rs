@@ -81,6 +81,7 @@ pub fn pieces(a: &Graph, b: &Graph, changes: &Changes) -> Vec<Piece> {
         lines_removed: g.lines_removed.clone(),
         through: code.clone(),
         certain: true,
+        renamed_from: None,
     };
     let moves: IdMoves = change_steps::id_moves(g);
     let back: HashMap<&str, &str> = moves.iter().map(|(from, to)| (*to, *from)).collect();
@@ -422,6 +423,7 @@ pub fn change_picture(
         lines_removed: Vec::new(),
         through: Vec::new(),
         certain: true,
+        renamed_from: None,
     };
     let has = |g: &Graph, id: &str| g.nodes.iter().any(|n| n.id == id);
     for p in pieces {

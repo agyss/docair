@@ -166,7 +166,7 @@ test.describe('the CLI', () => {
     expect(out).toContain('*Looks wrong or risky:*\n\n- Nothing tests `orders.audit`. (in `orders.audit`)');
     expect(out).not.toContain('Done, but said nowhere');
     const store = path.join(shop, '.docair', 'changes'); // the default store (docair-8l6.74)
-    const [file] = fs.readdirSync(store);
+    const [file] = fs.readdirSync(store).filter((f) => f.endsWith('.json'));
     const found = JSON.parse(fs.readFileSync(path.join(store, file), 'utf8'));
     expect(found.schema).toBe('docair.explained/2');
     expect(found.changes[0].recorded.by).toBe('model');

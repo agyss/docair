@@ -311,6 +311,135 @@ type StepDraft = (Vec<usize>, Vec<usize>);
 pub const MAX_STEP_PARTS: usize = 8;
 
 /***
+ * A changed flow's walk on the page (docs/CHANGES.md §8, docair-zrr.35, replacing the walk by stretches of zrr.25): one step per new, gone or code-changed part, in the picture's order, with the changed lines that touch it and the unchanged parts on them as its ends; an open box whose own block changed is a step of its own; a new or gone line between two unchanged parts too. A new or gone flow has none: the whole picture is the change. The review's pieces still come from `steps`.
+ ***/
+pub fn part_steps(m: &Merged, f: &FlowChange, marks: &FlowMarks) -> Vec<ChangeStep> {
+    if f.how != "changed" {
+        return Vec::new();
+    }
+    let mark = |id: &str| marks.parts.get(id).copied().unwrap_or(PartMark::Same);
+    let line_mark = |l: &LayerLine| {
+        l.members
+            .first()
+            .and_then(|&e| m.graph.edges.get(e))
+            .and_then(|e| marks.lines.get(&e.id))
+            .copied()
+            .unwrap_or(LineMark::Same)
+    };
+    let seed = &f.seed;
+    // A line's graph lines, each with how it changed.
+    let members = |l: &LayerLine, w: LineMark| -> Vec<(LineMark, StepLine)> {
+        l.members
+            .iter()
+            .filter_map(|&e| m.graph.edges.get(e))
+            .map(|e| {
+                (
+                    w,
+                    StepLine {
+                        id: e.id.clone(),
+                        from: e.from.clone(),
+                        to: e.to.clone(),
+                    },
+                )
+            })
+            .collect()
+    };
+    let step = |id: String,
+                kind: StepKind,
+                (added, removed, code): (Vec<String>, Vec<String>, Vec<String>),
+                ends: Vec<String>,
+                lines: Vec<(LineMark, StepLine)>,
+                in_box: Option<String>| ChangeStep {
+        id,
+        kind,
+        added,
+        removed,
+        code,
+        ends,
+        lines_added: lines
+            .iter()
+            .filter(|(w, _)| *w == LineMark::Added)
+            .map(|(_, l)| l.id.clone())
+            .collect(),
+        lines_removed: lines
+            .iter()
+            .filter(|(w, _)| *w == LineMark::Removed)
+            .map(|(_, l)| l.id.clone())
+            .collect(),
+        lines: lines.into_iter().map(|(_, l)| l).collect(),
+        in_box,
+    };
+    let mut out = Vec::new();
+    let mut used: HashSet<usize> = HashSet::new();
+    for p in &m.pic.parts {
+        let w = mark(&p.id);
+        // An open box shows its parts; only its own block's change is a step of its own.
+        if w == PartMark::Same || (p.open && w != PartMark::Code) {
+            continue;
+        }
+        let mut ends: Vec<String> = Vec::new();
+        let mut lines: Vec<(LineMark, StepLine)> = Vec::new();
+        for (k, l) in m.pic.lines.iter().enumerate() {
+            let lw = line_mark(l);
+            if lw == LineMark::Same || (l.from != p.id && l.to != p.id) {
+                continue;
+            }
+            used.insert(k);
+            let other = if l.from == p.id { &l.to } else { &l.from };
+            if mark(other) == PartMark::Same && !ends.contains(other) {
+                ends.push(other.clone());
+            }
+            lines.extend(members(l, lw));
+        }
+        let one = vec![p.id.clone()];
+        let (kind, parts, in_box, key) = match w {
+            PartMark::Added => (StepKind::Path, (one, vec![], vec![]), None, "path"),
+            PartMark::Removed => (StepKind::Path, (vec![], one, vec![]), None, "path"),
+            _ if p.open => (StepKind::Box, (vec![], vec![], one), None, "box"),
+            _ => (
+                StepKind::Code,
+                (vec![], vec![], one),
+                p.parent.clone(),
+                "code",
+            ),
+        };
+        out.push(step(
+            format!("{seed}#{key}:{}", p.id),
+            kind,
+            parts,
+            ends,
+            lines,
+            in_box,
+        ));
+    }
+    // A new or gone line between two unchanged parts: a step of its own.
+    for (k, l) in m.pic.lines.iter().enumerate() {
+        let lw = line_mark(l);
+        if lw == LineMark::Same || used.contains(&k) {
+            continue;
+        }
+        out.push(step(
+            format!("{seed}#line:{}->{}", l.from, l.to),
+            StepKind::Line,
+            (vec![], vec![], vec![]),
+            vec![l.from.clone(), l.to.clone()],
+            members(l, lw),
+            None,
+        ));
+    }
+    // Ids stay unique, should two steps ever be keyed alike.
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for s in &mut out {
+        let k = seen.entry(s.id.clone()).or_default();
+        *k += 1;
+        if *k > 1 {
+            s.id = format!("{} #{k}", s.id);
+        }
+    }
+    out
+}
+
+/***
  * A flow's changes in steps (docs/CHANGES.md §8, docair-zrr.19, zrr.25), the unchanged rest left out: one per stretch of the path (new and gone parts joined by new or gone lines, with the shared parts where they fork off and rejoin; a shared part is an end, never a joint), a gone stretch and a new one that share an end as one step (the fork), a stretch with more than 8 new or gone parts told box by box; then one per box whose parts changed in their code, an open box whose own block changed alone. Path steps first, then code steps, each in the order of the picture's parts. A new or gone flow has none: the whole picture is the change.
  *
  * Each step's id is stable (docs/EXPLAIN.md §8), so the model's words on it are kept by id.
@@ -776,6 +905,7 @@ mod tests {
             lines_removed: less(&lines(a), &lines(b)),
             through: Vec::new(),
             certain: true,
+            renamed_from: None,
         }
     }
 
@@ -945,6 +1075,20 @@ mod tests {
                 s[0].ends.contains(&"orders.create".to_string())
                     && s[0].ends.contains(&"orders-db".to_string())
             );
+            // The page's walk (docair-zrr.35): one step for the part, its two lines with it, and the
+            // line it replaced, between two unchanged parts, a step of its own.
+            let p = part_steps(&m, &f, &marks(&m, &f, &HashSet::new()));
+            assert_eq!(p.len(), 2, "{p:#?}");
+            assert_eq!(p[0].id, "data.order#path:orders.validate");
+            assert_eq!(p[0].lines.len(), 2);
+            assert!(
+                p[0].ends.contains(&"orders.create".to_string())
+                    && p[0].ends.contains(&"orders-db".to_string()),
+                "{:?}",
+                p[0].ends
+            );
+            assert_eq!(p[1].kind, StepKind::Line);
+            assert!(p[1].id.starts_with("data.order#line:orders.create->"));
         }
     }
 
@@ -1075,6 +1219,7 @@ mod tests {
             lines_removed: vec![],
             through: vec![code.clone(), words.clone(), open_box.clone()],
             certain: true,
+            renamed_from: None,
         };
         let inside = changed_inside(&diff);
         assert!(inside.code.contains(code.as_str()) && inside.words.contains(words.as_str()));

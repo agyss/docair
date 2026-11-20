@@ -37,6 +37,9 @@ pub struct FlowChange {
     pub through: Vec<String>,
     /// False when a line of the change only may reach its part (one of, could): it may be a false alarm.
     pub certain: bool,
+    /// The seed it had at A, when its seed was renamed and it was matched by its parts (docair-zrr.32).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
 }
 
 /// What two commits change.
@@ -166,10 +169,38 @@ pub fn changes(
                 && g.edges.get(l.edge).is_some_and(|e| changed.contains(&e.id))
         })
     };
+    // A flow whose seed was renamed is the same flow (docair-zrr.32): one only A has and one only B has,
+    // of the same kind, each the other's only candidate, sharing at least half of each one's parts.
+    let only_a: Vec<&String> = fa.keys().filter(|k| !fb.contains_key(*k)).collect();
+    let only_b: Vec<&String> = fb.keys().filter(|k| !fa.contains_key(*k)).collect();
+    let shares = |ka: &String, kb: &String| {
+        let (sa, sb) = (&fa[ka], &fb[kb]);
+        if sa.seed.kind != sb.seed.kind {
+            return false;
+        }
+        let (pa, pb) = (parts_of(sa, true), parts_of(sb, false));
+        let both = pa.intersection(&pb).count();
+        both > 0 && both * 2 >= pa.len() && both * 2 >= pb.len()
+    };
+    let mut renamed: BTreeMap<&String, &String> = BTreeMap::new();
+    for kb in &only_b {
+        let from: Vec<&&String> = only_a.iter().filter(|ka| shares(ka, kb)).collect();
+        if let [ka] = from.as_slice()
+            && only_b.iter().filter(|k| shares(ka, k)).count() == 1
+        {
+            renamed.insert(kb, ka);
+        }
+    }
+    let was: BTreeSet<&String> = renamed.values().copied().collect();
     let mut flows = Vec::new();
-    let seeds: BTreeSet<&String> = fa.keys().chain(fb.keys()).collect();
+    let seeds: BTreeSet<&String> = fa
+        .keys()
+        .chain(fb.keys())
+        .filter(|k| !was.contains(k))
+        .collect();
     for seed in seeds {
-        let (sa, sb) = (fa.get(seed), fb.get(seed));
+        let from = renamed.get(seed).copied();
+        let (sa, sb) = (fa.get(from.unwrap_or(seed)), fb.get(seed));
         let pa = sa.map(|s| parts_of(s, true)).unwrap_or_default();
         let pb = sb.map(|s| parts_of(s, false)).unwrap_or_default();
         let through: Vec<String> = parts
@@ -177,7 +208,7 @@ pub fn changes(
             .filter(|p| pa.contains(*p) || pb.contains(*p))
             .cloned()
             .collect();
-        if through.is_empty() && sa.is_some() && sb.is_some() {
+        if through.is_empty() && sa.is_some() && sb.is_some() && from.is_none() {
             continue;
         }
         let la = sa.map(|s| lines_of(s, a, true)).unwrap_or_default();
@@ -197,6 +228,7 @@ pub fn changes(
             && parts_added.is_empty()
             && parts_removed.is_empty()
             && through.is_empty()
+            && from.is_none()
         {
             continue;
         }
@@ -213,6 +245,7 @@ pub fn changes(
             lines_removed,
             through,
             certain,
+            renamed_from: from.cloned(),
         });
     }
     Changes {
@@ -233,6 +266,17 @@ pub fn changes(
  ***/
 pub fn markdown(c: &Changes) -> String {
     let mut out = format!("## Changes from `{}` to `{}`\n\n", c.a, c.b);
+    // Each commit is read with its own docair.toml: what changed in it comes first (docair-zrr.31).
+    if !c.graph.toml.is_empty() {
+        out.push_str(&format!(
+            "- **docair.toml changed**, so some differences may come from how docair read the code:\n\n  ```diff\n{}\n  ```\n",
+            c.graph.toml
+                .iter()
+                .map(|l| format!("  {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
     for r in &c.graph.reading {
         out.push_str(&format!("- **The reading changed:** {r}\n"));
     }
@@ -363,6 +407,33 @@ pub fn changed_lines(unified: &str) -> Vec<LinesTouched> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scenario renamed between the commits is one flow, matched by its parts, not one gone and one
+    /// new (docair-zrr.32).
+    #[test]
+    fn a_renamed_flow_is_matched_by_its_parts() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docair-adapters/tests/golden/shop.graph.json"
+        );
+        let a: Graph = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut b = a.clone();
+        b.flows
+            .iter_mut()
+            .find(|f| f.name == "checkout")
+            .unwrap()
+            .name = "buy".into();
+        let c = changes(&a, &b, GraphDiff::default(), &[], ("A", "B"));
+        let buy = c.flows.iter().find(|f| f.seed == "flow:buy");
+        assert!(
+            !c.flows.iter().any(|f| f.seed == "flow:checkout"),
+            "not gone: {:#?}",
+            c.flows
+        );
+        let buy = buy.unwrap_or_else(|| panic!("{:#?}", c.flows));
+        assert_eq!(buy.how, "changed");
+        assert_eq!(buy.renamed_from.as_deref(), Some("flow:checkout"));
+    }
 
     #[test]
     fn a_unified_diff_gives_the_changed_lines_of_each_file() {

@@ -162,6 +162,10 @@ pub struct GraphDiff {
     /// docair or its settings differ: a difference may come from the reading, not the code.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reading: Vec<String>,
+    /// The lines of docair.toml that changed from A to B, each with `-` or `+` in front: each commit is
+    /// read with its own, so these are shown first (docair-zrr.31).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub toml: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
     pub changed: Vec<ChangedItem>,

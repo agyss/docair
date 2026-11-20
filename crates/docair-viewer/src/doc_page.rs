@@ -461,7 +461,10 @@ pub struct CodeLinks {
 impl CodeLinks {
     /// The link to `path` at `line` from a version's template; none without one.
     pub fn to(template: Option<&String>, path: &str, line: usize) -> Option<String> {
-        template.map(|t| t.replace("{path}", path).replace("{line}", &line.to_string()))
+        template.map(|t| {
+            t.replace("{path}", path)
+                .replace("{line}", &line.to_string())
+        })
     }
 }
 

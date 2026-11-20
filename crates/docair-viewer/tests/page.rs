@@ -601,6 +601,7 @@ fn a_changed_flow_shows_before_and_after() {
             lines_removed: vec![],
             through: vec!["orders.create".to_string()],
             certain: false,
+            renamed_from: None,
         }],
     };
     let changed = docair_viewer::doc_page::Changed {
@@ -692,6 +693,7 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
         lines_removed: vec![],
         through: vec!["orders.create".to_string()],
         certain: true,
+        renamed_from: None,
     };
     let changes = Changes {
         schema: docair_core::changes::SCHEMA.to_string(),

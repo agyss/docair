@@ -1856,8 +1856,11 @@ mod tests {
             job["version"].as_u64().unwrap() >= 2,
             "the page was written again: {job}"
         );
+        // The review, beside the commit's graph written for a reader (docair-zrr.30).
         let stored = std::fs::read_dir(dir.path().join(".docair/changes"))
             .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
             .count();
         assert_eq!(stored, 1, "the findings are stored");
         // Asked again, nothing is new: the store covers every piece.
