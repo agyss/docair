@@ -1,0 +1,271 @@
+{
+  "schema": "docair.explained/2",
+  "a": "HEAD~1",
+  "b": "the working tree",
+  "links": [
+    {
+      "a": "docair-core.review.attach_by_module",
+      "b": "docair-ai.explain.place_left",
+      "why": "the module heuristic for leftover pieces replaced by model placement",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T11:32:28Z"
+      }
+    }
+  ],
+  "changes": [
+    {
+      "title": "The review now reports what the AI found off — what a commit, doc or comment said against what the code does — instead of citing sources and listing disagreements.",
+      "how": [
+        {
+          "piece": "path:docair-ai.explain.field",
+          "words": "Reads the model's off items, accepting a bare sentence as a code-only finding and normalising the source to one of four kinds."
+        },
+        {
+          "piece": "path:docair-ai.explain.check_where",
+          "words": "Checks that a cited commit or doc actually exists among what was sent, completing or clearing its where."
+        },
+        {
+          "piece": "path:docair-ai.explain.said",
+          "words": "Turns each found-off entry into a line naming who said it (a commit, a doc, a code comment, or nobody at all) and what they said, which the comment prints above what the code does; the same piece's binding and comment changes drop the old sources and disagreements fields, so the model is no longer sent commit and doc ids and its words are checked only against parts, lines and pieces that exist."
+        },
+        {
+          "piece": "box:docair-ai.explain.review-change",
+          "words": "A change no longer carries cited sources or disagreement strings; it carries the why as the model's own reading and a list of found-off items, each with what was said, where, and what the code does."
+        },
+        {
+          "piece": "code:docair-e2e.fake-ai",
+          "words": "The fake model answers the new review prompt with changes whose why is written plainly and an off list: one entry pairing a commit's claim with what the code does, and one for a code edit nothing announces; sources and disagreements are gone."
+        }
+      ],
+      "why": "Citing commit and doc ids made the review read like footnotes; the code is now the authority, and anything a claim contradicts — or that nothing announces — is surfaced as a pair the reader can judge. The stored review format moved to a new schema version for this.",
+      "off": [
+        {
+          "source": "none",
+          "code": "In `docair-ai.explain.check_where` a commit matches when its subject equals the cited place or starts with it once the citation is at least 12 characters, and a doc matches by path suffix; a short or partial citation can therefore be pinned to the wrong commit or a same-named file in another directory.",
+          "parts": [
+            "docair-ai.explain.check_where"
+          ]
+        },
+        {
+          "source": "none",
+          "code": "In `docair-ai.explain.said`, a doc source renders as just the path in backticks, while a commit gets a leading phrase and a comment is introduced as a comment on a part; a reader of the comment cannot tell that a bare path was meant as a doc.",
+          "parts": [
+            "docair-ai.explain.said"
+          ]
+        }
+      ],
+      "check": "That a model answer whose off item names a commit or doc that exists but was not sent is rejected rather than silently matched to a similar one.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T11:32:28Z"
+      }
+    },
+    {
+      "title": "When the model returns the same change twice, docair merges them in one final request, and leftover pieces are placed by the model instead of by a module heuristic.",
+      "how": [
+        {
+          "piece": "path:docair-ai.explain.known_ids",
+          "words": "Merges the changes the model numbers as one (pieces, found-off entries, title, why and check combined without repeats), places the pieces no change held into the change the model names — resolving a piece by id, by a part it holds, or by its box — checks every id the model writes against what exists in both graphs and the pieces, and drops the old rule that attached leftover pieces by module; the comment no longer sorts other edits by module, and the run ends with one request that reports duplicate changes and placements."
+        },
+        {
+          "piece": "path:docair-ai.explain.settle_prompt",
+          "words": "A new prompt asks the model to group change numbers that serve the same purpose and to place each leftover piece into a change."
+        }
+      ],
+      "why": "Asking in parts made the model describe one difference several times and leave pieces unattached; the old module-counting heuristic guessed by where the code sits, not by meaning. Now docair asks the model once more to merge its own duplicates and place what is left, and validates every name against the ids docair knows, so the grouping is the model's meaning with docair's guarantee behind it.",
+      "check": "That a merge group or placement naming a change twice, or a piece resolved through its box ambiguously, really is left out and said rather than silently mis-merged.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T11:32:28Z"
+      }
+    },
+    {
+      "title": "The AI that writes the review now reads each changed part's whole code, before and after, instead of only summaries.",
+      "how": [
+        {
+          "piece": "path:docair-core.review.part-text",
+          "words": "A new record carries one changed part's whole text with its before and after versions."
+        },
+        {
+          "piece": "path:docair-core.review.leads_into",
+          "words": "New helpers pull a part's text out of its file, walking up over the comments, doc lines and attributes that belong to it, and collect such texts for every new, gone and changed part."
+        },
+        {
+          "piece": "path:docair-core.review.max_part_text",
+          "words": "Caps one part's text at 4,000 characters a version."
+        },
+        {
+          "piece": "path:docair-core.review.max_piece_text",
+          "words": "Caps all of a piece's parts' texts together at 20,000 characters, counting what did not fit."
+        },
+        {
+          "piece": "path:docair-core.review.max_file",
+          "words": "Caps a changed file that holds no part at 2,000 characters of its changed lines."
+        },
+        {
+          "piece": "path:docair-core.review.max_files",
+          "words": "Caps all such partless files together at 10,000 characters."
+        },
+        {
+          "piece": "box:docair-core.review.intent",
+          "words": "The intent now carries the parts' texts and the partless files' changed lines alongside the commits and docs."
+        },
+        {
+          "piece": "path:docair-ai.explain.settle_digest",
+          "words": "The piece sent to the model now includes a source map of each of its parts' whole text before and after, within the piece's budget."
+        },
+        {
+          "piece": "code:docair-ai.explain",
+          "words": "The digest sent to the model now carries the parts' texts and the partless files, and the review prompt tells the model to read the code first and treat commits and docs as claims to check against it."
+        },
+        {
+          "piece": "path:docair-server.commits.not_for_the_ai",
+          "words": "A new filter decides which changed files the AI never reads as raw lines: docs go as docs, and lock files, the review store and binaries are skipped; a new helper collects the remaining part-less files' diff lines."
+        },
+        {
+          "piece": "code:docair-server.commits",
+          "words": "After a diff, the comparison now fills the intent with every changed part's full text at both versions, read from the commits or the working tree, and with the part-less changed files, all cut to fit a request."
+        },
+        {
+          "piece": "code:e2e.cli",
+          "words": "Its end-to-end test now checks that the model's request contains the changed part's text and the changed docs, and that the stored review carries the parts' texts."
+        }
+      ],
+      "why": "Before, the model saw only that a piece's code changed, not how, so it could not describe edits from the code and had to lean on commit messages. Giving it the actual before and after text lets it ground every claim in the code, which is also what the new check-the-claims instruction needs.",
+      "off": [
+        {
+          "source": "none",
+          "code": "`docair-core.review.leads_into` treats any line starting with `#` as belonging to the part below it, so in files where `#` starts ordinary content up to 40 lines of unrelated text can be pulled into a part's supposedly whole text.",
+          "parts": [
+            "docair-core.review.leads_into"
+          ]
+        }
+      ],
+      "check": "Whether the 40-line walk-up in `docair-core.review.part_text` and the prefix heuristics in `docair-core.review.leads_into` pick up the right comments for real-world files, especially ones where `#` or `//` start non-comment lines.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T11:32:28Z"
+      }
+    },
+    {
+      "title": "On the changes page, every piece folds out its code: each part's file and line with a line diff of its text before and after.",
+      "how": [
+        {
+          "piece": "code:docair-viewer.doc_page",
+          "words": "The page's changes section now carries the changed parts' texts alongside the findings, so the review and the flow list can render each piece's code fold-out."
+        },
+        {
+          "piece": "path:docair-viewer.page_changes.texts",
+          "words": "A lookup type carries the changed parts' before and after texts from the build into the page renderer."
+        },
+        {
+          "piece": "path:docair-viewer.page_changes.line_diff",
+          "words": "New helpers compute a line-by-line diff of a part's two texts and render each part with its file, line and new/gone/edited mark inside a folded details block; the walk over a flow's changes now threads these texts so each step's card can fold its code out too."
+        },
+        {
+          "piece": "code:docair-viewer.page_changes",
+          "words": "The per-change pictures pass the texts down into the change walk, so a flow change's steps each get their folded code."
+        },
+        {
+          "piece": "box:e2e.changes",
+          "words": "The reviewed-change browser test now also checks that a piece's code shows before and after."
+        }
+      ],
+      "why": "The review told the reader what changed but made them open the repository to see it; carrying the same texts docair already collected for the AI down into the page lets a reviewer get from a claim straight to the diff.",
+      "check": "Check the fold-out for a part that exists only at A (removed), where the after text is absent.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T11:32:28Z"
+      }
+    },
+    {
+      "title": "The changes page lists every flow of the system, folded under the flows the changes touch, each linked to its picture and changed ones marked.",
+      "how": [
+        {
+          "piece": "path:docair-viewer.page_changes.all_flows_list",
+          "words": "A new folded list renders all scenarios, routes, data and walkthroughs from the graph, links each to its slice picture, and marks and links the ones the change touches."
+        }
+      ],
+      "why": "The page only showed the changed flows, so a reader could not see what did not change or jump to an untouched flow's picture from the changes view; the full list, folded by default, gives that context without pushing the changed flows down.",
+      "check": "Check the list when a changed flow's seed exists only at A, since its title then falls back to the old graph's naming.",
+      "recorded": {
+        "by": "model",
+        "model": "zai-org/GLM-5.3-Flash",
+        "at": "2026-11-20T11:32:28Z"
+      }
+    }
+  ],
+  "other": [
+    "box:e2e.cli"
+  ],
+  "problems": [
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.part_texts` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.part_text` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.leads_into` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.part-text` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.max_part_text` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.max_piece_text` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-server.commits.other_files` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-server.commits.not_for_the_ai` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.max_file` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-core.review.max_files` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-viewer.page_changes.texts` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-viewer.page_changes.parts_code` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-viewer.page_changes.piece_code` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\": `docair-viewer.page_changes.line_diff` is no piece docair found; left out",
+    "\"The AI review now reads the whole code of every changed part, before and after, and the changed files that hold no part.\" holds no piece docair found; left out",
+    "\"The review now reports what the AI found off — what a commit, doc or comment said against what the code does — instead of citing sources and listing disagreements.\": `docair-ai.explain.found-off` is no piece docair found; left out",
+    "\"The review now reports what the AI found off — what a commit, doc or comment said against what the code does — instead of citing sources and listing disagreements.\": `docair-ai.explain.said` is no piece docair found; left out",
+    "\"The review now reports what the AI found off — what a commit, doc or comment said against what the code does — instead of citing sources and listing disagreements.\": `docair-ai.explain.known_ids` is no piece docair found; left out",
+    "\"The review now reports what the AI found off — what a commit, doc or comment said against what the code does — instead of citing sources and listing disagreements.\": `docair-ai.explain.unknown_in` is no piece docair found; left out",
+    "\"The review now reports what the AI found off — what a commit, doc or comment said against what the code does — instead of citing sources and listing disagreements.\": `docair-viewer.page_changes.off_item` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-ai.explain.merge_same` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-ai.explain.place_left` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-ai.explain.resolve_left` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-ai.explain.settle_digest` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-ai.explain.settle_prompt` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": the piece `path:docair-ai.explain.check_where` is in an earlier change already; left there",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": the piece `path:docair-ai.explain.check_where` is in an earlier change already; left there",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-core.review.attach_by_module` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-core.review.modules_of` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\": `docair-core.review.parent_id` is no piece docair found; left out",
+    "\"Pieces the model left out of a change are now merged and placed by the model in a final request, instead of being attached by module.\" holds no piece docair found; left out",
+    "\"The changes page lists every flow of the system, folded, with the flows the changes touch marked.\": `docair-viewer.page_changes.all_flows_list` is no piece docair found; left out",
+    "\"The changes page lists every flow of the system, folded, with the flows the changes touch marked.\" holds no piece docair found; left out",
+    "\"Plain links in the viewer take the accent colour instead of the browser's default.\" holds no piece docair found; left out",
+    "\"The AI review now reads each changed part's whole code before and after, and the page folds that code out as a line diff.\" holds no piece docair found; left out",
+    "\"The AI that writes the review now reads each changed part's whole code, before and after, instead of only summaries.\": what it found off names `docair-core.review.piece_json`; left out",
+    "\"The review's why is now the AI's own reading, and each change reports what it found off instead of listing disagreements and sources.\": the piece `code:docair-ai.explain` is in an earlier change already; left there",
+    "\"The review's why is now the AI's own reading, and each change reports what it found off instead of listing disagreements and sources.\": the piece `code:docair-ai.explain` is in an earlier change already; left there",
+    "\"A review asked in parts now ends with one extra request that merges duplicate changes and places the leftover pieces.\": the piece `path:docair-ai.explain.settle_digest` is in an earlier change already; left there",
+    "\"A review asked in parts now ends with one extra request that merges duplicate changes and places the leftover pieces.\": the piece `path:docair-ai.explain.settle_digest` is in an earlier change already; left there",
+    "\"The AI review reads each changed part's whole code before and after, plus the changed files that hold no part, instead of only signatures and summaries.\": what it found off names `.jsonl`; left out",
+    "\"A review asked in parts ends with one extra request that merges the changes that came back twice.\": `docair-ai.explain.explain` is no piece docair found; left out",
+    "\"A review asked in parts ends with one extra request that merges the changes that came back twice.\" holds no piece docair found; left out",
+    "\"The AI review now reads each changed part's whole code before and after, not just signatures and summaries.\": `docair-ai.explain.explain` is no piece docair found; left out",
+    "\"The AI review now reads each changed part's whole code before and after, not just signatures and summaries.\" holds no piece docair found; left out",
+    "\"When the same change comes back from several review requests, a final request merges the duplicates into one.\": `docair-ai.explain.explain` is no piece docair found; left out",
+    "\"When the same change comes back from several review requests, a final request merges the duplicates into one.\" holds no piece docair found; left out",
+    "\"The review page gains a 'found off' section: what a commit, doc or code comment says, side by side with what the code does.\": the piece `path:docair-viewer.page_changes.line_diff` is in an earlier change already; left there",
+    "\"The review page gains a 'found off' section: what a commit, doc or code comment says, side by side with what the code does.\": the piece `code:docair-viewer.page_changes` is in an earlier change already; left there",
+    "\"The review page gains a 'found off' section: what a commit, doc or code comment says, side by side with what the code does.\" holds no piece docair found; left out",
+    "\"Links that come from Markdown without a class of their own take the theme's accent colour.\" holds no piece docair found; left out",
+    "\"A saved walkthrough is added explaining which parts of docair's work the model does and which docair does itself.\" holds no piece docair found; left out",
+    "\"The AI that reviews a change now receives each changed part's full source text before and after, instead of signatures and summaries.\": `docair-ai.explain.explain` is no piece docair found; left out",
+    "\"A review now explains itself in its own words and reports what it found off, rather than citing commits and docs as sources.\": `docair-ai.explain.explain` is no piece docair found; left out",
+    "\"A review now explains itself in its own words and reports what it found off, rather than citing commits and docs as sources.\": the piece `code:e2e.cli` is in an earlier change already; left there",
+    "\"A review now explains itself in its own words and reports what it found off, rather than citing commits and docs as sources.\" holds no piece docair found; left out",
+    "\"When a review asked in parts returns the same change more than once, a final request merges the duplicates into one.\": `docair-ai.explain.explain` is no piece docair found; left out",
+    "\"When a review asked in parts returns the same change more than once, a final request merges the duplicates into one.\" holds no piece docair found; left out",
+    "\"On the served page, every piece and every flow change step folds out its code, shown as a line diff of before and after.\" holds no piece docair found; left out",
+    "\"Plain links that come from Markdown, such as a glossary's read-more links, are now styled with the accent colour instead of the browser default.\" holds no piece docair found; left out",
+    "\"A saved walkthrough now documents which steps of docair's work the model does and which docair does by itself.\" holds no piece docair found; left out"
+  ],
+  "requests": 7
+}

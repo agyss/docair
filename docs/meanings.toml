@@ -223,6 +223,11 @@ why = "Project word: a value the adapter read from the code, as opposed to an au
 term = false
 why = "everyday word for what a step is given; meanings::Input and docair-layout's Input are each what their own step reads"
 
+["found off"]
+from = "docair-ai.explain.found-off"
+checked = "7e8b2841"
+why = "the review's heading for what the AI found wrong: what a commit, doc or code comment says against what the code does (docs/EXPLAIN.md §9.1, docair-8l6.58)"
+
 [intent]
 from = "docair-core.review.intent"
 checked = "314dbf2b"

@@ -211,9 +211,16 @@ changes is not capped (docair-8l6.27).
 |---------------|---------|
 | *what* the app does differently, one sentence from the user's side | An uploaded page keeps working when the cluster runs two server pods. |
 | *how*: its pieces in the order they work together, each in a sentence | `upload_id` names the pod that took the upload; `forward` sends a request for it there, through the new Service `docair-server-peers`. |
-| *why*, from the commits and the docs, the sources named | commit `b0e4541`; docs/SLICES.md |
+| *why*: the AI's own reading of the code, the commits and the docs together, never a quote or a citation (docair-8l6.55) | A user's upload lands on one pod; the others now ask that pod for it instead of answering that it is gone. |
+| *off*: what the AI found off, each as what was said against what the code does: the claim of a commit message, a doc or a code comment and which one, or that nothing mentions it (docair-8l6.58); or that it found nothing | *Said:* the commit “Audit every order”: every order is audited. *The code:* `audit` has an empty body, so it records nothing yet. |
 | *what to check*: the risky part | The NetworkPolicy must let the server pods reach each other. |
-| where a commit message or a doc and the pieces disagree (docair-8l6.30) | The commit says the uploads are shared, but each pod still keeps its own. |
+
+The commit messages and docs are claims the AI checks against the code, not
+sources to cite: they go to it without ids, and the prompt asks it never to
+quote or name a commit, doc, issue or ticket (decision docair-8l6.55,
+replacing the cited sources of 8l6.24 and the disagreements of 8l6.30).
+Only an *off* names and repeats what was said, so a reader sees both sides
+of it (decision docair-8l6.59).
 
 ### 9.2 What the AI gets
 
@@ -257,20 +264,33 @@ does.
 | a request, everything together | 60,000 characters (docair-8l6.8) |
 
 A review too big for one request is asked in parts, the pieces in their
-order, the intent with each part. Asked in more than one, the same change
-can come back from two parts, so a last small request gets every change by
-number, with its title, why and what its pieces do, and answers which are one:
-`{"same": [[1, 4]]}`. docair merges each group into its first change: the
-pieces in order, the sources and disagreements without repeats; a group that
-names no two changes, or one twice, is left apart and said
-(`explain::merge_same`, docair-8l6.48, decision 8l6.50, replacing 8l6.31).
+order, the intent with each part. Then one last request (decision
+docair-8l6.56, replacing 8l6.31, 8l6.41 and 8l6.50) gets every change by
+number, with its title, why and what its pieces do, and the pieces no change
+holds yet, with their code; it goes when the parts gave changes from more
+than one request, or a piece is left. It answers which changes came back
+twice and where each left piece belongs, with what it does there:
+
+```json
+{"same": [[1, 4]], "place": [{"piece": "<id>", "change": 2, "words": "…"}]}
+```
+
+docair places first, then merges each group into its first change: the
+pieces in order, what was found off without repeats. A left piece is named by
+its id, a part it holds or a part in its box (`explain::resolve_left`); a
+place or a group that does not bind is left out and said (`place_left`,
+`merge_same`). A piece it places nowhere is an other edit. The request comes
+on top of `max_requests`, in the progress.
 
 ### 9.3 What the AI gives back
 
 ```json
 {"changes": [{"title": "…", "how": [{"piece": "<piece id>", "words": "…"}],
-              "why": "…", "sources": ["commit:b0e4541", "doc:docs/SLICES.md"],
-              "check": "…", "disagrees": ["…"]}],
+              "why": "…",
+              "off": [{"source": "commit | doc | comment | none", "where": "<the commit's subject, the doc's path, the part whose comment it is>",
+                       "says": "…", "code": "<what the code seems to do>",
+                       "parts": ["<the id of each part where the code does it>"]}],
+              "check": "…"}],
  "links": [{"a": "<id at A>", "b": "<id at B>", "why": "…"}]}
 ```
 
@@ -284,13 +304,14 @@ removed at A that is the same as one added at B.
 |------|-----|
 | a change has a title and a piece | else it is left out, and said |
 | a `how` entry names a piece docair made | a part's id, or a piece id guessed from it (`path:<part>`), binds to the piece that holds that part (docair-8l6.37); else that entry is left out; a piece already in an earlier change stays there (docair-8l6.32) |
-| words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `disagrees` that does not is left out alone |
-| a source is a commit in the range or a doc docair sent | else it is left out |
-| every piece belongs somewhere | the prompt asks for every piece in its change; a piece in no change goes with the change that has the most pieces in its module, when one has more there than every other (*also changed with it*, docair-8l6.41); the rest is an *other edit*, which the review lists (docair-8l6.28) |
+| words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `off` that does not is left out alone |
+| an *off* says where only of what is there (docair-8l6.59) | a commit by its subject, made the subject as it is; a doc by its path, made whole; a comment by its part's id; else its `where` is left out, and said. An off without `code` is left out; one of `none` says nothing; a bare sentence is what the code does, said nowhere. Its `parts` keep only parts of A or B, else the parts its `code` names (docair-8l6.61) |
+| every piece belongs somewhere | the prompt asks for every piece in its change; the last request places the pieces left (§9.2); the rest is an *other edit*, which the review lists (docair-8l6.28) |
 
 The findings go to the store as before (§4): `docs/changes/<A>..<B>.json`,
-schema `docair.explained/1`, with `changes`, the pieces the model left as
-`other`, and `links`. A store of an older schema, or one whose changes and
+schema `docair.explained/2`, with `changes`, the pieces the model left as
+`other`, and `links`. A store of `/1` (with `sources` and `disagrees`,
+quoting and citing) is asked again. A store of an older schema, or one whose changes and
 `other` do not cover today's pieces, is asked again; a change a human wrote
 (`recorded.by: human`) is kept, and its pieces are not asked about.
 
@@ -298,16 +319,24 @@ schema `docair.explained/1`, with `changes`, the pieces the model left as
 
 **Δ Changes** opens the review: the changes, in the model's order (what
 matters to the user first), then the flows they touch, with how many of the
-system's flows changed, then the *Other edits*, folded (docair-8l6.42). A
+system's flows changed and all of them folded, each a link to its picture and
+a changed one to its change (docair-8l6.57), then the *Other edits*, folded
+(docair-8l6.42). A
 change opens at `#review/<n>` on its own picture: its pieces' parts at A and
 at B as one picture, nothing else (docair-8l6.33), marked as in CHANGES.md
-§8. Its walk opens on *What and why*, headed by the change's title: what was
-done, why with its sources, what to check, where it disagrees, framed on the
+§8. Its walk opens on *What and why*, headed by the change's whole title:
+why, then what the AI found off, marked (*⚠ Found off*), each as *Said*
+(by which commit, doc or comment, or *Nothing: no commit, doc or comment
+mentions it*) over *The code* (docair-8l6.58), with the parts where the code
+does it as links and their code folded (docair-8l6.61), or *✓ Checked against the
+code: nothing found off*, then what to check, framed on the
 whole change; then *How · k of n*, its pieces in the order of *how*, each
-card the model's words for that piece over docair's own (Before and After),
-then what docair put with it (docair-8l6.43). Its details say the same in the
-same order, then the flows it touches and who wrote it. Without findings the
-review says the AI makes it, with the command, and, served, a button.
+card the model's words for that piece over docair's own (Before and After)
+and its code (docair-8l6.43). The details below the card hold only what the
+card does not (docair-8l6.54): which change of how many, from and to, the
+flows it touches, who wrote it. Closing the card leaves the change, so the
+two are always seen together. Without findings the review says the AI makes
+it, with the command, and, served, a button.
 
 **Down to the code** (docair-8l6.49, decision 8l6.51). Each piece, on its
 card, in the details' *How* and among the other edits, has a fold, *The code
@@ -351,7 +380,7 @@ the notice.
 | the pieces, on one picture of the whole change, marked by the graph diff | `docair_core::review::pieces` |
 | the intent: commit messages, changed Markdown, changed doc-block words | `docair_server::commits::intent`, `docair_core::review::words_changed`; `CommitPair.intent` |
 | the request, compact (docair-8l6.34), without reasoning first (docair-8l6.36) | `docair_ai::explain::{digest, explain_with}`, `REVIEW_PROMPT`; `client::chat_with` |
-| bind and cover, the store `docair.explained/1` | `docair_ai::explain::bind`; `ChangeFindings { changes, other, links }` |
+| bind and cover, the store `docair.explained/2` | `docair_ai::explain::bind`; `ChangeFindings { changes, other, links }` |
 | the page: the review list, `#review/<n>`, other edits, the notice | `docair_viewer::page_changes::review_view`, `docair_core::review::change_picture` |
 | `docair explain` and the comment | `docair-cli` `cmd_explain`, `docair_ai::explain::comment` |
 
@@ -384,3 +413,13 @@ instead of 100, and that the commit, which speaks of audits only, does not
 say so. On `fac7aa8` to `c1364fd` the input took two requests, and two of
 five changes came back twice; the merge request made them three changes, no
 other edits, in three requests.
+
+**The AI's own reading, checked** (docair-8l6.53 to 8l6.56). The user found
+the card repeated below it, and the text quoting and citing its sources.
+Now the details hold only what the card does not; the model gets commits and
+docs as claims without ids, writes in its own words and lists what it found
+off. On the shop example it writes *Auditors need a trail of each order, so
+the API now records one as the final step of checkout* and finds the new
+`audit` function empty and the price rise unannounced; the last request put
+the cart's own block into the price change, no other edits left. On
+`c1364fd` to the working tree: four changes, no repeats.

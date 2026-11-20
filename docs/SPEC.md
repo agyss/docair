@@ -153,7 +153,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair build` (also `docair scan`) | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
 | `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
 | `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
-| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`) with each changed part's whole text before and after, the changed files no part holds, the commit messages and the changed docs go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why (its sources), what to check and where a commit or doc disagrees; every claim bound against both graphs, the pieces and the sources, every piece no change holds an other edit; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`, `docair.explained/1`), asked again only when its changes and other edits no longer cover the pieces, never about a human's change; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters, 3 at once, and, asked in parts, one more that merges the changes that came back twice; progress on stderr; the review as a pull request comment on stdout |
+| `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`) with each changed part's whole text before and after, the changed files no part holds, the commit messages and the changed docs (as claims, without ids) go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why in its own words, what it found off (each what a commit message, a doc or a code comment says, and which one, or that nothing does, against what the code does), and what to check; every claim bound against both graphs and the pieces, every piece no change holds an other edit; kept in `[explain] store` (default `docs/changes/<A>..<B>.json`, `docair.explained/2`), asked again only when its changes and other edits no longer cover the pieces, never about a human's change; at most `[explain] max_requests` (default 8) requests of at most 60,000 characters, 3 at once, and one more that merges the changes that came back twice and places the pieces left; progress on stderr; the review as a pull request comment on stdout |
 | `docair check`   | 1–6         | prints diagnostics; exits non-zero on errors (CI gate) |
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
 | `docair ask "<question>" [--follow-up] [--apply]` | 1–7 + AI | asks the configured model and prints the reply: answer, walkthrough (recorded in `walkthroughs/`), view changes, proposed edits (written to `.docair/docair.patch`). `--follow-up` continues the last conversation; `--apply` writes the edits into the files and the view changes into `docair.toml` (§10) |
@@ -885,8 +885,10 @@ into `docair.html`:
   it lights, the box the camera shows (at 0.8 to 1.3 times the picture's
   size), the tokens that run along its lines (a hollow one for an answer) and
   its card: what happens (§7.3), what it has built up, Back, Next and Whole
-  step. The script plays them; the footer lists the walks, and the details
-  start with them.
+  step. The script plays them; *▶ Walkthroughs (n)* next to Tests opens a
+  panel that lists the walks (docair-7h5), and the details start with them.
+  The side panels' widths are dragged at their inner edge, kept per reader;
+  a double-click puts one back (docair-jjk).
 * The AI is a panel in the page (docs/SLICES.md §8; ✦ Ask). It talks to
   `docair serve`: the page's own address when the server serves it, else
   `<meta name="docair-serve">`; without a server it says so, and everything
@@ -928,12 +930,15 @@ into `docair.html`:
   (`/all`) and the whole flow (`/whole`). The list leads with the review
   (docs/EXPLAIN.md §9), when `docair explain` stored one: the AI's changes,
   each one difference in what the app does, at `#review/<n>` on a picture of
-  its pieces only, opening on *What and why* under its title (why with the
-  commits and docs it comes from, what to check, where a commit or doc and
-  the code disagree), then *How · k of n*, its pieces in the order they work
-  together, each card the model's words over docair's, then what docair put
-  with it by module; its details say the same, then the flows it touches;
-  after the changes the flows, with how many of the system's flows changed,
+  its pieces only, opening on *What and why* under its whole title (the AI's
+  why, what it found off, each *Said* over *The code* with the parts where
+  the code does it linked and their code folded, or that it found
+  nothing, what to check), then *How
+  · k of n*, its pieces in the order they work together, each card the
+  model's words over docair's; its details hold only what the card does not:
+  which change, the flows it touches, who wrote it;
+  after the changes the flows, with how many of the system's flows changed
+  and all of them folded, each to its picture,
   the model's links, and last the *Other edits*, folded: the pieces no change
   holds. Every piece, and every change step of a flow, folds out its code,
   *The code · n parts*: each new, gone and edited part's file and line and its
@@ -1836,8 +1841,9 @@ So a walkthrough that has gone stale after a refactoring shows up in
 
 ### 10.4 Walks in the page
 
-The footer lists the scenarios and walkthroughs, and the details panel starts
-with them (*Walk me through*). A walk is one picture: its slice (§3.7), laid
+The header's *▶ Walkthroughs (n)*, next to Tests, opens a panel that lists
+the scenarios and walkthroughs, and the details panel starts with them
+(*Walk me through*); the walk on screen is marked in both (docair-7h5). A walk is one picture: its slice (§3.7), laid
 out with its lines pointing ahead. A scenario, a walkthrough and a datum's
 way (§3.6) play the same:
 

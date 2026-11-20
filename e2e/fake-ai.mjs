@@ -42,24 +42,31 @@ function reply(messages) {
       checks,
     };
   }
+  // The last request of a review (docs/EXPLAIN.md §9.2): nothing came back twice, no piece placed.
+  if ((messages[0]?.content || '').startsWith('You finish a review')) {
+    return { same: [], place: [] };
+  }
   // The review (docair explain, docs/EXPLAIN.md §9): the path's pieces make one change, titled from the
-  // first commit's subject, citing it and the first changed doc; code edits are left as other edits.
-  if ((messages[0]?.content || '').startsWith('You help a reviewer understand')) {
+  // first commit's subject; its why in its own words; a code edit it finds off; code edits are left out.
+  if ((messages[0]?.content || '').startsWith('You review what changed')) {
     const user = messages[1]?.content || '';
     const input = JSON.parse(user.slice(user.indexOf('{')));
     const idOf = (line) => String(line || '').split(' ')[0];
     const path = (input.pieces || []).filter((p) => p.kind !== 'code');
     const commit = (input.commits || [])[0];
-    const doc = (input.docs || [])[0];
+    const edited = (input.pieces || []).filter((p) => p.kind === 'code').flatMap((p) => p['code changed'] || []);
     const first = idOf((path[0]?.new || [])[0]);
     const changes = path.length
       ? [{
           title: `${commit ? commit.subject + ': ' : ''}the flow now reaches ${first ? '`' + first + '`' : 'a new step'}.`,
           how: path.map((p) => ({ piece: p.id, words: `Here the flow ${p.new?.length ? 'now reaches `' + idOf(p.new[0]) + '`' : 'changes'}.` })),
-          why: commit ? `The commit says: ${commit.subject}.` : 'No commit says why.',
-          sources: [commit?.id, doc?.id].filter(Boolean),
+          why: `Checkout now goes one step further${first ? ', to `' + first + '`' : ''}.`,
+          // What was said against what the code does (docair-8l6.58): the commit's claim, and an edit nothing mentions.
+          off: [
+            ...(commit && first ? [{ source: 'commit', where: commit.subject, says: 'Every order is audited.', code: `Only checkout reaches \`${first}\`.`, parts: [first] }] : []),
+            ...(edited.length ? [{ source: 'none', where: '', says: '', code: `\`${edited[0]}\` changes too, and nothing announces it.`, parts: [edited[0]] }] : []),
+          ],
           check: 'Check that the new step has a test.',
-          disagrees: [],
         }]
       : [];
     const removed = input['removed at A'] || [];

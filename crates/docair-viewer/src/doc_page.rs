@@ -470,9 +470,6 @@ pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Cha
         panels.data["changes"] = Value::String(v.list.clone());
         panels.data["flowChanges"] = Value::Object(v.details.clone());
     }
-    // The panels and the walks' steps go with the pictures, packed the same way, last.
-    packed.push(pack(&panels.data.to_string()));
-    let panels_at = packed.len() - 1;
     let picture_of = |s: &Spot| match s.shown {
         SpotPictures::One(i) | SpotPictures::Two { on: i, .. } => i,
     };
@@ -491,6 +488,12 @@ pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Cha
             walk_steps.insert(s.addr.clone(), steps.clone());
         }
     }
+    // The walks to start: a button next to Tests and its panel (docair-7h5).
+    let walks = page_walks::walk_list(&walk_list);
+    panels.data["walks"] = Value::String(walks.panel.clone());
+    // The panels and the walks' steps go with the pictures, packed the same way, last.
+    packed.push(pack(&panels.data.to_string()));
+    let panels_at = packed.len() - 1;
     // A changed flow opens on a walk over its changes, walked like any walk (docair-zrr.22).
     for c in view.iter().flat_map(|v| &v.pictures) {
         if let Some(w) = &c.walk {
@@ -510,7 +513,6 @@ pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Cha
         miniz_oxide::deflate::compress_to_vec(docair_layout_wasm::MODULE, PACK_LEVEL),
     ));
     let router_at = packed.len() - 1;
-    let (walk_bar, tours) = page_walks::walk_list(graph, &walk_list);
     let infos = layers(graph);
     let mut pictures = Map::new();
     for s in &all.spots {
@@ -639,8 +641,8 @@ pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Cha
             ("changes", view.as_ref().map_or("", |v| v.button.as_str())),
             ("ask", crate::page_ai::BUTTON),
             ("chat", &crate::page_ai::panel()),
-            ("walks", &walk_bar),
-            ("tours", &tours),
+            ("walks", &walks.button),
+            ("tours", &walks.tours),
             ("tree", &panels.tree),
             ("legend", &panels.legend),
             ("drawer", &panels.drawer),

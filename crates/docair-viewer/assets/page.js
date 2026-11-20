@@ -80,7 +80,7 @@ async function show(addr, keepView = false) {
   follow(p);
   applyHidden();
   search();
-  for (const a of document.querySelectorAll('#flow [data-walk]')) a.classList.toggle('on', a.dataset.walk === addr);
+  for (const a of document.querySelectorAll('.tour[data-walk]')) a.classList.toggle('on', a.dataset.walk === addr);
   const left = !!W;
   if (p.walk) await startWalk(addr);
   else W = null;
@@ -212,6 +212,10 @@ function wirePopups() {
     else if (ev.target.closest?.('[data-tidy-close]')) ($('#tidy-banner').hidden = true), stored('localStorage', `docair:tidy:${IX.system}`, $('#tidy-banner').dataset.count);
     else if (ev.target.closest?.('[data-test="tidy-copy"]')) navigator.clipboard?.writeText(ev.target.dataset.command).then(() => toast(ev.target.dataset.copied), () => {});
     else if (ev.target.closest?.('[data-changes-list], #btn-changes')) panel(P.changes);
+    else if (ev.target.closest?.('#btn-walks')) {
+      panel(P.walks);
+      for (const a of document.querySelectorAll('.tour[data-walk]')) a.classList.toggle('on', a.dataset.walk === S.addr);
+    }
     // ✦ Ask about this: the thing goes along with the next question, as a chip in the panel.
     const about = ev.target.closest?.('[data-ref]');
     if (about) {
@@ -995,6 +999,29 @@ function wire() {
   }).observe($('#pic'));
 }
 
+/***
+ * The side panels' widths (docair-jjk): each dragged at its inner edge, between 160 px and half the page,
+ * kept per reader; a double-click puts it back.
+ *
+ * @id      docair-viewer.doc-page.wire-sides
+ * @part-of docair-viewer.doc-page
+ ***/
+function wireSides() {
+  const set = (k, w) => (w ? $('#app').style.setProperty(`--side-${k}`, `${w}px`) : $('#app').style.removeProperty(`--side-${k}`));
+  for (const h of document.querySelectorAll('.side-handle')) {
+    const k = h.dataset.side;
+    set(k, +stored('localStorage', `docair:side-${k}`) || 0);
+    h.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      h.setPointerCapture(e.pointerId), h.classList.add('on');
+      const app = $('#app').getBoundingClientRect();
+      h.onpointermove = (m) => set(k, Math.round(Math.max(160, Math.min(app.width / 2, k === 'tree' ? m.clientX - app.left : app.right - m.clientX))));
+      h.onpointerup = () => ((h.onpointermove = null), h.classList.remove('on'), stored('localStorage', `docair:side-${k}`, parseInt($('#app').style.getPropertyValue(`--side-${k}`)) || null));
+    });
+    h.addEventListener('dblclick', () => (set(k, 0), stored('localStorage', `docair:side-${k}`, null)));
+  }
+}
+
 unpack(IX.panels)
   .then((text) => {
     P = JSON.parse(text);
@@ -1002,6 +1029,7 @@ unpack(IX.panels)
     testsButton();
     wire();
     wirePopups();
+    wireSides();
     wireChat();
     return show(addressOf(location.hash));
   })

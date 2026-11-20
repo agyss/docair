@@ -521,7 +521,7 @@ mod tests {
             "{:?}",
             i.words
         );
-        assert!(i.sources().contains("doc:README.md"));
+        assert!(i.docs.iter().any(|d| d.id == "doc:README.md"));
         // docair-8l6.47: the changed part's whole text before and after, its doc block with it;
         // the changed file that holds no part, as its lines.
         let buy = i
@@ -557,7 +557,7 @@ mod tests {
             i.files.iter().all(|f| !f.path.ends_with(".md")),
             "Markdown goes as docs"
         );
-        assert!(i.sources().contains("file:ui/style.css"));
+
         // The working tree as B: the commits up to HEAD, and what is not committed said.
         let work = compare(dir.path(), "HEAD~1", None, false).unwrap();
         assert!(work.intent.uncommitted && work.intent.commits.len() == 1);

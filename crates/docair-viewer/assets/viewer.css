@@ -136,14 +136,18 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 #app {
   display: grid;
   height: 100vh;
-  grid-template-columns: 250px minmax(0, 1fr) 360px;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  /* The side panels' widths, dragged at their inner edge (docair-jjk): `--side-tree`, `--side-details`. */
+  grid-template-columns: var(--side-tree, 250px) minmax(0, 1fr) var(--side-details, 360px);
+  grid-template-rows: auto auto minmax(0, 1fr);
   grid-template-areas:
     "header header header"
     "banner banner banner"
-    "tree   graph  details"
-    "flow   flow   flow";
+    "tree   graph  details";
 }
+.side-handle { grid-area: graph; width: 7px; z-index: 6; cursor: col-resize; touch-action: none; }
+.side-handle[data-side="tree"] { justify-self: start; margin-left: -4px; }
+.side-handle[data-side="details"] { justify-self: end; margin-right: -4px; }
+.side-handle:hover, .side-handle.on { background: var(--accent); opacity: .45; }
 
 /* header */
 header {
@@ -312,6 +316,9 @@ header .btn, header .layers { white-space: nowrap; flex: none; }
 .edges { list-style: none; padding: 0; margin: 4px 0 10px; }
 .edges li { padding: 2px 0; display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
 .edges .ek { font-size: 11px; color: var(--muted); width: 54px; flex: none; }
+/* A link without a class of its own (from Markdown: a glossary entry's "Read more", a doc's links) takes the
+   accent, readable in light and dark, never the browser's dark blue (docair-i3g). */
+a { color: var(--accent); }
 .link { color: var(--accent); cursor: pointer; text-decoration: none; }
 .link:hover { text-decoration: underline; }
 .tags { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -324,17 +331,6 @@ header .btn, header .layers { white-space: nowrap; flex: none; }
 h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 14px 0 4px; }
 
 /* flow player */
-#flow {
-  grid-area: flow;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
-  min-height: 46px;
-}
-#flow select { border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; background: var(--panel); }
 #steps { display: flex; align-items: center; gap: 0; flex: none; }
 #steps .dot {
   width: 14px; height: 14px; border-radius: 50%;
@@ -346,7 +342,6 @@ h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color
 #steps .bar.done { background: var(--flow); }
 #step-label { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #step-label b { color: var(--flow); }
-#flow select { max-width: min(360px, 40vw); }
 
 /* the step card on top of the details panel (SPEC §7.4, §10.4) */
 .card {
@@ -422,7 +417,7 @@ h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color
 
 /* Next to the web app's conversation the page is narrower: smaller side panels, a shorter header. */
 @media (max-width: 1200px) {
-  #app { grid-template-columns: 210px minmax(0, 1fr) 300px; }
+  #app { grid-template-columns: var(--side-tree, 210px) minmax(0, 1fr) var(--side-details, 300px); }
   header { gap: 8px; }
   header .stats { display: none; }
   #btn-tests .onoff { display: none; }
@@ -432,13 +427,14 @@ h3.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color
 @media (max-width: 900px) {
   #app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto 45vh auto auto auto;
-    grid-template-areas: "header" "banner" "graph" "flow" "details" "tree";
+    grid-template-rows: auto auto 45vh auto auto;
+    grid-template-areas: "header" "banner" "graph" "details" "tree";
     height: auto;
   }
   #details, #tree { border: 0; border-top: 1px solid var(--line); }
   #tree-list { max-height: 40vh; }
-  header, #flow { flex-wrap: wrap; }
+  header { flex-wrap: wrap; }
+  .side-handle { display: none; }
   header .spacer { display: none; }
   #steps { max-width: 100%; overflow-x: auto; padding: 4px 2px; }
   #step-label { white-space: normal; }
@@ -593,3 +589,22 @@ code.node-ref:hover, code.node-ref:focus-visible { background: var(--accent-soft
 .code-diff > .add { background: var(--ch-added-bg, #dafbe1); }
 .code-diff > .del { background: var(--ch-removed-bg, #ffebe9); text-decoration: line-through; text-decoration-color: rgba(127, 127, 127, .5); }
 .code-diff > .same { color: var(--muted); }
+/* What the AI found off, checking the commits and docs against the code (docair-8l6.55). */
+.review-off { margin: 8px 0; padding: 6px 10px; border-left: 3px solid var(--warning); background: var(--ch-changed-bg, #fff8c5); border-radius: 4px; }
+.review-off h4 { margin: 0 0 4px; color: var(--warning); }
+.review-off ul { margin: 0; padding-left: 18px; }
+/* Each thing found off: what was said over what the code does, side by side (docair-8l6.58). */
+.off-item { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; padding: 6px 0; }
+.off-item + .off-item { border-top: 1px solid var(--line); }
+.off-item dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; padding-top: 2px; }
+.off-item dd { margin: 0; }
+.off-who { font-weight: 550; }
+.off-parts { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
+.off-item .piece-code { margin-top: 4px; }
+.review-ok { margin: 8px 0; color: var(--muted); font-size: 12.5px; }
+/* Every flow of the system, folded under the flows the changes touch (docair-8l6.57). */
+.all-flows { margin: 10px 0 12px; }
+.all-flows > summary { cursor: pointer; font-weight: 550; }
+.all-flows h4 { margin: 8px 0 2px; }
+.all-flows ul { margin: 0 0 6px; padding-left: 18px; }
+.all-flows li { margin: 3px 0; }

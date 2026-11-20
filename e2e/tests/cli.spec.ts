@@ -156,22 +156,28 @@ test.describe('the CLI', () => {
     const out = run('explain', 'HEAD~1', 'HEAD', '--root', shop);
     expect(out).toContain('### docair: the review of `HEAD~1` → `HEAD`');
     expect(out).toContain('**1. Audit every order: the flow now reaches `orders.audit`.**');
-    expect(out).toMatch(/Why: The commit says: Audit every order\. \(commit:[0-9a-f]+, doc:README\.md\)/);
+    // The AI's own words, nothing cited (docair-8l6.55).
+    expect(out).toContain('Why: Checkout now goes one step further, to `orders.audit`.');
+    expect(out).not.toContain('commit:');
+    // What was said against what the code does (docair-8l6.58).
+    expect(out).toContain('- **Said:** the commit “Audit every order”: Every order is audited.  \n  **The code:** Only checkout reaches `orders.audit`. (in `orders.audit`)');
     const store = path.join(shop, 'docs', 'changes');
     const [file] = fs.readdirSync(store);
     const found = JSON.parse(fs.readFileSync(path.join(store, file), 'utf8'));
-    expect(found.schema).toBe('docair.explained/1');
+    expect(found.schema).toBe('docair.explained/2');
     expect(found.changes[0].recorded.by).toBe('model');
+    expect(found.changes[0].off[0]).toEqual({ source: 'commit', where: 'Audit every order', says: 'Every order is audited.', code: 'Only checkout reaches `orders.audit`.', parts: ['orders.audit'] });
     expect(found.changes[0].how.map((h: any) => h.piece)).toContain('path:orders.audit');
     // What the model got: the pieces and the intent, never the whole graph.
     const sent = (await (await request.get(`${fakeAi}/requests`)).json()) as any[];
-    const mine = sent.filter((r) => r.messages[0].content.startsWith('You help a reviewer understand') && r.messages[1].content.includes('orders.audit'));
+    const mine = sent.filter((r) => r.messages[0].content.startsWith('You review what changed') && r.messages[1].content.includes('orders.audit'));
     expect(mine.length).toBeGreaterThan(0);
     const input = mine.at(-1).messages[1].content;
     expect(input).toContain('path:orders.audit');
     expect(input).toContain('Audit every order');
     expect(input).toContain('The auditors want a trail of each order.');
-    expect(input).toContain('doc:README.md');
+    expect(input).toContain('README.md');
+    expect(input).not.toContain('commit:');
     expect(input).not.toContain('kind_cluster');
     // A human corrects the change; the next run keeps it and asks about nothing new.
     found.changes[0].title = 'Audited by hand: the API keeps an audit entry of each order.';
@@ -181,7 +187,7 @@ test.describe('the CLI', () => {
     const again = run('explain', 'HEAD~1', 'HEAD', '--root', shop);
     expect(again).toContain('Audited by hand');
     const sentAgain = (await (await request.get(`${fakeAi}/requests`)).json()) as any[];
-    expect(sentAgain.filter((r) => r.messages[0].content.startsWith('You help a reviewer understand') && r.messages[1].content.includes('orders.audit')).length).toBe(before);
+    expect(sentAgain.filter((r) => r.messages[0].content.startsWith('You review what changed') && r.messages[1].content.includes('orders.audit')).length).toBe(before);
     // The same from a served page: docair serve on the repository reviews as a job (docair-8l6.11).
     const served = await serveFolder(shop, ['--changes', 'HEAD~1']);
     const html = fs.readFileSync(path.join(shop, '.docair', 'docair.html'), 'utf8');
@@ -210,7 +216,8 @@ test.describe('the CLI', () => {
     expect(await version()).toBeGreaterThan(was);
     await page.goto(`${served.url}/#review/1`);
     await ready(page);
-    await expect(page.locator('#details [data-test="review-title"]')).toContainText('now reaches');
+    // The change's whole title heads its card (docair-8l6.54).
+    await expect(page.getByTestId('step-card').locator('.card-head')).toContainText('now reaches');
     await served.stop();
     fs.rmSync(path.dirname(shop), { recursive: true, force: true });
   });

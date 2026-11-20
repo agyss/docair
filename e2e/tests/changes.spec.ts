@@ -110,6 +110,13 @@ test.describe('what changed since a commit', () => {
     // The flows right after the changes; the other edits last, folded (docair-8l6.42).
     await expect(page.getByTestId('flows-head')).toBeVisible();
     await expect(page.getByTestId('changes-list')).toContainText('Scenario checkout');
+    // Every flow of the system, folded under them (docair-8l6.57): checkout marked, to its change.
+    const allFlows = page.getByTestId('all-flows');
+    await expect(allFlows.locator('summary')).toContainText(/All \d+ flows of the system/);
+    await allFlows.locator('summary').click();
+    await expect(allFlows).toContainText('Scenarios ·');
+    await expect(allFlows.locator('a[href="#slice/flow:checkout"]')).toHaveText('checkout');
+    await expect(allFlows.locator('a[href="#changes/flow:checkout"]')).toBeVisible();
     await expect(page.getByTestId('other-edits')).toContainText('total');
     const flowsFirst = await page.evaluate(() => {
       const f = document.querySelector('[data-test="flows-head"]');
@@ -129,7 +136,24 @@ test.describe('what changed since a commit', () => {
     // It opens on what was done and why, headed by the change's title (docair-8l6.43) ...
     await expect(page.getByTestId('step-card')).toContainText('What and why');
     await expect(page.getByTestId('step-card')).toContainText('Audit every order');
-    await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('The commit says: Audit every order.');
+    // The AI's own why, and what it found off, on the card (docair-8l6.55).
+    await expect(page.getByTestId('step-card').getByTestId('review-why')).toContainText('Checkout now goes one step further');
+    // Each thing found off: what was said, and by what, over what the code does (docair-8l6.58).
+    const offs = page.getByTestId('step-card').getByTestId('off-item');
+    await expect(offs.first().getByTestId('off-said')).toHaveText('The commit “Audit every order”: Every order is audited.');
+    await expect(offs.first().getByTestId('off-code')).toContainText('Only checkout reaches orders.audit.');
+    // Where the code does it, a link to the part (docair-8l6.61) ...
+    await expect(offs.first().getByTestId('off-parts').locator('.node-ref')).toHaveAttribute('data-node', 'orders.audit');
+    const unsaid = page.getByTestId('step-card').locator('[data-test="off-item"][data-source="none"]');
+    await expect(unsaid.getByTestId('off-said')).toHaveText('Nothing: no commit, doc or comment mentions it.');
+    await expect(unsaid.getByTestId('off-code')).toContainText('nothing announces it');
+    // ... and its code folded: the cart's edit, before and after.
+    await unsaid.getByTestId('piece-code').locator('summary').click();
+    await expect(unsaid.locator('.code-diff .add', { hasText: '* 120' })).toBeVisible();
+    await expect(page.getByTestId('step-card')).not.toContainText('commit:');
+    // The details below hold only what the card does not (docair-8l6.54).
+    await expect(page.getByTestId('review-meta')).toContainText('change 1 of 1');
+    await expect(page.locator('[data-test="review-why"]')).toHaveCount(1);
     // ... then the how: the new step, and the cart's own block the model put with it.
     await page.getByTestId('step-card').locator('[data-step="1"]').click();
     await expect(page.getByTestId('step-card')).toContainText('How · 1 of 2');
@@ -141,8 +165,6 @@ test.describe('what changed since a commit', () => {
     await expect(auditCode.locator('.code-diff .add', { hasText: 'Keep an audit entry of the order.' })).toBeVisible();
     await expect(auditCode.locator('.code-diff .add', { hasText: 'pub fn audit()' })).toHaveCount(1);
     await expect(page.locator('#pic g.part.flow-current[data-id="orders.audit"]')).toHaveCount(1);
-    await expect(page.locator('#details > [data-test="review-why"], #details h2 ~ [data-test="review-why"]').first()).toContainText('The commit says: Audit every order.');
-    await expect(page.locator('[data-test="review-sources"]').first()).toContainText('doc:README.md');
     await expect(page.getByTestId('review-flows')).toContainText('Scenario checkout');
   });
 });

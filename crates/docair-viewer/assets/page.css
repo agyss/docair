@@ -35,11 +35,8 @@ a.seg { color: inherit; text-decoration: none; display: inline-block; }
 #pic .token circle { fill: var(--flow); stroke: var(--canvas); stroke-width: 2; }
 #pic .token.reply circle { fill: var(--canvas); stroke: var(--flow); stroke-width: 3; }
 #pic .token text { font-size: 10px; font-weight: 600; fill: var(--text); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
-#flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 12px; }
-#flow .tour-chip { font-size: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 1px 9px; color: inherit; text-decoration: none; background: var(--panel-2); }
-#flow .tour-chip:hover { border-color: var(--flow); }
-#flow .tour-chip.on { border-color: var(--flow); background: var(--flow-soft); font-weight: 600; }
 #details .tour { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
+#details .tour.on { border-color: var(--flow); background: var(--flow-soft); }
 #details a.chip { text-decoration: none; color: inherit; }
 /* A selected line (docair-nts): it stands out, and its details list the lines it stands for. */
 #pic .line.sel { --ec: var(--accent); }

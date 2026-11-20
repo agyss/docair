@@ -408,9 +408,31 @@ fn a_walk_is_one_picture_with_its_steps() {
             .is_some_and(|s| !s.is_empty()),
         "a datum's way is a walk too"
     );
+    // docair-7h5: the walks are a header button next to Tests and the panel it opens; no footer.
     assert!(
-        page.contains(r##"<a class="tour-chip" href="#slice/flow:checkout""##),
-        "the footer lists the walks"
+        page.contains(r#"data-test="tests-toggle""#)
+            && page.contains(r#"<button class="btn" id="btn-walks" data-test="walks-button""#)
+            && page.find(r#"data-test="tests-toggle""#) < page.find(r#"data-test="walks-button""#)
+            && !page.contains(r#"<footer id="flow">"#)
+            && !page.contains("tour-chip"),
+        "the walks are a button next to Tests"
+    );
+    let panels: Value = serde_json::from_str(&unpack(
+        packed[ix["panels"].as_u64().unwrap() as usize]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    assert!(
+        panels["walks"].as_str().unwrap().contains(
+            r##"<a class="tour" href="#slice/flow:checkout" data-walk="slice/flow:checkout">"##
+        ),
+        "the walks' panel lists them"
+    );
+    // docair-jjk: the side panels' widths are dragged at a handle each.
+    assert!(
+        page.contains(r#"data-test="tree-handle""#)
+            && page.contains(r#"data-test="details-handle""#)
     );
     assert!(
         page.contains("Walk me through"),
@@ -634,6 +656,16 @@ fn a_changed_flow_shows_before_and_after() {
             && list.contains("<code>orders.make</code> → <code>orders.create</code>"),
         "the list links the flow, marks it uncertain, and lists the move apart: {list}"
     );
+    // docair-8l6.57: every flow of the system, folded, each to its picture; the changed one to its change too.
+    let all = &list[list.find(r#"data-test="all-flows""#).expect("all flows")..];
+    assert!(
+        all.contains("<summary>All ")
+            && all.contains(" flows of the system</summary>")
+            && all.contains("<h4>Data · ")
+            && all.contains(r##"<a class="link" href="#slice/data.order">order</a> <span class="badge ch-changed">changed</span> <a class="link" href="#changes/data.order" data-test="flow-changes">"##)
+            && all.contains(r##"href="#slice/flow:"##),
+        "{all}"
+    );
     let details = panels["flowChanges"]["data.order"].as_str().unwrap();
     assert!(
         details.contains("Now goes through") && details.contains("orders-db"),
@@ -682,16 +714,19 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     let piece = pieces[0].id().to_string();
     let recorded = serde_json::json!({ "by": "model", "model": "fake-model", "at": "2026-11-19" });
     let findings = serde_json::json!({
-        "schema": "docair.explained/1",
+        "schema": "docair.explained/2",
         "a": "01234567", "b": "fedcba98",
         "links": [{ "a": "orders.make", "b": "orders.create", "why": "the same work, renamed", "recorded": recorded }],
         "changes": [{
             "title": "Placing an order now checks the cart first.",
             "how": [{ "piece": piece.clone(), "words": "Here `orders.create` now checks the cart before it stores it." }],
-            "why": "The auditors asked for every order to be checked.",
-            "sources": ["commit:abc1234"],
+            "why": "An order with an empty cart is turned away before it is stored.",
+            "off": [
+                { "source": "doc", "where": "README.md", "says": "The cart checks itself before it posts.",
+                  "code": "The cart is checked in `orders.create`, not in the cart.", "parts": ["orders.create"] },
+                "Nothing tests an empty cart."
+            ],
             "check": "That `orders.create` still answers fast.",
-            "disagrees": ["The commit says the cart checks it, but `orders.create` does."],
             "recorded": recorded
         }],
         "problems": [], "left": [], "requests": 1
@@ -751,17 +786,32 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     );
     let walks = unpacked("walks");
     let steps = walks["review/1"]["steps"].as_array().unwrap();
-    // docair-8l6.43: it opens on what was done and why, headed by the change's title; then the how.
+    // docair-8l6.43, 8l6.54, 8l6.55: it opens on what and why under the change's whole title, once;
+    // the AI's why, what it found off, what to check; then the how.
     assert_eq!(steps.len(), 2);
     let intro = steps[0]["card"].as_str().unwrap();
     assert!(
         intro.contains(r#"<span class="card-glyph">Δ</span><b>Placing an "#)
+            && intro.contains("</span> first.</b>")
+            && intro.matches("Placing an").count() == 1
             && intro.contains(r#"<div class="card-step">What and why</div>"#)
-            && intro.contains(r#"data-test="review-what""#)
             && intro.contains(r#"data-test="review-why""#)
+            && intro.contains(r#"data-test="review-off""#)
+            && intro.contains(r#"<dl class="off-item" data-test="off-item" data-source="doc"><dt>Said</dt><dd data-test="off-said"><span class="off-who"><code>README.md</code>:</span> The cart checks itself before it posts.</dd><dt>The code</dt><dd data-test="off-code">The cart is checked in "#)
+            // docair-8l6.61: where the code does it, a link to the part, and its code folded.
+            && intro.contains(r#"<div class="off-parts" data-test="off-parts">in <code class="node-ref" data-node="orders.create" tabindex="0" title="orders.create">"#)
+            && intro.contains(r#"</div><details class="piece-code" data-test="piece-code"><summary>The code · 1 part</summary>"#)
+            && intro.contains(r#"data-source="none"><dt>Said</dt><dd data-test="off-said"><span class="muted">Nothing: no commit, doc or comment mentions it.</span></dd><dt>The code</dt><dd data-test="off-code">Nothing tests an empty cart.</dd>"#)
             && intro.contains(r#"data-test="review-check""#)
+            && !intro.contains("review-ok")
+            && !intro.contains("commit:")
             && !intro.contains("This change"),
         "what and why first: {intro}"
+    );
+    let at = |t: &str| intro.find(&format!(r#"data-test="{t}""#)).unwrap();
+    assert!(
+        at("review-why") < at("review-off") && at("review-off") < at("review-check"),
+        "{intro}"
     );
     assert_eq!(steps[1]["id"], Value::from(piece));
     let card = steps[1]["card"].as_str().unwrap();
@@ -772,42 +822,33 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             && card.contains("Code changed in"),
         "the model's words on its piece, over docair's: {card}"
     );
+    // Its details hold only what the card does not: which change, the flows, who wrote it.
     let details = panels["flowChanges"]["review/1"].as_str().unwrap();
-    for test in [
-        "review-title",
-        "review-how",
-        "review-why",
-        "review-sources",
-        "review-check",
-        "review-disagrees",
-        "review-flows",
-    ] {
+    for test in ["review-meta", "review-flows"] {
         assert!(
             details.contains(&format!(r#"data-test="{test}""#)),
             "{test}: {details}"
         );
     }
+    for gone in [
+        "review-title",
+        "review-why",
+        "review-off",
+        "review-check",
+        "review-how",
+        "piece-code",
+        "Placing an order",
+    ] {
+        assert!(!details.contains(gone), "{gone} is on the card: {details}");
+    }
+    assert!(details.contains("change 1 of 1") && details.contains("by fake-model · 2026-11-19"));
+    // Down to the code, on the piece's card: its part, file and line, its text as a line diff, folded.
     assert!(
-        details.contains("<code>commit:abc1234</code>")
-            && details.contains("by fake-model · 2026-11-19")
-    );
-    // Down to the code: the piece's part, its file and line, its text as a line diff, folded.
-    assert!(
-        details.contains(r#"data-test="piece-code"><summary>The code · 1 part</summary>"#)
-            && details.contains(r#"<span class="same">  /// Place an order.</span>"#)
-            && details.contains(r#"<span class="add">+     check_cart();</span>"#)
-            && !details.contains(r#"class="del""#),
-        "{details}"
-    );
-    let card = steps[1]["card"].as_str().unwrap();
-    assert!(
-        card.contains(r#"data-test="piece-code""#) && card.contains("check_cart();"),
-        "the walk's card has it too: {card}"
-    );
-    let at = |t: &str| details.find(&format!(r#"data-test="{t}""#)).unwrap();
-    assert!(
-        at("review-why") < at("review-how") && at("review-check") < at("review-how"),
-        "why before how: {details}"
+        card.contains(r#"data-test="piece-code"><summary>The code · 1 part</summary>"#)
+            && card.contains(r#"<span class="same">  /// Place an order.</span>"#)
+            && card.contains(r#"<span class="add">+     check_cart();</span>"#)
+            && !card.contains(r#"class="del""#),
+        "{card}"
     );
     assert!(
         details.contains(r##"href="#changes/data.order""##),

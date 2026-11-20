@@ -569,35 +569,42 @@ pub(crate) fn steps(
     json!({ "title": told.title, "glyph": glyph(seed.kind), "steps": out })
 }
 
-/// The walks to start: the footer's list, and "Walk me through" in the details before anything is selected.
-pub(crate) fn walk_list(
-    graph: &Graph,
-    walks: &[(String, SeedKind, String, usize)],
-) -> (String, String) {
-    let _ = graph;
-    let mut bar = String::new();
+/// The walks to start (docair-7h5): the header's *Walkthroughs* button and the panel it opens, and "Walk
+/// me through" in the details before anything is selected. Empty when there is no walk.
+pub(crate) struct WalkList {
+    pub button: String,
+    pub panel: String,
+    pub tours: String,
+}
+
+pub(crate) fn walk_list(walks: &[(String, SeedKind, String, usize)]) -> WalkList {
     let mut list = String::new();
+    let mut n = 0;
     for (addr, kind, title, steps) in walks.iter().filter(|w| w.1 != SeedKind::Data) {
         let _ = write!(
-            bar,
-            r#"<a class="tour-chip" href="{}" data-walk="{}">{} {}</a>"#,
+            list,
+            r#"<a class="tour" href="{}" data-walk="{}"><span class="tour-title">{} {}</span><span class="stats">{steps} steps</span></a>"#,
             href(addr),
             escape_text(addr),
             glyph(*kind),
             escape_text(title)
         );
-        let _ = write!(
-            list,
-            r#"<a class="tour" href="{}"><span class="tour-title">{} {}</span><span class="stats">{steps} steps</span></a>"#,
-            href(addr),
-            glyph(*kind),
-            escape_text(title)
-        );
+        n += 1;
     }
-    let list = if list.is_empty() {
-        String::new()
-    } else {
-        format!(r#"<section class="tours"><h4>Walk me through</h4>{list}</section>"#)
-    };
-    (bar, list)
+    if n == 0 {
+        return WalkList {
+            button: String::new(),
+            panel: String::new(),
+            tours: String::new(),
+        };
+    }
+    WalkList {
+        button: format!(
+            r#"<button class="btn" id="btn-walks" data-test="walks-button" title="Walk through the scenarios and the recorded walkthroughs, step by step">▶ Walkthroughs ({n})</button>"#
+        ),
+        panel: format!(
+            r#"<h2>▶ Walkthroughs</h2><div class="meta">{n} walks · the scenarios (▶) and the walkthroughs the AI recorded (✦), step by step</div><section class="tours" data-test="walks-list">{list}</section>"#
+        ),
+        tours: format!(r#"<section class="tours"><h4>Walk me through</h4>{list}</section>"#),
+    }
 }

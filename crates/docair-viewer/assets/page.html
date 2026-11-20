@@ -27,6 +27,7 @@
     <div class="spacer"></div>
     <nav class="layers" id="layers" aria-label="Layer"><span class="seg-label">Layer</span>{{docair:layers}}</nav>
     {{docair:tests}}
+    {{docair:walks}}
     {{docair:buttons}}
     {{docair:changes}}
     {{docair:ask}}
@@ -51,7 +52,8 @@
     <div id="hidden-bar" hidden data-test="hidden-bar"><span class="hb-label">hidden:</span><span class="hb-chips"></span><a class="link" data-test="show-all" hidden>Show all</a></div>
   </main>
   <aside id="details">{{docair:tours}}<p class="empty">Select a node to see its documentation.</p></aside>
-  <footer id="flow">{{docair:walks}}</footer>
+  <div class="side-handle" data-side="tree" data-test="tree-handle" title="Drag to widen; double-click for the default width"></div>
+  <div class="side-handle" data-side="details" data-test="details-handle" title="Drag to widen; double-click for the default width"></div>
   <div id="drawer" hidden>{{docair:drawer}}</div>
   <div id="term-pop" hidden role="tooltip" data-test="term-pop"></div>
   {{docair:chat}}
