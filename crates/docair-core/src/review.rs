@@ -395,11 +395,8 @@ fn slice_of(graph: &Graph, parts: &HashSet<String>) -> Slice {
     }
 }
 
-/// A change's picture shows at most this many parts one line away from each of its parts (docair-8l6.77).
-pub const AROUND: usize = 12;
-
 /***
- * A change's own picture (docs/EXPLAIN.md §9.5, docair-8l6.33, 8l6.77): its pieces' parts at A and at B, and one step around them, faded: the parts one line away (what calls them and what they call, at most `AROUND` a part, no test's line), with the lines between them all, as one picture like a flow's (`change_steps::merged`); and the change as a flow change, so it is marked like one (new, gone, changed in its code) and the parts around stay unmarked.
+ * A change's own picture (docs/EXPLAIN.md §9.5, docair-8l6.33, 8l6.77): its pieces' parts at A and at B, and one step around them, faded: the parts one line away (what calls them and what they call, every one of them (docair-8l6.83), no test's line), with the lines between them all, as one picture like a flow's (`change_steps::merged`); and the change as a flow change, so it is marked like one (new, gone, changed in its code) and the parts around stay unmarked.
  *
  * @calls docair-core.change_steps.merged "both versions as one picture"
  ***/
@@ -455,7 +452,6 @@ pub fn change_picture(
         let mut ids: Vec<&String> = set.iter().collect();
         ids.sort();
         for id in ids {
-            let mut n = 0;
             for e in g
                 .edges
                 .iter()
@@ -472,10 +468,6 @@ pub fn change_picture(
                     continue;
                 }
                 extra.insert(other.clone());
-                n += 1;
-                if n >= AROUND {
-                    break;
-                }
             }
         }
         extra

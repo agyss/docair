@@ -38,7 +38,7 @@ pub fn cmd_diff(
 }
 
 /***
- * `docair explain <A> [<B>]`: the review of the change (docs/EXPLAIN.md §9): the AI groups docair's pieces into changes, one difference in what the app does each, from the pieces, the commit messages and the changed docs, and says what, how, why and what to check; kept in `[explain] store` (`docs/changes/<A>..<B>.json`), so the next run asks only when the pieces changed and never about what a human wrote; a pull request comment on stdout (`--json`: the store).
+ * `docair explain <A> [<B>]`: the review of the change (docs/EXPLAIN.md §9): the AI groups docair's pieces into changes, one difference in what the app does each, from the pieces, the commit messages and the changed docs, and says what, how, why and what to check; kept in `[explain] store` (`.docair/changes/<A>..<B>.json` by default), so the next run asks only when the pieces changed and never about what a human wrote; a pull request comment on stdout (`--json`: the store).
  *
  * @calls docair-server.commits.compare "compares the commits"
  * @calls docair-ai.explain.explain_with "reviews the change, at most 3 requests at once"

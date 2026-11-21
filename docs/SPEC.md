@@ -327,8 +327,12 @@ Rules:
   `fn all`; `enum Family` and `fn family`; a block's `@id` that is its type's)
   both stay parts with their lines: the one a block names keeps the id, else
   a type, else the first; the other gets its kind after it (`all-static`,
-  `family-fn`), or a number when both are of one kind (`from-2`), and a type's
-  methods follow it (`config-struct.default`). On docair this brought back 28
+  `family-fn`), and a type's methods follow it (`config-struct.default`).
+  Items of one name and kind that say what tells them apart (an impl's trait
+  arguments, a `#[cfg(…)]`) each get it, none the plain id: the four
+  `impl From<X> for ApiError` are `from-io-error`, `from-anyhow-error`,
+  `from-join-error`, `from-multipart-error` (docair-4wk.41); a number only
+  where nothing tells them apart. On docair this brought back 28
   parts that were left out before (docair-4wk.38).
 * `@part-of` must not form a cycle (error).
 * Nodes without a parent are children of the system node.

@@ -56,10 +56,14 @@ pub struct ExplainSettings {
     /// How much the model reasons before it answers: `low`, `medium` or `high`; default `low`
     /// (docair-8l6.78).
     pub reasoning: Option<String>,
-    /// No longer used: a review is one request (docair-8l6.79). Still read, so a docair.toml that
-    /// sets it keeps working.
-    pub max_requests: Option<usize>,
 }
+
+/// Keys docair.toml no longer has, and why: a file that sets one fails, saying so (docair-8l6.87).
+const GONE_KEYS: &[(&str, &str, &str)] = &[(
+    "explain",
+    "max_requests",
+    "a review is one request now (docair-8l6.79); remove it, and use max_chars for its size",
+)];
 
 /// `[code]` in `docair.toml`: where the calls between functions come from.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -268,12 +272,37 @@ pub fn load(root: &Path) -> Result<Config> {
     }
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    if let Ok(table) = text.parse::<toml::Table>() {
+        for (section, key, why) in GONE_KEYS {
+            if table.get(*section).and_then(|s| s.get(*key)).is_some() {
+                anyhow::bail!(
+                    "{}: `[{section}] {key}` is no longer used: {why}",
+                    path.display()
+                );
+            }
+        }
+    }
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
 #[cfg(test)]
 mod inside_tests {
     use super::inside;
+
+    /// A key docair.toml no longer has fails, naming it and why (docair-8l6.87).
+    #[test]
+    fn a_key_no_longer_used_fails_naming_it() {
+        let dir = std::env::temp_dir().join(format!("docair-gone-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("docair.toml"), "[explain]\nmax_requests = 4\n").unwrap();
+        let err = super::load(&dir).unwrap_err().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            err.contains("`[explain] max_requests` is no longer used")
+                && err.contains("one request"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn a_path_in_docair_toml_stays_inside_the_root() {

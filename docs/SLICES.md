@@ -234,12 +234,14 @@ built, so it is always the code as it is and nothing built is kept in the
 repository; a build needs the wasm32 target (docair-702.42). While the reader holds a part,
 each time it has moved a whole track (8 px), and when they drop it, the
 script hands the module the picture's layout input, its layout and how far
-the part moved; the module shifts the part and what it holds, grows the boxes
-around it, and shrinks a box where the part was what held its side out, its
-side following the part by as much (docair-702.41); it routes again the lines
-that touch the part, and those inside a box that shrank, around every part and
-around the lines that stay, which count as used tracks so a moved line keeps
-off them (docair-702.40); it places their words, and answers with each line ready to draw (`d` and the arrow, as
+the part moved; the module shifts the part and what it holds, and fits every
+box around it to what it holds, with its room and wide enough for its name
+(docair-702.45, replacing 702.41's shrink by what the part freed); it routes
+again the lines that touch the part, and those inside a box that changed,
+around every part and around the lines that stay, which count as used tracks
+so a moved line keeps off them (docair-702.40); a staying line a routed line
+then crosses is routed again with them when the picture has fewer crossings
+so (docair-702.44); it places their words, and answers with each line ready to draw (`d` and the arrow, as
 the SVG writes them). While held, the lines follow and the words wait; on
 the drop they take their place. The router is the one `docair build` lays
 out with; the script only sets attributes. A move lasts until the page is

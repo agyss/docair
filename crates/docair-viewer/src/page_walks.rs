@@ -176,23 +176,26 @@ fn walk_words(
                 .collect();
             let foot = w
                 .map(|w| {
+                    // Who wrote it, when the AI did; a walkthrough a person wrote has no label
+                    // (docair-8l6.86).
                     let by = match &w.recorded {
-                        Some(r) if r.by == "human" => "written by hand".to_string(),
-                        Some(r) => {
-                            format!("written by {}", r.model.as_deref().unwrap_or("an AI model"))
-                        }
-                        None => "written by an AI model".to_string(),
+                        Some(r) if r.by == "human" => None,
+                        Some(r) => Some(format!(
+                            "written by {}",
+                            r.model.as_deref().unwrap_or("an AI model")
+                        )),
+                        None => Some("written by an AI model".to_string()),
                     };
                     let when = w
                         .recorded
                         .as_ref()
-                        .map(|r| format!(" · {}", r.at.chars().take(10).collect::<String>()))
-                        .unwrap_or_default();
-                    let file = w
-                        .file
-                        .as_deref()
-                        .map_or(" · not recorded yet".to_string(), |f| format!(" · {f}"));
-                    format!("{by}{when}{file}")
+                        .map(|r| r.at.chars().take(10).collect::<String>());
+                    let file = Some(w.file.clone().unwrap_or_else(|| "not recorded yet".into()));
+                    [by, when, file]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" · ")
                 })
                 .unwrap_or_default();
             WalkWords {

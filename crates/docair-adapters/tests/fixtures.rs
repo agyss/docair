@@ -930,7 +930,7 @@ fn two_items_with_one_id_keep_their_own_parts() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("src/lib.rs"),
-        "pub struct Uploads;\n\npub struct Config {\n    pub uploads: Uploads,\n}\n\nimpl Config {\n    /***\n     * Read the settings.\n     *\n     * @id      lib.config\n     ***/\n    pub fn from_env() -> Config {\n        Config { uploads: Uploads }\n    }\n\n    pub fn size(&self) -> usize {\n        0\n    }\n}\n\npub enum Family {\n    Request,\n}\n\npub fn family() -> Family {\n    Family::Request\n}\n",
+        "pub struct Uploads;\n\npub struct Config {\n    pub uploads: Uploads,\n}\n\nimpl Config {\n    /***\n     * Read the settings.\n     *\n     * @id      lib.config\n     ***/\n    pub fn from_env() -> Config {\n        Config { uploads: Uploads }\n    }\n\n    pub fn size(&self) -> usize {\n        0\n    }\n}\n\npub enum Family {\n    Request,\n}\n\npub fn family() -> Family {\n    Family::Request\n}\n\npub struct ApiError;\n\nimpl From<std::io::Error> for ApiError {\n    fn from(_: std::io::Error) -> Self {\n        ApiError\n    }\n}\n\nimpl From<anyhow::Error> for ApiError {\n    fn from(_: anyhow::Error) -> Self {\n        ApiError\n    }\n}\n\nimpl From<tokio::task::JoinError> for ApiError {\n    fn from(_: tokio::task::JoinError) -> Self {\n        ApiError\n    }\n}\n",
     )
     .unwrap();
     let g = scan(&dir, docair_adapters::all(), &Options::default()).unwrap();
@@ -963,6 +963,14 @@ fn two_items_with_one_id_keep_their_own_parts() {
         "the type keeps it"
     );
     assert_eq!(node("lib.family-fn").symbol.as_deref(), Some("fn family"));
+    // Overloads say what tells them apart, each of them (docair-4wk.41).
+    for id in [
+        "lib.api-error.from-io-error",
+        "lib.api-error.from-anyhow-error",
+        "lib.api-error.from-join-error",
+    ] {
+        assert_eq!(node(id).symbol.as_deref(), Some("fn from"), "{id}");
+    }
     let has = |from: &str, kind: &str, to: &str| {
         g.edges
             .iter()

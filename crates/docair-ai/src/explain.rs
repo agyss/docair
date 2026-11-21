@@ -782,15 +782,18 @@ pub fn misnamed(answer: &Value, pieces: &[Piece]) -> Vec<(String, Vec<String>)> 
                 .iter()
                 .find_map(|k| named.strip_prefix(k))
                 .unwrap_or(named);
+            // The pieces that hold the part as new, gone or edited, or in their box.
             let holding = pieces
                 .iter()
                 .filter(|p| {
                     let s = &p.step;
+                    let bx = p.id().strip_prefix("box:").or(s.in_box.as_deref());
                     s.added
                         .iter()
                         .chain(&s.removed)
                         .chain(&s.code)
                         .any(|x| x == part)
+                        || bx.is_some_and(|bx| part == bx || part.starts_with(&format!("{bx}.")))
                 })
                 .map(|p| p.id().to_string())
                 .collect();
@@ -816,7 +819,7 @@ fn repair_names(wrong: &[(String, Vec<String>)]) -> String {
         })
         .collect();
     format!(
-        "Some \"piece\" values in \"how\" are not piece ids:\n{}\nAnswer again with the whole JSON, every \"piece\" one of the piece ids you were given, exactly as given.",
+        "Some \"piece\" values are not piece ids:\n{}\nAnswer again with the whole JSON, every \"piece\" one of the piece ids you were given, exactly as given.",
         listed.join("\n")
     )
 }
@@ -1024,69 +1027,102 @@ pub fn explain_with(
         out.problems.extend(problems);
     }
     // The last request (docair-8l6.56, 8l6.69): where the pieces no change holds belong, with the
-    // model's words on them, or which changes of their own they make (8l6.63).
+    // model's words on them, or which changes of their own they make (8l6.63). Strict like the
+    // first (docair-8l6.85): only a piece's own id binds, names that are none go back once, and a
+    // piece still in no change fails the review.
     let leftover: Vec<&Piece> = pieces.iter().filter(|p| !taken.contains(p.id())).collect();
-    if !out.changes.is_empty() && !leftover.is_empty() {
+    if !leftover.is_empty() {
         let texts: HashMap<&str, &PartText> =
             intent.code.iter().map(|t| (t.part.as_str(), t)).collect();
         let asked = settle_digest(&out.changes, &leftover, a, b, &texts);
-        if SETTLE_PROMPT.len() + asked.len() > settings.max_chars {
-            out.problems.push(format!(
-                "the pieces left in no change would need {} characters, more than [explain] max_chars; each shows as a change of its own",
-                SETTLE_PROMPT.len() + asked.len()
-            ));
-        } else {
+        let size = SETTLE_PROMPT.len() + asked.len();
+        anyhow::ensure!(
+            size <= settings.max_chars,
+            "the pieces left in no change need {size} characters, more than [explain] max_chars ({}) allows: raise max_chars in docair.toml, or review a smaller range",
+            settings.max_chars
+        );
+        let reasoning = Some(settings.reasoning.as_str()).filter(|r| !r.is_empty());
+        let ask = |messages: &[Message]| -> Result<String> {
             {
                 let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
                 p.requests += 1;
                 p.started += 1;
                 on(&p);
             }
-            let messages = [Message::system(SETTLE_PROMPT), Message::user(asked)];
-            let reasoning = Some(settings.reasoning.as_str()).filter(|r| !r.is_empty());
-            let reply = chat_streamed(cfg, &messages, true, reasoning, &|_| {}).map(|r| r.content);
+            let reply = chat_streamed(cfg, messages, true, reasoning, &|_| {});
             {
                 let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
                 p.answered += 1;
                 on(&p);
             }
+            Ok(reply?.content)
+        };
+        let messages = [Message::system(SETTLE_PROMPT), Message::user(asked)];
+        let content = ask(&messages)?;
+        out.requests += 1;
+        let mut v = reply_json(&content).ok_or_else(|| {
+            anyhow::anyhow!(
+                "the AI's answer on the pieces left in no change cannot be read as JSON"
+            )
+        })?;
+        let own: Vec<Piece> = leftover.iter().map(|p| (*p).clone()).collect();
+        let wrong = misnamed(&settle_names(&v), &own);
+        if !wrong.is_empty() {
+            let fix = repair_names(&wrong);
+            let repair = [
+                messages[0].clone(),
+                messages[1].clone(),
+                Message::assistant(content.clone()),
+                Message::user(fix.clone()),
+            ];
+            anyhow::ensure!(
+                size + content.len() + fix.len() <= settings.max_chars,
+                "fixing the names of the pieces left in no change needs more than [explain] max_chars ({}) allows",
+                settings.max_chars
+            );
+            let fixed = ask(&repair)?;
             out.requests += 1;
-            match reply.ok().as_deref().and_then(reply_json) {
-                Some(v) => {
-                    let (placed, problems) = place_left(
-                        &mut out.changes,
-                        &v,
-                        &leftover,
-                        &known_ids((a, b), &pieces),
-                    );
-                    taken.extend(placed);
-                    out.problems.extend(problems);
-                    // The left pieces part of none of them: changes of their own (docair-8l6.63), of
-                    // the left pieces only, bound as the review's are.
-                    if let Some(new) = v.get("new").filter(|n| n.is_array()) {
-                        let own: Vec<Piece> = leftover
-                            .iter()
-                            .filter(|p| !taken.contains(p.id()))
-                            .map(|p| (*p).clone())
-                            .collect();
-                        let (_, mut made, problems) = bind(
-                            changes,
-                            (a, b),
-                            &own,
-                            &json!({ "changes": new }),
-                            &recorded,
-                            &mut taken,
-                        );
-                        out.problems.extend(problems);
-                        out.problems.extend(check_where(&mut made, intent));
-                        out.changes.extend(made);
-                    }
-                }
-                None => out.problems.push(
-                    "the last request failed: each piece no change holds shows as a change of its own".into(),
-                ),
-            }
+            v = reply_json(&fixed).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the AI's fixed answer on the pieces left in no change cannot be read as JSON"
+                )
+            })?;
         }
+        let (placed, problems) =
+            place_left(&mut out.changes, &v, &leftover, &known_ids((a, b), &pieces));
+        taken.extend(placed);
+        out.problems.extend(problems);
+        // The left pieces part of none of them: changes of their own (docair-8l6.63), bound as the
+        // review's are.
+        if let Some(new) = v.get("new").filter(|n| n.is_array()) {
+            let own: Vec<Piece> = leftover
+                .iter()
+                .filter(|p| !taken.contains(p.id()))
+                .map(|p| (*p).clone())
+                .collect();
+            let (_, mut made, problems) = bind(
+                changes,
+                (a, b),
+                &own,
+                &json!({ "changes": new }),
+                &recorded,
+                &mut taken,
+            );
+            out.problems.extend(problems);
+            out.problems.extend(check_where(&mut made, intent));
+            out.changes.extend(made);
+        }
+        let unplaced: Vec<&str> = pieces
+            .iter()
+            .map(|p| p.id())
+            .filter(|p| !taken.contains(*p))
+            .collect();
+        anyhow::ensure!(
+            unplaced.is_empty(),
+            "the change list could not be made: the AI put {} of the pieces in no change, also when asked again: {}",
+            unplaced.len(),
+            unplaced.join(", ")
+        );
     }
     // Every piece is a change: one no change holds is kept in `other`, and shown as a change of its
     // own (docair-8l6.63).
@@ -1123,39 +1159,20 @@ fn settle_digest(
     serde_json::to_string_pretty(&json!({ "changes": list, "left": left })).unwrap_or_default()
 }
 
-/// The left piece a name means: its id; else the one that holds the part as new, gone or edited (also named like a piece, `code:<part>`); else the one whose box the part is in.
-fn resolve_left<'p>(named: &str, left: &[&'p Piece]) -> Option<&'p str> {
-    if let Some(p) = left.iter().find(|p| p.id() == named) {
-        return Some(p.id());
-    }
-    let part = ["path:", "line:", "code:", "box:"]
-        .iter()
-        .find_map(|k| named.strip_prefix(k))
-        .unwrap_or(named);
-    let holds = |p: &&&Piece| {
-        let s = &p.step;
-        s.added
-            .iter()
-            .chain(&s.removed)
-            .chain(&s.code)
-            .any(|x| x == part)
-    };
-    if let Some(p) = left.iter().find(holds) {
-        return Some(p.id());
-    }
-    let in_box = |p: &&&Piece| {
-        let bx = p.id().strip_prefix("box:").or(p.step.in_box.as_deref());
-        bx.is_some_and(|bx| part == bx || part.starts_with(&format!("{bx}.")))
-    };
-    let mut boxes = left.iter().filter(in_box);
-    match (boxes.next(), boxes.next()) {
-        (Some(p), None) => Some(p.id()),
-        _ => None,
-    }
+/// The piece names of the last request's answer, as `misnamed` reads them: `place[].piece` and `new[].how[].piece`.
+fn settle_names(answer: &Value) -> Value {
+    let placed: Vec<Value> = answer["place"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|x| json!({ "how": [{ "piece": x["piece"] }] }))
+        .collect();
+    let made = answer["new"].as_array().cloned().unwrap_or_default();
+    json!({ "changes": placed.into_iter().chain(made).collect::<Vec<_>>() })
 }
 
 /***
- * Put the pieces no change held into the change the model says (docair-8l6.56): `{"place": [{"piece", "change", "words"}]}`, numbers from 1 into `changes`. The piece by its id, or by a part it holds, or by a part in its box (`resolve_left`). Only a piece of `left`, once, into a change there is, with words that name only what there is (`ids`); else it is left out and said. Returns the pieces placed, and what was left out.
+ * Put the pieces no change held into the change the model says (docair-8l6.56): `{"place": [{"piece", "change", "words"}]}`, numbers from 1 into `changes`. Only a piece's own id binds (docair-8l6.85). Only a piece of `left`, once, into a change there is, with words that name only what there is (`ids`); else it is left out and said. Returns the pieces placed, and what was left out.
  ***/
 pub fn place_left(
     changes: &mut [ReviewChange],
@@ -1166,8 +1183,7 @@ pub fn place_left(
     let (mut placed, mut problems) = (Vec::new(), Vec::new());
     let left_ids: Vec<&str> = left.iter().map(|p| p.id()).collect();
     for x in answer["place"].as_array().into_iter().flatten() {
-        let named = x["piece"].as_str().unwrap_or("").trim();
-        let piece = resolve_left(named, left).unwrap_or(named).to_string();
+        let piece = x["piece"].as_str().unwrap_or("").trim().to_string();
         let words = x["words"].as_str().unwrap_or("").trim().to_string();
         let to = x["change"].as_u64().map(|n| n as usize);
         let bad = unknown_in(&words, ids);
@@ -1849,8 +1865,9 @@ mod tests {
                 { "piece": "p5", "change": 1, "words": "Again." },
                 { "piece": "p6", "change": 7, "words": "Nowhere." },
                 { "piece": "p7", "change": 2, "words": "Not left." },
-                // A part in a left piece's box names that piece.
+                // A part in a left piece's box is no piece's id: only ids bind (docair-8l6.85).
                 { "piece": "shop.cart.total", "change": 2, "words": "Shows the total." },
+                { "piece": "box:shop.cart", "change": 2, "words": "Shows the total." },
             ]
         });
         let left_piece = |id: &str, code: &[&str]| Piece {
@@ -1875,7 +1892,19 @@ mod tests {
         );
         let (placed, missed) = place_left(&mut changes, &answer, &[&p5, &p6, &bx], &ids);
         assert_eq!(placed, ["p5", "box:shop.cart"]);
-        assert_eq!(missed.len(), 3, "{missed:?}");
+        assert_eq!(missed.len(), 4, "{missed:?}");
+        // The names the repair request sends back: a part, and an id that is no left piece.
+        let wrong = misnamed(
+            &settle_names(&answer),
+            &[p5.clone(), p6.clone(), bx.clone()],
+        );
+        let named: Vec<&str> = wrong.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(named, ["p7", "shop.cart.total"]);
+        assert_eq!(
+            wrong[1].1,
+            ["box:shop.cart"],
+            "the piece whose box holds the part is offered"
+        );
         assert_eq!(changes.len(), 3, "{changes:?}");
         assert_eq!(changes[2].pieces().collect::<Vec<_>>(), ["p2", "p4", "p5"]);
         assert_eq!(

@@ -3,7 +3,7 @@
 //! everything else, by the same router. Nothing else moves: the other parts keep their places,
 //! the other lines their ways and their words.
 
-use crate::{Input, Layout, Padding, Rect, draw, router, word_spots};
+use crate::{Input, Layout, Padding, Rect, Routes, draw, router, word_spots};
 
 /// A part put down somewhere else: by how much it moved.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,11 +47,12 @@ pub struct MoveOutcome {
 }
 
 /***
- * Move a part by hand: it and what it holds shift; every box around it grows to hold it again
- * (with the room a box keeps around what it holds), and shrinks where the part was what held its
- * side out (docair-702.41); every line with an end in what moved, or inside a box that shrank, is
- * routed again around all the parts and around the lines that stay (docair-702.40), and its words
- * placed again. `width(line)` is how wide each line is drawn, for its arrow.
+ * Move a part by hand: it and what it holds shift; every box around it fits what it holds again,
+ * with the room a box keeps around it and wide enough for its name (docair-702.45); every line
+ * with an end in what moved, or inside a box that changed, is routed again around all the parts
+ * and around the lines that stay (docair-702.40), and its words placed again. A staying line a
+ * routed line now crosses is routed again too, when that leaves fewer crossings (docair-702.44).
+ * `width(line)` is how wide each line is drawn, for its arrow.
  *
  * @calls docair-layout.route "routes the moved lines around every part"
  ***/
@@ -88,9 +89,8 @@ pub fn move_part(
     }
     let mut changed: Vec<usize> = moved.clone();
     let mut shrunk: Vec<usize> = Vec::new();
-    // Each box around it grows to hold what it holds, keeping its room around them; a side its kids
-    // drew back from follows them by as much, so it never ends tighter than the layout made it
-    // (docair-702.41).
+    // Each box around it fits what it holds, with its room around them, at least as wide as its
+    // name (docair-702.45).
     let room: Padding = crate::Options::default().padding;
     let extent = |at: &[Rect], kids: &[usize]| {
         kids.iter().fold(
@@ -124,12 +124,11 @@ pub fn move_part(
             r.x + r.w / 2.0,
             r.y + r.h / 2.0,
         );
-        let (l0, t0, r0, b0) = extent(&layout.placement.parts, &kids);
         let (l1, t1, r1, b1) = extent(&placement.parts, &kids);
-        let x1 = (before.0 + (l1 - l0).max(0.0)).min(l1 - room.left * s);
-        let y1 = (before.1 + (t1 - t0).max(0.0)).min(t1 - room.top * s);
-        let x2 = (before.2 + (r1 - r0).min(0.0)).max(r1 + room.right * s);
-        let y2 = (before.3 + (b1 - b0).min(0.0)).max(b1 + room.bottom * s);
+        let x1 = l1 - room.left * s;
+        let y1 = t1 - room.top * s;
+        let x2 = (r1 + room.right * s).max(x1 + input.parts[b].min_width * s);
+        let y2 = b1 + room.bottom * s;
         let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
         if near(x1, before.0) && near(y1, before.1) && near(x2, before.2) && near(y2, before.3) {
             break;
@@ -165,16 +164,53 @@ pub fn move_part(
             moved.contains(&l.from) || moved.contains(&l.to) || in_shrunk(l.from) || in_shrunk(l.to)
         })
         .collect();
-    let stay: Vec<Vec<(f64, f64)>> = (0..input.lines.len())
-        .filter(|j| !touched.contains(j))
-        .filter_map(|j| layout.routes.lines.get(j).cloned())
-        .filter(|pts| pts.len() > 1)
-        .collect();
-    let sub = Input {
-        parts: input.parts.clone(),
-        lines: touched.iter().map(|&j| input.lines[j].clone()).collect(),
+    // Route some lines again, around the parts and the lines that stay: their routes, and the whole
+    // picture's lines with them in.
+    let route = |again: &[usize]| {
+        let stay: Vec<Vec<(f64, f64)>> = (0..input.lines.len())
+            .filter(|j| !again.contains(j))
+            .filter_map(|j| layout.routes.lines.get(j).cloned())
+            .filter(|pts| pts.len() > 1)
+            .collect();
+        let sub = Input {
+            parts: input.parts.clone(),
+            lines: again.iter().map(|&j| input.lines[j].clone()).collect(),
+        };
+        let routes = router::grid_lines_around(&sub, &placement, router::PRICES, &stay);
+        let mut all = layout.routes.lines.clone();
+        for (k, &j) in again.iter().enumerate() {
+            if let (Some(slot), Some(points)) = (all.get_mut(j), routes.lines.get(k)) {
+                *slot = points.clone();
+            }
+        }
+        (sub, routes, all)
     };
-    let routes = router::grid_lines_around(&sub, &placement, router::PRICES, &stay);
+    let crossing = |lines: Vec<Vec<(f64, f64)>>| {
+        crate::crossings(&Routes {
+            lines,
+            price: 0.0,
+            none: 0,
+        })
+    };
+    let (mut sub, mut routes, all) = route(&touched);
+    // The staying lines a routed line now crosses: routed again with them when the picture then has
+    // fewer crossings, so a move may tidy the lines around it (docair-702.44).
+    let crossed: Vec<usize> = (0..input.lines.len())
+        .filter(|j| !touched.contains(j))
+        .filter(|&j| {
+            touched
+                .iter()
+                .any(|&t| crossing(vec![all[j].clone(), all[t].clone()]) > 0)
+        })
+        .collect();
+    let mut touched = touched;
+    if !crossed.is_empty() {
+        let wider: Vec<usize> = touched.iter().chain(&crossed).copied().collect();
+        let (sub2, routes2, all2) = route(&wider);
+        if crossing(all2) < crossing(all) {
+            (sub, routes, touched) = (sub2, routes2, wider);
+        }
+    }
     let words = word_spots::place_words(&sub, &placement, &routes);
     let mut next = Layout {
         placement,
@@ -307,6 +343,79 @@ mod tests {
 
     /// docair-702.41: moved back, a part takes its box back to where it was; the lines inside the box
     /// that shrank are routed again.
+    #[test]
+    fn a_box_fits_what_it_holds_after_a_move() {
+        let input = Input {
+            parts: vec![part("box", None), part("a", Some(0)), part("b", Some(0))],
+            lines: vec![line("0", 1, 2)],
+        };
+        let laid = lay_out(&input, &Options::default());
+        let moved = move_part(
+            &input,
+            &laid,
+            PartMove {
+                part: 2,
+                dx: 120.0,
+                dy: 0.0,
+            },
+            &|_| 1.4,
+        );
+        let at = &moved.layout.placement.parts;
+        let room = Options::default().padding;
+        let (bx, a, b) = (at[0], at[1], at[2]);
+        let left = (a.x - a.w / 2.0).min(b.x - b.w / 2.0) - room.left;
+        let right = (a.x + a.w / 2.0).max(b.x + b.w / 2.0) + room.right;
+        let top = (a.y - a.h / 2.0).min(b.y - b.h / 2.0) - room.top;
+        let bottom = (a.y + a.h / 2.0).max(b.y + b.h / 2.0) + room.bottom;
+        for (got, want) in [
+            (bx.x - bx.w / 2.0, left),
+            (bx.x + bx.w / 2.0, right),
+            (bx.y - bx.h / 2.0, top),
+            (bx.y + bx.h / 2.0, bottom),
+        ] {
+            assert!(
+                (got - want).abs() < 0.01,
+                "the box hugs its parts (docair-702.45): {bx:?} {a:?} {b:?}"
+            );
+        }
+    }
+
+    /// A staying line a moved line now crosses is routed again with it, when the picture then has
+    /// fewer crossings (docair-702.44).
+    #[test]
+    fn a_crossed_staying_line_is_routed_again() {
+        let input = Input {
+            parts: (0..5).map(|i| part(&format!("p{i}"), None)).collect(),
+            lines: [(0, 1), (0, 2), (1, 3), (2, 3), (3, 4), (2, 4)]
+                .iter()
+                .enumerate()
+                .map(|(k, &(a, b))| Line {
+                    words: None,
+                    ..line(&k.to_string(), a, b)
+                })
+                .collect(),
+        };
+        let laid = lay_out(&input, &Options::default());
+        let out = move_part(
+            &input,
+            &laid,
+            PartMove {
+                part: 0,
+                dx: 0.0,
+                dy: 120.0,
+            },
+            &|_| 1.4,
+        );
+        let again: Vec<&str> = out.lines.iter().map(|l| l.id.as_str()).collect();
+        assert!(
+            again.contains(&"2"),
+            "p1 -> p3 has no end in p0, and is routed again: {again:?}"
+        );
+        let mut first = out.layout.routes.clone();
+        first.lines[2] = laid.routes.lines[2].clone();
+        assert!(crate::crossings(&out.layout.routes) <= crate::crossings(&first));
+    }
+
     #[test]
     fn a_box_shrinks_back_when_its_part_comes_back() {
         let input = Input {

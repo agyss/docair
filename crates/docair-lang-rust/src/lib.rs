@@ -313,6 +313,9 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
         let mut inline = Vec::new();
         let mut owner: Option<String> = None;
         let mut parent_line = None;
+        // What tells it apart from items of its name (docair-4wk.41): its impl's trait arguments,
+        // else its `#[cfg(…)]`.
+        let mut variant: Option<String> = None;
         let mut cur = item.parent();
         while let Some(n) = cur {
             match n.kind() {
@@ -321,6 +324,17 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
                     parent_line.get_or_insert(n.start_position().row + 1);
                 }
                 "impl_item" | "trait_item" if owner.is_none() && inline.is_empty() => {
+                    if n.kind() == "impl_item" {
+                        variant = n
+                            .child_by_field_name("trait")
+                            .and_then(|t| t.child_by_field_name("type_arguments"))
+                            .map(|a| {
+                                text_of(Some(a), src)
+                                    .trim_start_matches('<')
+                                    .trim_end_matches('>')
+                                    .to_string()
+                            });
+                    }
                     let field = if n.kind() == "impl_item" {
                         "type"
                     } else {
@@ -393,6 +407,13 @@ pub fn read_file(file: &SourceFile, rules: &RuleSet) -> FileRead {
             signature: signature_of(item, src),
             // A `mod x;` without docs of its own: the module file's `//!` docs (docair-c6y).
             docs: module_docs,
+            variant: variant.or_else(|| {
+                attributes_of(item, src).iter().find_map(|a| {
+                    let a = a.split_whitespace().collect::<String>();
+                    let inner = a.strip_prefix("#[cfg(")?.strip_suffix(")]")?;
+                    (inner != "test").then(|| inner.to_string())
+                })
+            }),
             end: Some(item.end_position().row + 1),
             ..Symbol::at(key, &file.rel, line)
         });

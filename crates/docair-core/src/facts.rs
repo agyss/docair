@@ -79,6 +79,10 @@ pub struct Symbol {
     /// What the code's own comments say (`///` in Rust): the first paragraph is the summary.
     /// A block's text wins over it.
     pub docs: Option<String>,
+    /// What tells it apart from other items of its name and kind, as the code writes it: the type
+    /// of its impl's trait (`std::io::Error` of `impl From<std::io::Error> for ApiError`), its
+    /// `#[cfg(…)]`. Two such items get ids that say it (docair-4wk.41).
+    pub variant: Option<String>,
 }
 
 impl Symbol {

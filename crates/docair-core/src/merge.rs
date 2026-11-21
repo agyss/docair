@@ -158,40 +158,107 @@ fn file_ids<'a>(blocks: &[RawBlock], p: &Placed<'a>) -> HashMap<&'a str, String>
             taken.entry(id).or_insert(&s.key);
         }
     }
-    let mut alone: Vec<&Symbol> = p.alone.clone();
+    let all: Vec<&Symbol> = p
+        .alone
+        .iter()
+        .chain(p.attached.iter().flatten())
+        .copied()
+        .collect();
+    let by_key = |k: &str| all.iter().copied().find(|o| o.key == k);
+    // The items without a block that want one id, types first, then in the file's order. A file's
+    // module stands for the node a block declares with its id (a TypeScript file).
+    let mut alone: Vec<&Symbol> = p
+        .alone
+        .iter()
+        .copied()
+        .filter(|s| s.id.is_some() && s.draw != Draw::Alone)
+        .collect();
     alone.sort_by_key(|s| !is_type(s));
+    let mut groups: Vec<(String, Vec<&Symbol>)> = Vec::new();
     for s in alone {
-        let Some(id) = &s.id else {
-            continue;
-        };
-        let Some(&first) = taken.get(id.as_str()) else {
-            taken.insert(id.clone(), &s.key);
-            continue;
-        };
-        // A file's module stands for the node a block declares with its id (a TypeScript file).
-        if first == s.key || s.draw == Draw::Alone {
+        let id = s.id.clone().unwrap_or_default();
+        match groups.iter_mut().find(|(g, _)| *g == id) {
+            Some((_, members)) => members.push(s),
+            None => groups.push((id, vec![s])),
+        }
+    }
+    for (id, members) in groups {
+        let keeper = taken.get(id.as_str()).and_then(|k| by_key(k));
+        if keeper.is_none() && members.len() == 1 {
+            taken.insert(id, &members[0].key);
             continue;
         }
-        let same_kind = p
-            .alone
-            .iter()
-            .chain(p.attached.iter().flatten())
-            .find(|o| o.key == first)
-            .is_some_and(|o| keyword(o) == keyword(s));
-        let mut new = if same_kind {
-            format!("{id}-2")
+        // Overloads of one kind that each say what tells them apart all say it (`from-io-error`):
+        // none is more the name than another. Else the first keeps the id.
+        let overloads = keeper.is_none()
+            && members
+                .iter()
+                .all(|m| m.variant.is_some() && keyword(m) == keyword(members[0]));
+        let kept = if overloads {
+            None
         } else {
-            format!("{id}-{}", keyword(s))
+            keeper.or(Some(members[0]))
         };
-        let mut n = 2;
-        while taken.contains_key(&new) {
-            n += 1;
-            new = format!("{id}-{n}");
+        let tails = variant_tails(&members);
+        for (m, tail) in members.iter().zip(&tails) {
+            if kept.is_some_and(|k| k.key == m.key) {
+                taken.insert(id.clone(), &m.key);
+                continue;
+            }
+            let mut new = match (kept, tail) {
+                (Some(k), _) if keyword(k) != keyword(m) => format!("{id}-{}", keyword(m)),
+                (_, Some(t)) => format!("{id}-{t}"),
+                _ => format!("{id}-2"),
+            };
+            let mut n = 2;
+            while taken.contains_key(&new) {
+                n += 1;
+                new = format!("{id}-{n}");
+            }
+            taken.insert(new.clone(), &m.key);
+            renamed.insert(m.key.as_str(), new);
         }
-        taken.insert(new.clone(), &s.key);
-        renamed.insert(s.key.as_str(), new);
     }
     renamed
+}
+
+/// For items that share a name, the shortest end of each one's variant that no other has, as an
+/// id's words: `std::io::Error` and `anyhow::Error` → `io-error`, `anyhow-error`; `JoinError` →
+/// `join-error`.
+fn variant_tails(members: &[&Symbol]) -> Vec<Option<String>> {
+    let segments = |m: &Symbol| -> Vec<String> {
+        m.variant
+            .as_deref()
+            .unwrap_or("")
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|w| {
+                !w.is_empty()
+                    && !matches!(*w, "std" | "core" | "alloc" | "crate" | "self" | "super")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    let all: Vec<Vec<String>> = members.iter().map(|m| segments(m)).collect();
+    all.iter()
+        .enumerate()
+        .map(|(i, segs)| {
+            if segs.is_empty() {
+                return None;
+            }
+            (1..=segs.len())
+                .map(|n| segs[segs.len() - n..].join("-"))
+                .find(|tail| {
+                    all.iter().enumerate().all(|(j, other)| {
+                        j == i || other.len() < tail.split('-').count() || {
+                            let n = tail.split('-').count();
+                            other[other.len() - n..].join("-") != *tail
+                        }
+                    })
+                })
+                .or_else(|| Some(segs.join("-")))
+                .map(|t| crate::ids::slug(&t))
+        })
+        .collect()
 }
 
 /// A node that no block documents, as a block of its own.

@@ -116,7 +116,7 @@ Step 1 needs `docair diff`'s changed slices (docair-zrr.6), step 6 needs
 | 3 | does a workflow from the user's side need a declared start? | no: it starts at the first part outside the system (`external`) on a changed flow, else at the flow's first step |
 | 4 | the language of the comment on the pull request | plain English, one line per changed flow, the explanation under it, links and workflows folded in `<details>` |
 | 5 | (new) where the findings go | `[explain] store` in `docair.toml`, default `.docair/changes` (docair's own output folder, so reviews are not part of the project; docair-8l6.74, before `docs/changes`): one JSON file per pair of commits (`<A>..<B>.json`) |
-| 6 | (new) the cost limit | the review is one request, and one more for the pieces left in no change; its size is `[explain] max_chars`. `[explain] max_requests` is still read, so an old docair.toml loads, and no longer used (docair-8l6.79) |
+| 6 | (new) the cost limit | the review is one request, and one more for the pieces left in no change; its size is `[explain] max_chars`. `[explain] max_requests` is gone: a docair.toml that still sets it fails, saying it is no longer used (docair-8l6.87) |
 
 ## 8. A walkthrough of each change (docair-8l6.11, 8l6.12)
 
@@ -279,21 +279,24 @@ changes of their own the left pieces that belong to none make (docair-8l6.63):
  "new": [{"title": "…", "how": [{"piece": "<id>", "words": "…"}], "why": "…", "check": "…"}]}
 ```
 
-A left piece is named by its id, a part it holds or a part in its box
-(`explain::resolve_left`); a place that does not bind is left out and said
-(`place_left`). Its new changes are bound as the review's are (§9.4), of the
-left pieces only.
+A left piece is named only by its id, as in the review's request
+(docair-8l6.85): names that are no left piece's id go back to the model
+once, each with the pieces that hold it (as new, gone or edited, or in their
+box) to pick from (`explain::misnamed`, `repair_names`); a place that still
+does not bind is left out and said (`place_left`). Its new changes are bound
+as the review's are (§9.4), of the left pieces only.
 
 Every piece is a change; there are no *other edits* (docair-8l6.63, decision
 docair-cum, replacing 8l6.28 and 8l6.42). A piece the AI still puts in no
-change, when the last request fails or is cut short, is kept in the store's
-`other` and shown as a change of its own after the AI's: titled in docair's
-words for the piece (*Code changed in `total`.*), marked *in docair's words:
-the AI put this piece in no change*, with no why, nothing found off and
-nothing to check, since the AI checked nothing of it. The same holds for a
-piece a review stored before 8l6.79 did not reach (`left`) and for one newer
-than the stored review, when the change moved on after `docair explain`
-(docair-8l6.67): each is a change of its own in docair's words, marked so.
+change, after the last request and its repair, fails the review: `docair
+explain` exits with an error naming the pieces, and the page's *Review
+changes* shows it, instead of writing changes in docair's words
+(docair-8l6.85); the same when the last request fails, cannot be read, or
+would pass `max_chars`. A store written before then may still hold such
+pieces in `other`; they show as changes of their own in docair's words, as
+does a piece a review stored before 8l6.79 did not reach (`left`) and one
+newer than the stored review, when the change moved on after `docair
+explain` (docair-8l6.67), marked so.
 A review that does not cover every piece says how many it misses and offers,
 served, *✦ Review again*; a stored change none of whose pieces are there now
 is left out with what it found off, and the notice says how many (docair-8l6.68).
@@ -324,7 +327,7 @@ removed at A that is the same as one added at B.
 | a `how` entry names a piece docair made | only a piece's own id binds (docair-8l6.81, replacing 8l6.37). The prompt says so with an example of each; a name that is no piece id (a part's id, or one made up) goes back to the model once, in a repair request that lists the pieces holding that part to pick from (`misnamed`, `repair_names`); what is still no piece after it is left out, and said. A piece may be in several changes, each with its own words (docair-8l6.76, replacing 8l6.32) |
 | words name parts and lines there are | a title that does not is left out with its change; a `how`, `why`, `check` or `off` that does not is left out alone. A piece id in backticks is named as its part when the piece stands for one part or is named after one (`path:orders.audit` → `orders.audit`, docair-8l6.64) |
 | an *off* says where only of what is there (docair-8l6.59) | a commit by its subject, made the subject as it is; a doc by its path, made whole; a comment by its part's id; else its `where` is left out, and said. An off without `code` is left out. Only a contradiction says what was said and where: one that names nothing said is kept as a risk, and said; an *unsaid* or a *risk* keeps no source (`none`). A bare sentence is a risk. An off stored before the kinds is a contradiction where something was said, else a risk. Its `parts` keep only parts of A or B, else the parts its `code` names (docair-8l6.61) |
-| every piece is a change | the prompt asks for every piece in its change, a piece part of no other change a change of its own; the last request places the pieces left or makes changes of them (§9.2); the rest is kept in `other`, each shown as a change of its own in docair's words (docair-8l6.63) |
+| every piece is a change | the prompt asks for every piece in its change, a piece part of no other change a change of its own; the last request places the pieces left or makes changes of them (§9.2); a piece still in no change fails the review with an error (docair-8l6.85) |
 
 The findings go to the store (§4): `.docair/changes/<A>..<B>.json` by default (docair-8l6.74),
 schema `docair.explained/2`, with `changes`, the pieces the model left as
@@ -341,8 +344,8 @@ system's flows changed and all of them folded, each a link to its picture and
 a changed one to its change (docair-8l6.57). A
 change opens at `#review/<n>` on its own picture: its pieces' parts at A and
 at B as one picture (docair-8l6.33), and one step around them, faded: the
-parts one line away, what calls them and what they call, at most 12 a part
-(`review::AROUND`, docair-8l6.77), marked as in CHANGES.md
+parts one line away, what calls them and what they call, every one of them
+(docair-8l6.77, 8l6.83), marked as in CHANGES.md
 §8. Its walk opens on *What and why*, headed by the change's whole title:
 why, then what the AI found off, marked (*⚠ Found off*), by kind, each
 under its heading, contradictions first (docair-8l6.62): *Said, but the code
