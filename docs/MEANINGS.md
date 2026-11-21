@@ -92,6 +92,15 @@ Examples on docair itself:
 | *glossary* | two modules: `docair-core.glossary` and `docair-ai.glossary` | `from = "docair-core.glossary"` |
 | *check* | the module `docair-core.check`; the texts mean the verb or `docair check` | `term = false` |
 | *graph* | the struct `Graph`, and a glossary entry *graph* | `from = "docair-core.model.Graph"`, then the entry is checked (§4) |
+| *merged* | the struct `Merged`; prose uses the verb, ``change_steps::merged`` names a function | `term = false`, `code = "docair-core.change_steps.merged"` |
+
+**Each use on its own (docair-8l6.88).** A word may be overloaded: everyday
+in prose and the name of a part where it is written as code. `term` and
+`from` decide its plain uses; `code` names the part its uses as code mean
+(in backticks: `merged`, `change_steps::merged`; called: `merged()`), any
+part of that name, a function too. On the page such a code span links to
+that part. `docair glossary` gives the model both kinds of use and asks it
+to judge each, doubtful ones from the sentence around them.
 
 **The decisions file** is `docs/meanings.toml` (`meanings = "…"` in
 docair.toml names another). It is written by `docair glossary` and reviewed

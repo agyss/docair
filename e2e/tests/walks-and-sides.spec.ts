@@ -61,4 +61,32 @@ test.describe('walks and side panels', () => {
     expect(await width('#details')).toBe(details);
     expect(await width('#tree')).toBe(tree);
   });
+
+  /***
+   * The header's ◧ and ◨ hide the tree and the details, the picture takes the room, the choice stays after a reload, and a second click shows the panel again.
+   *
+   * @part-of e2e.walks-and-sides
+   * @covers  docair-viewer.doc-page.wire-sides "hides and shows the side panels"
+   ***/
+  test('a side panel can be hidden and shown again', async ({ page }) => {
+    await page.setViewportSize({ width: 1500, height: 900 });
+    await openStatic(page, 'shop');
+    const width = (sel: string) => page.locator(sel).evaluate((e) => Math.round(e.getBoundingClientRect().width));
+    const graph = await width('#graph');
+    await page.getByTestId('hide-details').click();
+    await expect(page.locator('#details')).toBeHidden();
+    await expect(page.getByTestId('hide-details')).toHaveAttribute('aria-pressed', 'true');
+    expect(await width('#graph')).toBeGreaterThan(graph + 200);
+    await page.getByTestId('hide-tree').click();
+    await expect(page.locator('#tree')).toBeHidden();
+    await page.reload();
+    await expect(page.locator('body[data-ready="true"]')).toBeAttached();
+    await expect(page.locator('#details')).toBeHidden();
+    await expect(page.locator('#tree')).toBeHidden();
+    await page.getByTestId('hide-details').click();
+    await page.getByTestId('hide-tree').click();
+    await expect(page.locator('#details')).toBeVisible();
+    await expect(page.locator('#tree')).toBeVisible();
+    expect(await width('#graph')).toBe(graph);
+  });
 });

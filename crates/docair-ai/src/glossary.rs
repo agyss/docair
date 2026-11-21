@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::ask::Reply;
-use crate::client::{Message, Usage, chat};
+use crate::client::{Message, Usage};
 use crate::config::AiConfig;
 
 /// The rules for the entries, the decisions and the checks.
@@ -29,13 +29,14 @@ For each term:
 The request may also list "Open words": words that name parts of the code, each with those parts' texts, and the glossary's entry when there is one. The code is the best source of what a word means. Decide each word once:
 - "term": false when it is an everyday word here that a reader knows (a verb such as "check", a plain noun such as "message"). Look at "used", the sentences that use it: when they use it in its everyday sense ("the following", "placed", "a change", "the project"), it is an everyday word here, even though a part has that name. true only when a reader should get it explained.
 - "from": the id of the part whose text says what the word means in those sentences; only one of the ids listed with the word; "" when none of them does. A part that merely shares the name is not it: a parser's tree node does not define "node" when the sentences mean a part on the chart.
+- "code": the id of the part the word names where it is written as code ("as code": in backticks such as `merged` or `change_steps::merged`, or called, merged()); one of "named so in the code", which may be a function; "" only when "as code" is empty or its uses mean none of them. Whenever an "as code" sentence names one of "named so in the code", set "code" to that id, also when "term" is false. Decide it apart from "term": a word can be everyday in prose ("edges are merged", term false) and still name a part where it is written as code. Judge each use on its own; when one is in doubt, decide it from the sentence around it.
 - "definition": only with "from", and only when the part's text is too terse for a newcomer: that text in 1 to 3 plain sentences, never changing its meaning; else "".
 - "agrees": only with "from" and a glossary entry: true when the entry means the same as the part's text; false when it does not, and then "definition" says it the way the code does.
 - "why": one short reason, for the reviewer.
 
 It may also list "Entries to check": glossary entries of words the code defines, with the code's text. The code is right. For each: "agrees": true when the entry means the same; else false, with "definition": the entry rewritten in 1 to 3 sentences to agree with the code.
 
-Decide quickly: go through the texts once and take the terms that stand out; do not weigh every word. Write in the language of the texts. Reply with exactly one JSON object: {"terms": [{"term": "...", "aliases": [], "definition": "...", "see": [], "link": ""}], "decisions": [{"word": "...", "term": true, "from": "", "definition": "", "agrees": true, "why": "..."}], "checks": [{"word": "...", "agrees": true, "definition": ""}]}"#;
+Decide quickly: go through the texts once and take the terms that stand out; do not weigh every word. Write in the language of the texts. Reply with exactly one JSON object: {"terms": [{"term": "...", "aliases": [], "definition": "...", "see": [], "link": ""}], "decisions": [{"word": "...", "term": true, "from": "", "code": "", "definition": "", "agrees": true, "why": "..."}], "checks": [{"word": "...", "agrees": true, "definition": ""}]}"#;
 
 /// One entry the model proposes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +59,9 @@ struct DecisionDraft {
     term: bool,
     #[serde(default)]
     from: Option<String>,
+    /// The part the word names where it is written as code (docair-8l6.88).
+    #[serde(default)]
+    code: Option<String>,
     #[serde(default)]
     definition: Option<String>,
     #[serde(default)]
@@ -202,16 +206,70 @@ fn used_in(graph: &Graph, word: &str, parts: &[String]) -> Vec<String> {
     out
 }
 
-/// Ask once; a reasoning model that thinks until its budget is gone gets the short version instead.
+/// Up to three sentences of other parts that write the word as code (`merged`, `change_steps::merged`,
+/// `merged()`), so the model sees what those uses name (docair-8l6.88).
+fn as_code(graph: &Graph, word: &str, parts: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in graph.nodes.iter().filter(|n| !parts.contains(&n.id)) {
+        let text = format!("{} {}", n.summary, n.description);
+        for sentence in text.split_inclusive(['.', '\n']) {
+            if code_spans(sentence).any(|c| names_word(c, word)) {
+                out.push(
+                    sentence
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(140)
+                        .collect(),
+                );
+                break;
+            }
+        }
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// Every part the word names, of any kind (a function `merged` too): what its uses as code may name.
+fn named_so(graph: &Graph, word: &str) -> Vec<String> {
+    graph
+        .nodes
+        .iter()
+        .filter(|n| meanings::stem(&n.name.to_lowercase()) == meanings::stem(word))
+        .map(|n| n.id.clone())
+        .collect()
+}
+
+/// The code spans of a text: what stands between backticks.
+fn code_spans(text: &str) -> impl Iterator<Item = &str> {
+    text.split('`').skip(1).step_by(2)
+}
+
+/// Whether a code span writes the word: `merged`, `Merged`, `change_steps::merged`, `merged()`.
+pub fn names_word(code: &str, word: &str) -> bool {
+    let last = code
+        .trim()
+        .trim_end_matches("()")
+        .rsplit(['.', ':', '/'])
+        .next()
+        .unwrap_or("");
+    last.eq_ignore_ascii_case(word) || meanings::stem(&last.to_lowercase()) == meanings::stem(word)
+}
+
+/// Ask once, streamed and reasoning little, so a long input is not cut off by the time a whole
+/// answer may take (docair-8l6.88, as the review asks); a model that still thinks until its budget is
+/// gone gets the short version instead.
 fn ask(cfg: &AiConfig, full: &str, short: Option<&str>) -> Result<crate::client::Reply> {
-    let messages = [Message::system(GLOSSARY_PROMPT), Message::user(full)];
-    match chat(cfg, &messages, true) {
+    let asked = |text: &str| {
+        let messages = [Message::system(GLOSSARY_PROMPT), Message::user(text)];
+        crate::client::chat_streamed(cfg, &messages, true, Some("low"), &|_| {})
+    };
+    match asked(full) {
         Err(e) if e.to_string().contains("max_tokens") && short.is_some() => {
-            let retry = [
-                Message::system(GLOSSARY_PROMPT),
-                Message::user(short.unwrap_or_default()),
-            ];
-            chat(cfg, &retry, true)
+            asked(short.unwrap_or_default())
         }
         other => other,
     }
@@ -291,6 +349,8 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
                     "parts": o.parts.iter().map(|id| part_json(graph, id)).collect::<Vec<_>>(),
                     "glossary": entry_for(graph, &o.word).map(|t| t.markdown.clone()),
                     "used": used_in(graph, &o.word, &o.parts),
+                    "as code": as_code(graph, &o.word, &o.parts),
+                    "named so in the code": named_so(graph, &o.word).iter().map(|id| part_json(graph, id)).collect::<Vec<_>>(),
                     "doc": o.section.as_ref().map(|s| format!("{}: {}", s.file, s.title)),
                 })
             })
@@ -327,7 +387,9 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
                 serde_json::to_string(&m.unnamed).expect("words serialize")
             ));
         }
-        let reply = if b == 0 {
+        // The texts go along only when new terms are wanted; `--limit 0` asks about the open words
+        // and the entries to check alone (docair-8l6.88).
+        let reply = if b == 0 && limit > 0 {
             let full = format!(
                 "System `{}`. Explained already: {known_text}.\nAt most {limit} new terms.\nThe texts:\n{}\nThe words on the lines:\n{}{tail}",
                 graph.system,
@@ -480,11 +542,14 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
             continue;
         }
         let why = given(&d.why);
+        // Where the word is written as code, the part it names: one the word names (docair-8l6.88).
+        let code = given(&d.code).filter(|c| named_so(graph, &o.word).contains(c));
         if !d.term {
             decisions.insert(
                 o.word.to_lowercase(),
                 Decision {
                     term: false,
+                    code,
                     why,
                     ..Decision::default()
                 },
@@ -505,6 +570,7 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
         }
         let mut dec = Decision {
             from: from.clone(),
+            code,
             why,
             ..Decision::default()
         };

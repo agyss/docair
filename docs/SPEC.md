@@ -905,7 +905,10 @@ into `docair.html`:
   step. The script plays them; *▶ Walkthroughs (n)* next to Tests opens a
   panel that lists the walks (docair-7h5), and the details start with them.
   The side panels' widths are dragged at their inner edge, kept per reader;
-  a double-click puts one back (docair-jjk).
+  a double-click puts one back (docair-jjk). The header's ◧ and ◨ hide the
+  tree and the details and show them again, kept per reader; the picture
+  takes the room and refits; nothing opens a hidden panel by itself
+  (docair-702.46).
 * The AI is a panel in the page (docs/SLICES.md §8; ✦ Ask). It talks to
   `docair serve`: the page's own address when the server serves it, else
   `<meta name="docair-serve">`; without a server it says so, and everything
@@ -2336,7 +2339,19 @@ why = "the module that keeps the payments"
 
 [audit]
 term = false                 # an everyday word here, never underlined
+
+[merged]
+term = false                 # everyday in prose ("edges are merged") …
+code = "docair-core.change_steps.merged"   # … but `change_steps::merged` names this part
 ```
+
+A decision is about each use of the word (docair-8l6.88): `term` and `from`
+about its plain uses in prose, `code` about its uses written as code (in
+backticks, `merged`, `change_steps::merged`, or called, `merged()`), which
+then link to that part like a code span that names one. `docair glossary`
+shows the model both kinds of use ("used", "as code") and every part of that
+name, a function too, and asks it to judge each; it is streamed and reasons
+little, and with `--limit 0` it sends only the open words, not the texts.
 
 `docair glossary` writes it (§13.4); people review and edit it like code. A
 decision is opened again when `from` names no node or `checked` no longer

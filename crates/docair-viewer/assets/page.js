@@ -340,9 +340,7 @@ function wireChat() {
       if (a.version) version = a.version;
       save();
       if (a.regenerated) location.reload();
-    } catch (err) {
-      say({ role: 'error', text: err.message });
-    }
+    } catch (err) { say({ role: 'error', text: err.message }); }
     busy(false);
   };
   const question = chat.querySelector('[data-test="question"]');
@@ -446,9 +444,7 @@ function toast(text) {
 }
 
 /** The part as itself in the picture on screen. */
-function drawnHere(id) {
-  return !!S.svg?.querySelector(`.part[data-id="${esc(id)}"], .box[data-id="${esc(id)}"]`);
-}
+const drawnHere = (id) => !!S.svg?.querySelector(`.part[data-id="${esc(id)}"], .box[data-id="${esc(id)}"]`);
 
 /** The way back up from this picture, as links. */
 function crumbs(p) {
@@ -1010,7 +1006,8 @@ function wire() {
 
 /***
  * The side panels' widths (docair-jjk): each dragged at its inner edge, between 160 px and half the page,
- * kept per reader; a double-click puts it back.
+ * kept per reader; a double-click puts it back. The header's ◧ and ◨ hide a panel and show it again, kept
+ * per reader too (docair-702.46); the picture refits as #pic resizes.
  *
  * @id      docair-viewer.doc-page.wire-sides
  * @part-of docair-viewer.doc-page
@@ -1027,6 +1024,10 @@ function wireSides() {
       h.onpointerup = () => ((h.onpointermove = null), h.classList.remove('on'), stored('localStorage', `docair:side-${k}`, parseInt($('#app').style.getPropertyValue(`--side-${k}`)) || null));
     });
     h.addEventListener('dblclick', () => (set(k, 0), stored('localStorage', `docair:side-${k}`, null)));
+  }
+  for (const b of document.querySelectorAll('[data-hide-side]')) {
+    const k = b.dataset.hideSide, on = (h) => ($('#app').classList.toggle(`no-${k}`, h), b.setAttribute('aria-pressed', `${h}`), stored('localStorage', `docair:hide-${k}`, h ? '1' : null));
+    on(stored('localStorage', `docair:hide-${k}`) === '1'), b.addEventListener('click', () => on(!$('#app').classList.contains(`no-${k}`)));
   }
 }
 

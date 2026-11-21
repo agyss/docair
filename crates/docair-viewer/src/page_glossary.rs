@@ -137,6 +137,8 @@ pub(crate) struct Linker<'g> {
     /// A name only one part has, and that part.
     names: HashMap<&'g str, &'g str>,
     summaries: HashMap<&'g str, &'g str>,
+    /// A word written as code, and the part a decision says it names there (docair-8l6.88).
+    codes: HashMap<String, &'g str>,
 }
 
 impl<'g> Linker<'g> {
@@ -172,7 +174,14 @@ impl<'g> Linker<'g> {
             .filter(|n| n.name.chars().count() >= 3 && count[n.name.as_str()] == 1)
             .map(|n| (n.name.as_str(), n.id.as_str()))
             .collect();
+        let codes = graph
+            .meanings
+            .iter()
+            .flat_map(|m| &m.decisions)
+            .filter_map(|(w, d)| Some((docair_core::meanings::stem(w), d.code.as_deref()?)))
+            .collect();
         Linker {
+            codes,
             terms,
             data,
             ids: graph.nodes.iter().map(|n| n.id.as_str()).collect(),
@@ -185,12 +194,21 @@ impl<'g> Linker<'g> {
         }
     }
 
-    /// A code span that names a part: its id, or its name when only one part has it.
+    /// A code span that names a part: its id, or its name when only one part has it, or a word a
+    /// decision says names a part where it is written as code (`change_steps::merged`, docair-8l6.88).
     fn node_named(&self, text: &str) -> Option<&'g str> {
         self.ids
             .get(text)
             .copied()
             .or_else(|| self.names.get(text).copied())
+            .or_else(|| {
+                let last = text
+                    .trim_end_matches("()")
+                    .rsplit(['.', ':', '/'])
+                    .next()?
+                    .to_lowercase();
+                self.codes.get(&docair_core::meanings::stem(&last)).copied()
+            })
     }
 
     /***
@@ -843,7 +861,16 @@ mod tests {
             ids: ["orders.create"].into_iter().collect(),
             names: HashMap::new(),
             summaries: HashMap::new(),
+            // A word that names a part where written as code (docair-8l6.88).
+            codes: [("merged".to_string(), "orders.create")]
+                .into_iter()
+                .collect(),
         };
+        let coded = linker.link("<p>Both are merged (<code>steps::merged</code>).</p>", None);
+        assert!(
+            coded.contains(r#"<code class="node-ref""#) && coded.contains("Both are merged"),
+            "the code span links the part, the plain word stays plain: {coded}"
+        );
         let html = r#"<p>A walkthrough, another walkthrough.</p><code>walkthrough</code><a>walkthrough</a><span class="badge">POST orders</span><code>orders.create</code>"#;
         let out = linker.link(html, None);
         assert_eq!(out.matches(r#"class="term""#).count(), 1, "{out}");

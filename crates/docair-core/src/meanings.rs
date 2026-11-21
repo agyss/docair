@@ -34,6 +34,11 @@ pub struct Decision {
     /// The part whose docs define the word.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// The part the word names where it is written as code: in backticks (`merged`,
+    /// `change_steps::merged`), called (`merged()`). Decided apart from `term`, which is about its
+    /// plain use: a word may be everyday in prose and still name a part as code (docair-8l6.88).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// The fingerprint of that part's text when the glossary entry was compared with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<String>,
@@ -51,6 +56,7 @@ impl Default for Decision {
         Decision {
             term: true,
             from: None,
+            code: None,
             checked: None,
             why: None,
             proposed: false,

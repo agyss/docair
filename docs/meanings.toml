@@ -102,6 +102,10 @@ why = "everyday verb: what a description or a block says it has; the already-exp
 term = false
 why = "everyday participle: a word defined by a heading; the component named Defined is about such headings"
 
+[described]
+from = "docair-core.declare.described"
+why = "the AI (docair glossary, 2026-11-21): a project word the docs use for declared routes and the `described` tag; the struct's text explains it (no glossary entry, so nothing to confirm)"
+
 [diagnostic]
 from = "docair-web.app.scan-service.diagnostic"
 checked = "a0592383"
@@ -267,6 +271,11 @@ why = "Project word: where two sides are joined without knowing each other; the 
 from = "docair-core.merge"
 checked = "fce4c453"
 why = "Project word: the core's step of joining facts with doc blocks and descriptions, not the everyday sense."
+
+[merged]
+term = false
+code = "docair-core.change_steps.merged"
+why = "the AI (docair glossary, 2026-11-21): the prose uses merged in its everyday sense (edges merged, merged into handlers); only the backticked `change_steps::merged` names the function"
 
 [message]
 term = false

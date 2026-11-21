@@ -147,6 +147,12 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
     "tree   graph  details";
 }
 .side-handle { grid-area: graph; width: 7px; z-index: 6; cursor: col-resize; touch-action: none; }
+/* A side panel hidden by the header's ◧ / ◨ (docair-702.46): its column and its handle go. */
+#app.no-tree { --side-tree: 0px !important; }
+#app.no-details { --side-details: 0px !important; }
+#app.no-tree > #tree, #app.no-details > #details,
+#app.no-tree > .side-handle[data-side="tree"], #app.no-details > .side-handle[data-side="details"] { display: none; }
+[data-hide-side][aria-pressed="true"] { background: var(--chip, var(--line)); }
 .side-handle[data-side="tree"] { justify-self: start; margin-left: -4px; }
 .side-handle[data-side="details"] { justify-self: end; margin-right: -4px; }
 .side-handle:hover, .side-handle.on { background: var(--accent); opacity: .45; }
