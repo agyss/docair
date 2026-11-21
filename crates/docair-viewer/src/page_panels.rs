@@ -1074,8 +1074,8 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
             parents.insert(n.id.clone(), Value::String(p.to_string()));
         }
     }
-    // Each line's tip, by the key the pictures name it with (svg::edge_key); a type's uses are
-    // not drawn, so they have none (docs/ADAPTERS.md §5.8).
+    // Each drawn line's tip, by the key the pictures name it with (svg::edge_key): a use no other
+    // line brings is drawn and has one; a listed use is not drawn, so it has none (docair-4wk.43).
     let lines: Map<String, Value> = graph
         .edges
         .iter()

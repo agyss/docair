@@ -201,8 +201,8 @@ struct Index<'g> {
 }
 
 impl<'g> Index<'g> {
-    /// Whether the picture draws a line: every drawn one, and in a type's own section the uses
-    /// between that type and the types it holds or implements (docair-4wk.44).
+    /// Whether the picture draws a line: every drawn one, and in a type's own section every use the
+    /// type makes of another type, however it uses it: holds, implements or otherwise (docair-4wk.44).
     fn shows(&self, e: &Edge) -> bool {
         e.drawn()
             || self

@@ -133,12 +133,16 @@ const server = http.createServer((req, res) => {
       requests.push(last);
       if (requests.length > 50) requests.shift();
       const content = JSON.stringify(reply(last.messages || []));
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({
-        id: 'fake', object: 'chat.completion', model: last.model,
-        choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: Math.round(body.length / 4), completion_tokens: Math.round(content.length / 4) },
-      }));
+      // A review of a commit that says "(slow)" takes a while, so a test can leave the page meanwhile (docair-8l6.91).
+      const slow = (last.messages || []).some((m) => (m.content || '').includes('(slow)'));
+      setTimeout(() => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          id: 'fake', object: 'chat.completion', model: last.model,
+          choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: Math.round(body.length / 4), completion_tokens: Math.round(content.length / 4) },
+        }));
+      }, slow ? 4000 : 0);
     });
     return;
   }

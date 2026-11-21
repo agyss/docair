@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { copyOf, docair, fakeAiEnv, ready, withFakeAi } from './helpers';
+import { copyOf, docair, fakeAiEnv, ready, serveFolder, withFakeAi } from './helpers';
 
 /**
  * Two commits of the shop: after A, the checkout gets a new step, an audit entry, and the README says so;
@@ -173,5 +173,35 @@ test.describe('what changed since a commit', () => {
     // No remote in the test repository: before is its file and line, after a link to the working tree.
     await expect(cartCode).toContainText('ui/src/cart.ts:');
     await expect(cartCode.getByTestId('code-link')).toHaveText(/^after, ui\/src\/cart\.ts:\d+$/);
+  });
+
+  /***
+   * A review running on the page survives leaving the changes: back on them, the button still says it reviews and the progress shows, until the page is written again.
+   *
+   * @part-of e2e.changes
+   * @covers  docair-viewer.page_changes.review_view "checks a running review shows again after leaving the changes"
+   ***/
+  test('a running review shows again after leaving the changes', async ({ page }) => {
+    test.skip(!withFakeAi, 'needs the fake model');
+    const shop = twoCommits();
+    execFileSync('git', ['-C', shop, '-c', 'user.name=docair test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '--amend', '-m', 'Audit every order (slow)'], { encoding: 'utf8' });
+    const served = await serveFolder(shop, ['--changes', 'HEAD~1']);
+    try {
+      await page.goto(`${served.url}/`);
+      await ready(page);
+      await page.getByTestId('changes-button').click();
+      const button = page.getByTestId('explain');
+      await expect(button).toBeVisible();
+      await button.click();
+      await expect(button).toBeDisabled();
+      await page.evaluate(() => (location.hash = '#part/orders.create'));
+      await expect(page.getByTestId('explain')).toHaveCount(0);
+      await page.getByTestId('changes-button').click();
+      await expect(page.getByTestId('explain')).toBeDisabled();
+      await expect(page.getByTestId('explain')).toContainText('Reviewing');
+      await expect(page.getByTestId('explain-progress')).toBeVisible();
+    } finally {
+      await served.stop();
+    }
   });
 });

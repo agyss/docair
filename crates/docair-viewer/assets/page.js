@@ -8,7 +8,7 @@ const $ = (sel) => document.querySelector(sel);
 const IX = JSON.parse($('#docair-index').textContent);
 const PACKED = JSON.parse($('#docair-packed').textContent);
 /** What the page shows: its address, the picture's whole extent, the part of it in view, what is selected and hidden. */
-const S = { addr: null, svg: null, full: null, view: null, tests: IX.tests, hidden: new Set(), selected: null, run: 0 };
+const S = { addr: null, svg: null, full: null, view: null, tests: IX.tests, hidden: new Set(), selected: null, run: 0, review: null };
 /** The most a picture is enlarged on screen, as the page before the CLI drew it (MAX_FIT_ZOOM). */
 const MOST = 1.25;
 const unpacked = new Map();
@@ -114,7 +114,7 @@ function follow(p) {
 
 /** A page of the details panel: a term, the glossary, the data, a datum; a way back to the selected part. */
 function panel(html) {
-  $('#details').innerHTML = html || '';
+  ($('#details').innerHTML = html || ''), S.review && reviewShown(S.review);
   for (const b of document.querySelectorAll('#details [data-back]')) b.hidden = !S.selected;
 }
 
@@ -401,16 +401,11 @@ function wireChat() {
     if (ev.target.closest('[data-test="tidy-patch"]')) download((await (await fetch(`${base}/api/tidy`)).json()).patch || '', 'docair-tidy.patch');
     // Explaining is a job on the server: under the button, a bar and each change as soon as it is made (docair-8l6.11, 8l6.65); done, the page was written again.
     const explain = ev.target.closest('[data-test="explain"]');
-    if (explain) {
-      const shown = (j) => Object.assign(explain.nextElementSibling, { innerHTML: j.html || j.error || '', hidden: false });
-      [explain.disabled, explain.textContent] = [true, '✦ Reviewing …'];
+    if (explain && !S.review?.running) {
+      (S.review = { running: true }), reviewShown(S.review);
       let job = await post('/api/explain', { a: explain.dataset.a, b: explain.dataset.b || undefined }).catch((err) => ({ error: err.message }));
-      for (; job.running; job = await fetch(`${base}/api/explain/${job.job}`).then((r) => r.json()).catch((err) => ({ error: err.message }))) {
-        shown(job);
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      [explain.textContent, explain.disabled] = [job.phase === 'done' ? '✓ Reviewed' : '✦ Review the changes', job.phase === 'done'];
-      shown(job);
+      for (; job.running; job = await fetch(`${base}/api/explain/${job.job}`).then((r) => r.json()).catch((err) => ({ error: err.message }))) (S.review = job), reviewShown(job), await new Promise((r) => setTimeout(r, 1000));
+      (S.review = job), reviewShown(job);
       if (job.phase === 'done') location.reload();
     }
     const one = ev.target.closest('[data-tidy-one]');
@@ -490,8 +485,10 @@ function details(id) {
   // A change's picture keeps its flow's changes under the step's card (docair-zrr.22).
   const more = id ? P.details[id] || '' : P.flowChanges?.[IX.pictures[S.addr]?.change] || '';
   $('#details').innerHTML = card || more ? card + more : EMPTY;
-  hideLinks();
+  hideLinks(), S.review && reviewShown(S.review);
 }
+// A running review is the page's, not its button's: the changes section, written again, shows it again (docair-8l6.91).
+const reviewShown = (j) => { const b = $('[data-test="explain"]'); if (!b) return; [b.disabled, b.textContent] = j.running ? [true, '✦ Reviewing …'] : [j.phase === 'done', j.phase === 'done' ? '✓ Reviewed' : '✦ Review the changes']; Object.assign(b.nextElementSibling, { innerHTML: j.html || j.error || '', hidden: !(j.html || j.error) }); };
 
 /***
  * Play a walk: each step lights its parts and lines as the CLI listed them, the camera goes to the step's box, and a token runs along each line the step goes along, in the order its messages happen.
