@@ -347,7 +347,8 @@ pass. `docair.toml`'s `[code] run_indexers = true` runs `rust-analyzer scip`
 elsewhere; W119 when rust-analyzer fails, nothing when it isn't installed.
 The same setting runs `scip-typescript index` in each folder with a
 `tsconfig.json` above TypeScript files that has it in `node_modules/.bin`
-(docair-4wk.14; docair's `web/` pins it as a dev dependency); its paths are
+(docair-4wk.14; docair's `web/` and `e2e/` pin it as a dev dependency,
+e2e since docair-4wk.40); its paths are
 made the project's (`web/src/app/app.ts`), the TypeScript adapter maps
 references like the Rust one, and a call the syntax also found stays one
 line. It is kept like rust-analyzer's index, under the tool's version, the
@@ -550,6 +551,19 @@ docair's own graph with the code index:
 | 1. a line per use | 887 parts, 2,834 lines, 384,577 crossings | 342.7 s | 370.0 s |
 | 2. folded into data lines | unchanged | unchanged | unchanged; only 99 of 312 types are named by a data line, so `Cli` stays alone |
 | 3. listed, not drawn | 743 parts, 1,764 lines (the code of this step) | 21.3 s | 32.5 s |
+
+**Drawn where it brings something (docair-4wk.43 to 4wk.45, the user's
+review, 2026-11-20).** A use of type T by part f is drawn only when no other
+line brings T to f: not when T, or a type that holds T, is in f's signature,
+is f's own type (f is its method), or is in the signature of a part f has a
+call or data line with (`type_uses::list_brought`). The others are listed
+(`"listed": true`). On docair 68 of 2,681 uses are drawn (`main` makes `Cli`,
+`layers` makes `LayerInfo`), and the Code layer's layout takes 23.2 s with
+1,814 lines (21.3 s before, with the code added since). A use between two
+types is drawn in the type's own section, when it is opened (4wk.44). A call
+line names a parameter's type where its name does not say it and the callee
+takes one of the project's types (`draw(g: Graph)`, `scan(graph)`; 488 call
+lines on docair, 4wk.45). The table above was the first measure:
 
 There are 2,625 uses, more than the 2,240 calls: `Graph` alone has 160
 users. So a type's details list them (*Used by*: `main` · makes, reads

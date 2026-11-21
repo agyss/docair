@@ -338,13 +338,13 @@ pub fn diff(
     // A type's uses are not drawn, so they are no change of a picture (docs/ADAPTERS.md §5.8).
     let la: BTreeMap<&str, &Edge> = a_lines
         .iter()
-        .filter(|e| e.kind.drawn())
+        .filter(|e| e.drawn())
         .map(|e| (e.id.as_str(), e))
         .collect();
     let lb: BTreeMap<&str, &Edge> = b
         .edges
         .iter()
-        .filter(|e| e.kind.drawn())
+        .filter(|e| e.drawn())
         .map(|e| (e.id.as_str(), e))
         .collect();
     out.lines_removed = la

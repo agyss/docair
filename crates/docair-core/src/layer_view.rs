@@ -196,9 +196,20 @@ struct Index<'g> {
     out_of: HashMap<&'g str, Vec<usize>>,
     cls: HashMap<&'g str, PartClass>,
     tests: bool,
+    /// A type's own section: its uses of other types are drawn there (docair-4wk.44).
+    type_section: Option<&'g str>,
 }
 
 impl<'g> Index<'g> {
+    /// Whether the picture draws a line: every drawn one, and in a type's own section the uses
+    /// between that type and the types it holds or implements (docair-4wk.44).
+    fn shows(&self, e: &Edge) -> bool {
+        e.drawn()
+            || self
+                .type_section
+                .is_some_and(|t| e.kind == EdgeKind::Use && e.from == t)
+    }
+
     fn new(graph: &'g Graph, tests: Option<bool>) -> Self {
         let sys = graph.system.as_str();
         let nodes: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -223,6 +234,7 @@ impl<'g> Index<'g> {
             out_of,
             cls: HashMap::new(),
             tests: tests.unwrap_or(graph.view.tests),
+            type_section: None,
         };
         ix.classify();
         ix
@@ -298,7 +310,7 @@ impl<'g> Index<'g> {
         // A part a doc block is about, and every box around one.
         let told = loud.clone();
         for e in &self.graph.edges {
-            if !self.is_data(&e.from) && !self.is_data(&e.to) && e.kind.drawn() {
+            if !self.is_data(&e.from) && !self.is_data(&e.to) && e.drawn() {
                 raise(self, &mut loud, e.from.as_str());
                 raise(self, &mut loud, e.to.as_str());
             }
@@ -602,7 +614,7 @@ impl<'g> Index<'g> {
                         .any(|a| focus.contains(a) && !holds.contains(a))
             };
             for e in &self.graph.edges {
-                if kinds.is_some_and(|k| !k.contains(&e.kind)) || !e.kind.drawn() {
+                if kinds.is_some_and(|k| !k.contains(&e.kind)) || !self.shows(e) {
                     continue;
                 }
                 for (x, y) in [
@@ -995,7 +1007,7 @@ impl<'g> Index<'g> {
                 || self.hidden_node(&e.to)
                 || self.is_data(&e.from)
                 || self.is_data(&e.to)
-                || !e.kind.drawn()
+                || !self.shows(e)
             {
                 continue;
             }
@@ -1164,11 +1176,24 @@ pub fn section_picture(
     bx: &str,
     tests: Option<bool>,
 ) -> Option<(LayerKey, LayerPicture)> {
-    let ix = Index::new(graph, tests);
-    let n = ix.nodes.get(bx)?;
+    let mut ix = Index::new(graph, tests);
+    let n = *ix.nodes.get(bx)?;
     let id = n.id.as_str();
     if id == ix.sys || ix.kids(id).iter().all(|k| ix.is_data(k)) {
         return None;
+    }
+    let typed = n
+        .symbol
+        .as_deref()
+        .and_then(|s| s.split_whitespace().next())
+        .is_some_and(|w| {
+            matches!(
+                w,
+                "struct" | "enum" | "union" | "trait" | "type" | "interface" | "class"
+            )
+        });
+    if typed {
+        ix.type_section = Some(id);
     }
     let key = ix.layer_for(id)?;
     Some((key, ix.section(key, id)))
@@ -1277,6 +1302,7 @@ mod tests {
                 end: None,
             },
             origin: Origin::Authored,
+            listed: false,
         }
     }
 

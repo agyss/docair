@@ -987,3 +987,61 @@ fn two_items_with_one_id_keep_their_own_parts() {
         g.edges
     );
 }
+
+/// A use no line brings is drawn (main makes Cli); one a signature brings is listed; a use between
+/// two types is drawn in the type's own section, not on its layer (docair-4wk.43, 4wk.44).
+#[test]
+fn uses_are_drawn_where_they_bring_something() {
+    let dir = std::env::temp_dir().join(format!("docair-drawn-uses-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/lib.rs"),
+        "pub struct Cli {\n    pub command: Command,\n}\n\nimpl Cli {\n    pub fn parse() -> Cli {\n        Cli { command: Command::Build }\n    }\n}\n\npub enum Command {\n    Build,\n}\n\npub fn run(cli: Cli) {\n    match cli.command {\n        Command::Build => {}\n    }\n}\n\npub fn main() {\n    let cli = Cli { command: Command::Build };\n    let _ = cli.command;\n}\n\npub fn start() {\n    run(Cli::parse());\n}\n",
+    )
+    .unwrap();
+    let g = scan(&dir, docair_adapters::all(), &Options::default()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let id = |name: &str| {
+        g.nodes
+            .iter()
+            .find(|n| n.name == name)
+            .map(|n| n.id.clone())
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    let usage = |from: &str, to: &str| {
+        g.edges
+            .iter()
+            .find(|e| {
+                e.from == id(from) && e.to == id(to) && e.kind == docair_core::model::EdgeKind::Use
+            })
+            .unwrap_or_else(|| panic!("{from} uses {to}: {:?}", g.edges))
+    };
+    assert!(
+        usage("run", "Cli").listed,
+        "run takes Cli: its callers' line brings it"
+    );
+    assert!(
+        usage("run", "Command").listed,
+        "Cli, which run takes, holds Command"
+    );
+    assert!(
+        !usage("main", "Cli").listed,
+        "main makes Cli, and no line brings it"
+    );
+    assert!(
+        usage("Cli", "Command").listed,
+        "between two types: not on the layer"
+    );
+    let (_, section) =
+        docair_core::layer_view::section_picture(&g, &id("Cli"), None).expect("Cli's section");
+    let holds = usage("Cli", "Command") as *const _;
+    assert!(
+        section
+            .lines
+            .iter()
+            .flat_map(|l| &l.members)
+            .any(|&i| std::ptr::eq(&g.edges[i], holds)),
+        "Cli's own section draws that it holds Command: {:?}",
+        section.lines
+    );
+}

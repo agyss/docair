@@ -2491,24 +2491,37 @@ fn signature_of(item: Node, src: &[u8]) -> Option<Signature> {
     if !matches!(item.kind(), "function_item" | "function_signature_item") {
         return None;
     }
-    let params = item
+    // Each parameter's name, and its type as the line words it (docair-4wk.45).
+    let (params, types): (Vec<String>, Vec<String>) = item
         .child_by_field_name("parameters")
-        .map_or_else(Vec::new, |ps| {
+        .map_or_else(Default::default, |ps| {
             let mut cursor = ps.walk();
             ps.named_children(&mut cursor)
                 .filter(|p| p.kind() == "parameter")
                 .map(|p| {
-                    text_of(p.child_by_field_name("pattern"), src)
+                    let name = text_of(p.child_by_field_name("pattern"), src)
                         .trim_start_matches("mut ")
-                        .to_string()
+                        .to_string();
+                    let ty = simplify_type(&text_of(p.child_by_field_name("type"), src))
+                        .unwrap_or_default();
+                    (name, ty)
                 })
-                .filter(|n| !n.is_empty())
-                .collect()
+                .filter(|(n, _)| !n.is_empty())
+                .unzip()
         });
     let returns = item
         .child_by_field_name("return_type")
         .and_then(|r| simplify_type(&text_of(Some(r), src)));
-    Some(Signature { params, returns })
+    let types = if types.iter().all(String::is_empty) {
+        Vec::new()
+    } else {
+        types
+    };
+    Some(Signature {
+        params,
+        returns,
+        types,
+    })
 }
 
 /// Keyword, name, symbol and docair kind of an item.

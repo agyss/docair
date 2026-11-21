@@ -1252,11 +1252,17 @@ members apart, and its arrow says the way:
 | storage | `write`, `read`; `create` | amber `#c98500` | solid; dashed |
 | events | `emit`, `consume` | magenta `#d55181` | dotted |
 | tests | `cover` | light grey `#a3a49c` / `#6b6c66` | dotted |
+| a type's use | `use` | neutral grey `#6d6e68` / `#9c9c95` | dash-dot |
 
-`use` lines are not drawn: on docair they are 2,625 against 2,240 calls, and
-drawn they took the Code layer's layout from 21 s to 343 s (docs/ADAPTERS.md
-§5.8). A type's details list them instead, and slices, changes and the
-parts a picture pulls in leave them out.
+A `use` line is drawn only where no other line brings the type to the part
+(docair-4wk.43): not when the type, or a type that holds it, is in the
+part's signature, is the part's own type, or is in the signature of a part
+it has a call or data line with. Drawn, every use took the Code layer's
+layout from 21 s to 343 s (docs/ADAPTERS.md §5.8). The others are *listed*
+(`"listed": true`): in the type's details, in the AI's digest as the type's
+`used_by`, and left out of pictures, slices, changes and the parts a picture
+pulls in. A use between two types is drawn in the type's own section
+(docair-4wk.44).
 
 Three hues are as many as a picture can keep apart in every pair, for every
 reader: blue, amber and magenta pass the colour-vision checks in both themes

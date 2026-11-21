@@ -8,6 +8,7 @@
     "docs": "cd .. && ./target/release/docair build ."
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1"
+    "@playwright/test": "1.64.1",
+    "@sourcegraph/scip-typescript": "0.6.1"
   }
 }

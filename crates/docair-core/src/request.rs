@@ -187,6 +187,7 @@ pub fn link(nodes: &[Node], edges: &mut Vec<Edge>, diags: &mut Vec<Diagnostic>) 
                         end: None,
                     },
                     origin: Origin::Inferred,
+                    listed: false,
                 });
             }
         }
@@ -299,6 +300,7 @@ mod tests {
                 end: None,
             },
             origin: Origin::Authored,
+            listed: false,
         }
     }
 

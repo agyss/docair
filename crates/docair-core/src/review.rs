@@ -455,7 +455,7 @@ pub fn change_picture(
             for e in g
                 .edges
                 .iter()
-                .filter(|e| e.kind != crate::model::EdgeKind::Cover && e.kind.drawn())
+                .filter(|e| e.kind != crate::model::EdgeKind::Cover && e.drawn())
             {
                 let other = if &e.from == id {
                     &e.to

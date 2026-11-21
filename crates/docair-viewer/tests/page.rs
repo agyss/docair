@@ -209,14 +209,15 @@ fn a_types_details_say_who_uses_it() {
     );
     let run = panels["details"][&id("run")].as_str().unwrap();
     assert!(run.contains("Uses (2)"), "run uses Cli and Command: {run}");
-    assert!(
-        !panels["lines"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .any(|k| k.contains("-use->")),
-        "a use is not drawn, so it has no tip"
-    );
+    // A use no other line brings is drawn and has a tip; a listed one has none (docair-4wk.43).
+    let tips = panels["lines"].as_object().unwrap();
+    for e in g
+        .edges
+        .iter()
+        .filter(|e| e.kind == docair_core::model::EdgeKind::Use)
+    {
+        assert_eq!(tips.contains_key(&e.id), !e.listed, "{e:?}");
+    }
 }
 
 #[test]
@@ -274,14 +275,11 @@ fn the_panels_say_what_the_viewer_said() {
     assert!(api.contains("Talks to ("), "a box says what it talks to");
     // Every line of the graph has its tip; the search words hold names.
     let tips = panels["lines"].as_object().unwrap();
-    assert_eq!(
-        tips.len(),
-        g.edges.iter().filter(|e| e.kind.drawn()).count()
-    );
+    assert_eq!(tips.len(), g.edges.iter().filter(|e| e.drawn()).count());
     assert!(
         g.edges
             .iter()
-            .filter(|e| e.kind.drawn())
+            .filter(|e| e.drawn())
             .all(|e| tips.contains_key(&e.id)),
         "each line's tip goes by its id"
     );

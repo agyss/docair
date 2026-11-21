@@ -1,6 +1,6 @@
 //! Stage 5: refs become edges, flows get paths (SPEC §4, §7).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use petgraph::Graph as PGraph;
 use petgraph::algo::astar;
@@ -483,7 +483,7 @@ pub fn resolve(
             } else {
                 (resolved.id, node_id.clone())
             };
-            if let Some(&k) = by_pair.get(&(from.clone(), to.clone(), kind.drawn())) {
+            if let Some(&k) = by_pair.get(&(from.clone(), to.clone(), kind != EdgeKind::Use)) {
                 let e: &mut Edge = &mut edges[k];
                 // Code facts stay on the line, and an author's words add to them
                 // (docs/ADAPTERS.md §6); words that say the same show once.
@@ -507,7 +507,10 @@ pub fn resolve(
                 e.reply = e.reply.take().or(reply);
                 continue;
             }
-            by_pair.insert((from.clone(), to.clone(), kind.drawn()), edges.len());
+            by_pair.insert(
+                (from.clone(), to.clone(), kind != EdgeKind::Use),
+                edges.len(),
+            );
             edges.push(Edge {
                 id: String::new(),
                 from,
@@ -529,11 +532,13 @@ pub fn resolve(
                     end: None,
                 },
                 origin: tag.origin,
+                listed: false,
             });
         }
     }
 
     word_calls_from_code(&nodes, &mut edges);
+    crate::type_uses::list_brought(&nodes, &mut edges);
     find_carried_data(&nodes, &mut edges);
     (nodes, edges)
 }
@@ -607,6 +612,21 @@ fn find_carried_data(nodes: &[Node], edges: &mut [Edge]) {
 /// signature, so the line says what goes in and what comes back (SPEC §4.2).
 fn word_calls_from_code(nodes: &[Node], edges: &mut [Edge]) {
     let index: HashMap<&str, &Node> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // The project's types each function takes, by name, as its uses say (docair-4wk.35): a
+    // parameter of one shows it when its name does not say it (docair-4wk.45).
+    let mut takes: HashMap<String, HashSet<String>> = HashMap::new();
+    for e in edges.iter().filter(|e| e.kind == EdgeKind::Use) {
+        if e.payload
+            .as_deref()
+            .is_some_and(|p| p.split(", ").any(|w| w == "takes"))
+            && let Some(t) = index.get(e.to.as_str())
+        {
+            takes
+                .entry(e.from.clone())
+                .or_default()
+                .insert(t.name.clone());
+        }
+    }
     for e in edges.iter_mut() {
         if e.kind != EdgeKind::Call || e.payload.is_some() || e.reply.is_some() {
             continue;
@@ -614,7 +634,8 @@ fn word_calls_from_code(nodes: &[Node], edges: &mut [Edge]) {
         let Some(sig) = index.get(e.to.as_str()).and_then(|n| n.signature.as_ref()) else {
             continue;
         };
-        let (payload, reply) = sig.wording();
+        let taken = takes.get(e.to.as_str());
+        let (payload, reply) = sig.wording_typed(&|t| taken.is_some_and(|ts| ts.contains(t)));
         if payload.is_none() && reply.is_none() {
             continue;
         }

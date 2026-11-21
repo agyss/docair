@@ -866,7 +866,7 @@ fn data_slice<'g>(ix: &Index<'g>, id: &str) -> Option<Builder> {
         if ix.is_data(&e.from)
             || ix.is_data(&e.to)
             || matches!(e.kind, EdgeKind::Cover | EdgeKind::Create)
-            || !e.kind.drawn()
+            || !e.drawn()
         {
             continue;
         }
@@ -1185,7 +1185,7 @@ fn part_slice(ix: &Index, id: &str, route: bool) -> Option<Builder> {
     b.part(ix, id);
     let edges = &ix.graph.edges;
     for (i, e) in edges.iter().enumerate() {
-        if ix.is_data(&e.from) || ix.is_data(&e.to) || !e.kind.drawn() {
+        if ix.is_data(&e.from) || ix.is_data(&e.to) || !e.drawn() {
             continue;
         }
         let (a, z) = (

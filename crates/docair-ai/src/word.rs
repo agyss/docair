@@ -344,6 +344,7 @@ mod tests {
                 end: None,
             },
             origin: Origin::Authored,
+            listed: false,
         }
     }
 

@@ -129,6 +129,10 @@ pub struct Signature {
     /// The return type without wrappers such as `Result`, `Option` or `Promise`; none for `()` and `void`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub returns: Option<String>,
+    /// Each parameter's type, simplified as `returns` is, beside `params`; empty where the code says
+    /// none (docair-4wk.45).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
 }
 
 /// A doc block as extracted (stage 2) and enriched (stage 3).
@@ -357,11 +361,11 @@ pub enum EdgeKind {
     Use,
 }
 
-impl EdgeKind {
-    /// Whether pictures, slices and changes draw lines of this kind: a type's uses are listed in
-    /// its details and the AI's digest, not drawn (docs/ADAPTERS.md §5.8, docair-4wk.35).
-    pub fn drawn(self) -> bool {
-        self != EdgeKind::Use
+impl Edge {
+    /// Whether pictures, slices and changes draw it: every line but a type's use another line
+    /// already brings (docs/ADAPTERS.md §5.8, docair-4wk.43).
+    pub fn drawn(&self) -> bool {
+        self.kind != EdgeKind::Use || !self.listed
     }
 }
 
@@ -402,6 +406,10 @@ pub struct Edge {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reach: Option<Reach>,
     /// The tag that created the edge.
+    /// A type's use that another line already brings to the part: listed in the details, not drawn
+    /// (docair-4wk.43). Every other line is drawn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub listed: bool,
     pub tag: String,
     pub source: SourceRef,
     pub origin: Origin,

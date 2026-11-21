@@ -151,7 +151,7 @@ pub fn ts_signature(line: &str) -> Option<Signature> {
         }
     }
     let close = close?;
-    let params = split_top(&line[open + 1..close])
+    let (params, types): (Vec<String>, Vec<String>) = split_top(&line[open + 1..close])
         .into_iter()
         .filter_map(|p| {
             let p = p.trim_start_matches("...").trim();
@@ -167,9 +167,15 @@ pub fn ts_signature(line: &str) -> Option<Signature> {
                     .trim()
                     .to_string()
             };
-            (!name.is_empty() && name != "this").then_some(name)
+            // `files: File[] = []`: the type between the colon and a default.
+            let ty = (!p.starts_with('{') && !p.starts_with('['))
+                .then(|| p.split_once(':'))
+                .flatten()
+                .and_then(|(_, t)| simplify_type(t.split('=').next().unwrap_or(t).trim()))
+                .unwrap_or_default();
+            (!name.is_empty() && name != "this").then_some((name, ty))
         })
-        .collect();
+        .unzip();
     let rest = line[close + 1..].trim_start();
     let returns = rest.strip_prefix(':').and_then(|r| {
         let end = r
@@ -179,19 +185,88 @@ pub fn ts_signature(line: &str) -> Option<Signature> {
             .unwrap_or(r.len());
         simplify_type(r[..end].trim().trim_end_matches(';'))
     });
-    Some(Signature { params, returns })
+    let types = if types.iter().all(String::is_empty) {
+        Vec::new()
+    } else {
+        types
+    };
+    Some(Signature {
+        params,
+        returns,
+        types,
+    })
 }
 
 impl Signature {
     /// The call's payload and reply as wording: `(question, graph) `, `Reply`.
     pub fn wording(&self) -> (Option<String>, Option<String>) {
-        let params = if self.params.len() > MAX_PARAMS {
-            format!("{}, …", self.params[..MAX_PARAMS - 1].join(", "))
+        self.wording_typed(&|_| false)
+    }
+
+    /// As `wording`, with a parameter's type where it is one of the project's (`is_project_type`)
+    /// and its name does not say it: `draw(g: Graph)`, but `scan(graph)` (docair-4wk.45).
+    pub fn wording_typed(
+        &self,
+        is_project_type: &dyn Fn(&str) -> bool,
+    ) -> (Option<String>, Option<String>) {
+        let words: Vec<String> = self
+            .params
+            .iter()
+            .enumerate()
+            .map(
+                |(i, name)| match self.types.get(i).filter(|t| !t.is_empty()) {
+                    Some(t) if is_project_type(base_name(t)) && !says_type(name, base_name(t)) => {
+                        format!("{name}: {t}")
+                    }
+                    _ => name.clone(),
+                },
+            )
+            .collect();
+        let params = if words.len() > MAX_PARAMS {
+            format!("{}, …", words[..MAX_PARAMS - 1].join(", "))
         } else {
-            self.params.join(", ")
+            words.join(", ")
         };
         ((!params.is_empty()).then_some(params), self.returns.clone())
     }
+}
+
+/// The type's own name in a simplified type: `Change` of `Change[]`, `Graph` of `Graph`.
+pub fn base_name(t: &str) -> &str {
+    t.trim_end_matches("[]")
+        .rsplit("::")
+        .next()
+        .unwrap_or(t)
+        .split('<')
+        .next()
+        .unwrap_or(t)
+        .trim()
+}
+
+/// Whether a parameter's name says its type: it holds the type's last word (`graph`, `old_graph`
+/// for `Graph`; `diff` for `GraphDiff`), so the type need not be written beside it.
+fn says_type(name: &str, ty: &str) -> bool {
+    let words = |s: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        for c in s.chars() {
+            if c == '_' || c == '-' {
+                out.push(std::mem::take(&mut cur));
+            } else if c.is_uppercase() && !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+                cur.extend(c.to_lowercase());
+            } else {
+                cur.extend(c.to_lowercase());
+            }
+        }
+        out.push(cur);
+        out.retain(|w| !w.is_empty());
+        out
+    };
+    let last = words(ty).pop().unwrap_or_default();
+    let name = words(name);
+    name.iter()
+        .any(|w| *w == last || w.trim_end_matches('s') == last)
 }
 
 #[cfg(test)]
@@ -252,12 +327,47 @@ mod tests {
         let s = Signature {
             params: ["a", "b", "c", "d", "e"].map(String::from).to_vec(),
             returns: Some("R".into()),
+            types: vec![],
         };
         assert_eq!(s.wording(), (Some("a, b, c, …".into()), Some("R".into())));
         let s = Signature {
             params: vec![],
             returns: None,
+            types: vec![],
         };
         assert_eq!(s.wording(), (None, None));
+    }
+
+    /// A parameter whose name does not say its project type shows the type (docair-4wk.45).
+    #[test]
+    fn a_name_that_does_not_say_its_type_shows_it() {
+        let s = Signature {
+            params: ["g", "graph", "diff", "a", "root"]
+                .map(String::from)
+                .to_vec(),
+            returns: None,
+            types: ["Graph", "Graph", "GraphDiff", "GraphDiff", "Path"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let ours = |t: &str| ["Graph", "GraphDiff"].contains(&t);
+        assert_eq!(
+            s.wording_typed(&ours).0.as_deref(),
+            Some("g: Graph, graph, diff, …")
+        );
+        let s = Signature {
+            params: ["changes", "x"].map(String::from).to_vec(),
+            returns: None,
+            types: ["ChangeStep[]", "Path"].map(String::from).to_vec(),
+        };
+        assert_eq!(
+            s.wording_typed(&|t| t == "ChangeStep").0.as_deref(),
+            Some("changes: ChangeStep[], x"),
+            "a type outside the project (Path) is not written"
+        );
+        assert_eq!(
+            ts_signature("ask(question: string, g: Graph = {}): Reply {").map(|s| s.types),
+            Some(vec!["string".to_string(), "Graph".to_string()])
+        );
     }
 }

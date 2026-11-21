@@ -59,6 +59,7 @@
   --e-emit: #d55181;
   --e-consume: #d55181;
   --e-cover: #a3a49c;
+  --e-use: #6d6e68;
   --flow: #e0533d;
   --flow-soft: #fbe1dc;
 }
@@ -117,6 +118,7 @@
     --e-emit: #d55181;
     --e-consume: #d55181;
     --e-cover: #6b6c66;
+    --e-use: #9c9c95;
     --flow: #ff7a5f;
     --flow-soft: #4a2620;
   }

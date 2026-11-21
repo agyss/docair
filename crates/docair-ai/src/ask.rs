@@ -119,10 +119,11 @@ fn is_data_item(n: &docair_core::model::Node) -> bool {
  ***/
 pub fn digest(graph: &Graph) -> String {
     let mut used_by: std::collections::HashMap<&str, Map<String, Value>> = Default::default();
+    // The uses another line brings go on the type; the drawn ones are edges like every line (docair-4wk.43).
     for e in graph
         .edges
         .iter()
-        .filter(|e| e.kind == docair_core::model::EdgeKind::Use)
+        .filter(|e| e.kind == docair_core::model::EdgeKind::Use && e.listed)
     {
         used_by.entry(e.to.as_str()).or_default().insert(
             e.from.clone(),
@@ -189,7 +190,7 @@ pub fn digest(graph: &Graph) -> String {
     let edges: Vec<Value> = graph
         .edges
         .iter()
-        .filter(|e| e.kind != docair_core::model::EdgeKind::Use)
+        .filter(|e| e.drawn())
         .map(|e| {
             let mut o = Map::new();
             o.insert("from".into(), json!(e.from));

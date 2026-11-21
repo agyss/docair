@@ -426,14 +426,16 @@ impl<'g> PanelGraph<'g> {
             .graph
             .edges
             .iter()
-            .filter(|e| e.to == n.id && e.kind != EdgeKind::Cover && e.kind.drawn())
+            .filter(|e| e.to == n.id && !matches!(e.kind, EdgeKind::Cover | EdgeKind::Use))
             .collect();
         let outs: Vec<&Edge> = self
             .graph
             .edges
             .iter()
             .filter(|e| {
-                e.from == n.id && (e.kind != EdgeKind::Cover || n.kind == "test") && e.kind.drawn()
+                e.from == n.id
+                    && (e.kind != EdgeKind::Cover || n.kind == "test")
+                    && e.kind != EdgeKind::Use
             })
             .collect();
         for (title, es, other) in [("Incoming", &ins, true), ("Outgoing", &outs, false)] {
@@ -486,7 +488,7 @@ impl<'g> PanelGraph<'g> {
         out
     }
 
-    /// Who uses a type and how, and the types a part uses: listed, not drawn (docs/ADAPTERS.md §5.8).
+    /// Who uses a type and how, and the types a part uses: every use, drawn or listed (docs/ADAPTERS.md §5.8).
     fn uses(&self, id: &str) -> String {
         let mut out = String::new();
         for (title, by) in [("Used by", true), ("Uses", false)] {
@@ -526,7 +528,7 @@ impl<'g> PanelGraph<'g> {
         let mut order: Vec<(bool, String)> = Vec::new();
         let mut peers: HashMap<(bool, String), (Vec<String>, bool)> = HashMap::new();
         for e in &self.graph.edges {
-            if e.kind == EdgeKind::Cover || !e.kind.drawn() {
+            if e.kind == EdgeKind::Cover || !e.drawn() {
                 continue;
             }
             let from_inside = inside.contains(e.from.as_str());
@@ -1078,7 +1080,7 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
         .edges
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.kind.drawn())
+        .filter(|(_, e)| e.drawn())
         .map(|(i, e)| {
             (
                 crate::svg::edge_key(graph, i),
