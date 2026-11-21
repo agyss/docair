@@ -433,7 +433,7 @@ The change an AI reply asks for in the view: which sections of the page to hide 
 ## review
 
 Also: reviews
-See: docair-core.review, docair-ai.explain.explain
+See: docair-ai.explain.change-findings, docair-core.review, docair-ai.explain.explain
 
 What `docair explain` writes and the changes section shows first: the
 changes between two versions, one difference in what the app does each:
@@ -457,9 +457,9 @@ Also: pieces
 See: docair-core.review.piece
 
 One bit of a change that docair found: a stretch of new and gone parts and
-lines, a line alone, or the parts of one box whose code changed. A piece
-that shows up in many flows is one piece; the AI groups pieces into
-changes.
+lines, a line alone, the parts of one box whose code changed, or an open box
+whose own block changed. A piece that shows up in many flows is one piece;
+the AI groups pieces into changes.
 
 ## intent
 
@@ -471,3 +471,14 @@ changed. The AI reads it to say why a change was made. With it goes all
 of what changed, to read: each changed part's whole text before and
 after, comments with it, and the changed files that hold no part.
 
+## slice
+
+Also: slices
+See: docair-core.slice, docair-core.slice.slice-struct
+
+One part of the system, followed from a seed to its ends: from a datum, a
+part, a route or a walk, along fixed rules, to parts with stable names (a
+store, a route, the browser). The page draws each slice as one picture. In
+the code, the module `slice` finds slices, and `struct Slice` holds one: its
+seed and ends, its parts in the order it meets them, its steps, lines and
+boxes, and the data its lines carry. See [SLICES §3](SLICES.md#3-a-slice).

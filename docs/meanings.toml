@@ -225,11 +225,13 @@ why = "everyday word for what a step is given; meanings::Input and docair-layout
 
 ["found off"]
 from = "docair-ai.explain.found-off"
-why = "the review's heading for what the AI found wrong, of three kinds: a contradiction of a commit, doc or code comment, what nothing mentions, a risk (docs/EXPLAIN.md §9.1, docair-8l6.58, 8l6.62)"
+checked = "7db7898d"
+why = "the review's heading for what the AI found wrong, of three kinds: a contradiction of a commit, doc or code comment, what nothing mentions, a risk (docs/EXPLAIN.md §9.1, docair-8l6.58, 8l6.62); confirmed by the user (2026-11-20)"
 
 [intent]
 from = "docair-core.review.intent"
-why = "the review's word for what was meant beside what changed: the commit messages, the changed docs, the doc blocks whose words changed (docs/EXPLAIN.md §9.2); with it the changed parts' whole texts and the changed files no part holds (docair-8l6.47)"
+checked = "314dbf2b"
+why = "the review's word for what was meant beside what changed: the commit messages, the changed docs, the doc blocks whose words changed (docs/EXPLAIN.md §9.2); with it the changed parts' whole texts and the changed files no part holds (docair-8l6.47); confirmed by the user (2026-11-20)"
 
 [item]
 from = "docair-lang-rust.item"
@@ -302,6 +304,10 @@ why = "The sentences mean a URL's origin in the browser (CORS) sense; the model'
 term = false
 why = "Everyday word in the sentences: 'leaves out' and 'lay it out' are verbs; the Out component is not what they mean."
 
+[panels]
+from = "docair-viewer.page_panels"
+why = "the page's panels around the pictures: details, tips, the tree, the search words, the legend and the diagnostics; the module's docs say so, not the builder struct Panels (the user, 2026-11-20)"
+
 [part]
 term = false
 why = "everyday word in docair's docs for a node of the picture; docair-layout's Part is the same thing as the layout sees it"
@@ -317,7 +323,8 @@ why = "Everyday phrase: a file the user picked; the sentences use it plainly."
 
 [piece]
 from = "docair-core.review.piece"
-why = "the review's word for one bit of a change docair found, which the AI groups into changes (docs/EXPLAIN.md §9.2)"
+checked = "b6fc4925"
+why = "the review's word for one bit of a change docair found, which the AI groups into changes (docs/EXPLAIN.md §9.2); confirmed by the user (2026-11-20)"
 
 [placed]
 term = false
@@ -384,8 +391,9 @@ term = false
 why = "Everyday participle (worked out, applied) in mixed senses; the Resolved part has no text."
 
 [review]
-from = "docair-core.review"
-why = "what docair explain writes and the changes section shows first: the changes, made understandable by the AI (docs/EXPLAIN.md §9)"
+from = "docair-ai.explain.change-findings"
+checked = "1f6c6f3b"
+why = "what docair explain writes and the changes section shows first: the changes, made understandable by the AI (docs/EXPLAIN.md §9); confirmed by the user against the stored review's docs (2026-11-20)"
 
 [route]
 from = "docair-core.route.route"
@@ -426,6 +434,11 @@ why = "Everyday word: how serious a diagnostic is; the Severity part has no text
 [signature]
 from = "docair-core.model.signature"
 why = "Programming term the docs lean on; the Signature part defines it in plain words."
+
+[slice]
+from = "docair-core.slice"
+checked = "5e603544"
+why = "one part of the system from a seed to its ends; the glossary entry explains both the module and struct Slice, as the user asked (2026-11-20)"
 
 ["source file"]
 term = false

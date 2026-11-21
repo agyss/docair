@@ -272,7 +272,11 @@ impl ReviewChange {
     }
 }
 
-/// The review of two commits: kept in the store, the next run asks only about what is new.
+/// The review of two versions (docs/EXPLAIN.md §9): what `docair explain` writes and the changes
+/// section shows first: the changes between the two versions, one difference in what the app does
+/// each: the AI's own reading of docair's pieces and their code, with the commit messages and the
+/// changed docs checked against it, and what it found off. Kept in the store while its changes
+/// cover the pieces as they are, asked again whole when they do not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeFindings {
     pub schema: String,
