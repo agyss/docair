@@ -41,7 +41,7 @@ pub fn cmd_diff(
  * `docair explain <A> [<B>]`: the review of the change (docs/EXPLAIN.md §9): the AI groups docair's pieces into changes, one difference in what the app does each, from the pieces, the commit messages and the changed docs, and says what, how, why and what to check; kept in `[explain] store` (`.docair/changes/<A>..<B>.json` by default), so the next run asks only when the pieces changed and never about what a human wrote; a pull request comment on stdout (`--json`: the store).
  *
  * @calls docair-server.commits.compare "compares the commits"
- * @calls docair-ai.explain.explain_with "reviews the change, at most 3 requests at once"
+ * @calls docair-cli.diff.review "the AI reviews the change, and it is kept"
  * @calls docair-ai.explain.comment "writes the review as a comment"
  ***/
 pub fn cmd_explain(
@@ -55,6 +55,31 @@ pub fn cmd_explain(
     let Some(ai) = crate::ask::ai_config(&compared.root)? else {
         return Ok(ExitCode::from(2));
     };
+    let (explained, file) = review(&compared, &ai)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&explained)?);
+    } else {
+        print!(
+            "{}",
+            docair_ai::explain::comment(&compared.changes, &explained, (&compared.a, &compared.b))
+        );
+        for p in &explained.problems {
+            eprintln!("left out: {p}");
+        }
+        eprintln!("→ {} ({} requests)", file.display(), explained.requests);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/***
+ * The AI's review of two compared commits (docs/EXPLAIN.md §9), kept in `[explain] store`: the stored one when it still covers every piece, else asked again whole; what is sent, each answered request and each change as soon as it is whole said on stderr. A review that fails (docair-8l6.85) is an error and nothing is stored. The review and its file.
+ *
+ * @calls docair-ai.explain.explain_with "reviews the change, at most 3 requests at once"
+ ***/
+pub fn review(
+    compared: &CommitPair,
+    ai: &docair_ai::config::AiConfig,
+) -> Result<(docair_ai::explain::ChangeFindings, PathBuf)> {
     let config = docair_core::config::load(&compared.root)?;
     let settings = config.explain.unwrap_or_default();
     let store = compared.root.join(
@@ -74,7 +99,7 @@ pub fn cmd_explain(
     let asked = std::sync::atomic::AtomicUsize::new(0);
     let made = std::sync::atomic::AtomicUsize::new(0);
     let explained = docair_ai::explain::explain_with(
-        &ai,
+        ai,
         (&compared.a, &compared.b),
         &compared.changes,
         &compared.intent,
@@ -101,19 +126,7 @@ pub fn cmd_explain(
     )?;
     std::fs::create_dir_all(&store)?;
     std::fs::write(&file, serde_json::to_string_pretty(&explained)? + "\n")?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&explained)?);
-    } else {
-        print!(
-            "{}",
-            docair_ai::explain::comment(&compared.changes, &explained, (&compared.a, &compared.b))
-        );
-        for p in &explained.problems {
-            eprintln!("left out: {p}");
-        }
-        eprintln!("→ {} ({} requests)", file.display(), explained.requests);
-    }
-    Ok(ExitCode::SUCCESS)
+    Ok((explained, file))
 }
 
 #[cfg(test)]

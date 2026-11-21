@@ -30,6 +30,18 @@ by the proof of concept in this repository: `docair build .` run on docair itsel
 | Layout of the pictures (docair-702.3, 702.9) | our own, crate `docair-layout` (2026-11-18): each box laid out on its own in layers (Sugiyama), sized and placed inside out (top-down); words in one monospace font, measured as characters times one advance; dagre's median positions and alternating ties taken over | lines may end at a box, which the pictures need; each box shrinks what it holds to a size budget (top-down); nested boxes never overlap; no dependency, and a library of its own. On 45 pictures of docair, routed by docair's router: 332 crossings, 1 621 bends, 36 Mpx² (SLICES.md §5); dagre with the same part sizes 286 crossings, 1 372 bends, but 141 Mpx², overlapping nested boxes, and no lines to boxes | `dagre` =0.1.2 (2026-10-30, Apache-2.0: no lines to boxes, boxes overlap, no sizing; without its default `json` feature it does not compile), `rust-sugiyama` 0.4.0 (no nested boxes), elkjs (JavaScript, stays only until docair-702.5) |
 | Packing the pictures (docair-702.5) | `miniz_oxide` 0.9.1 (2026-03-13) + `base64` 0.23.1 (2026-08-04), both the newest, in docair-viewer | each picture is deflated and written as base64 into the one HTML file (SLICES.md §13, choice 1); the browser inflates it with its own `DecompressionStream('deflate-raw')`, so the page needs no library. Pure Rust, already in the build (under ureq and serde-saphyr) | `flate2` 1.1.11 (2026-11-06: younger than two weeks; a wrapper around miniz_oxide), gzip framing (the browser reads raw deflate as well) |
 
+## Pull requests (`.github/workflows/docair-pr.yml`)
+
+The workflow is not on master yet: it stays on branch `pr-review` (docs/PULL_REQUESTS.md
+§2), and with it the two actions below. The text pictures are on master.
+
+| Concern | Choice | Why | Not chosen |
+|---------|--------|-----|------------|
+| Check out | `actions/checkout@v7.0.1` (20 Jul 2026, the newest) | the head commit with its whole history, for the merge base | — |
+| The page | `actions/upload-artifact@v7.0.2` (7 Oct 2026, the newest), `archive: false` | one file, unzipped (since v7.0.0), so a signed-in reviewer opens it in the browser; GitHub keeps it, 90 days at most | a branch in the repository, docair-server (a host to run) |
+| Comments | `gh` and `jq`, as the runner has them | docair writes the comments and the plan; the workflow only carries it out | an action to post comments (a dependency for four API calls) |
+| Pictures in a comment | text, drawn by docair (`text_pic`) | a comment keeps no SVG, `style` or script, and fetches an image without a login; light and double box drawing and the four arrows are in WGL4, so every common code font has them | Mermaid (its own layout, not docair's), images on a branch |
+
 ## The page (`docair.html`)
 
 Since docs/SLICES.md step 5 (2026-11-18) the CLI lays out and draws every

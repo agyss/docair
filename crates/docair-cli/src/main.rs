@@ -10,8 +10,44 @@ use docair_core::{Options, scan};
 
 mod ask;
 mod diff;
+mod pr;
 mod serve;
 mod tidy;
+
+/// `docair pr`'s two steps: what a run writes, and what it does with the pull request's comments.
+#[derive(Subcommand)]
+enum PrCommand {
+    /// The review from the merge base of BASE and HEAD to HEAD: the page, a summary comment and one per change, in <out>.
+    Build {
+        /// The branch the pull request goes into, e.g. origin/master.
+        base: String,
+        /// The pull request's commit.
+        #[arg(default_value = "HEAD")]
+        head: String,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        /// Output directory [default: <root>/.docair/pr].
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        lenient: bool,
+    },
+    /// Which comments to write, update, keep or mark gone, from <dir>/comments.json and the pull request's comments; JSON on stdout.
+    Plan {
+        /// The folder `docair pr build` wrote.
+        #[arg(long, default_value = ".docair/pr")]
+        dir: PathBuf,
+        /// The pull request's comments as GitHub lists them (`gh api …/issues/<n>/comments`); `-` reads stdin.
+        #[arg(long)]
+        existing: PathBuf,
+        /// The page's address, e.g. the artifact's; without it the links to the page are left out.
+        #[arg(long)]
+        page_url: Option<String>,
+        /// Only comments of this login count, e.g. github-actions[bot].
+        #[arg(long)]
+        author: Option<String>,
+    },
+}
 
 #[derive(Parser)]
 #[command(
@@ -74,6 +110,11 @@ enum Command {
         /// Print the findings as JSON instead of the comment.
         #[arg(long)]
         json: bool,
+    },
+    /// docair's review on a pull request (docs/PULL_REQUESTS.md): the page and a comment per change; the plan for the comments.
+    Pr {
+        #[command(subcommand)]
+        what: PrCommand,
     },
     /// Remove the hand-written tags that only repeat what the code says: list them, write the patch, `--apply` to write them.
     Tidy {
@@ -335,6 +376,21 @@ fn main() -> ExitCode {
             lenient,
             json,
         } => diff::cmd_explain(&root, &a, b.as_deref(), lenient, json),
+        Command::Pr { what } => match what {
+            PrCommand::Build {
+                base,
+                head,
+                root,
+                out,
+                lenient,
+            } => pr::cmd_build(&root, &base, &head, out, lenient),
+            PrCommand::Plan {
+                dir,
+                existing,
+                page_url,
+                author,
+            } => pr::cmd_plan(&dir, &existing, page_url.as_deref(), author.as_deref()),
+        },
         Command::Check {
             root,
             lenient,

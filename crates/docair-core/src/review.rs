@@ -407,6 +407,32 @@ pub fn change_picture(
     seed: &str,
     pieces: &[&Piece],
 ) -> Option<(Merged, FlowChange)> {
+    picture_of_change(a, b, changes, seed, pieces, true)
+}
+
+/***
+ * A change's cut, for a place that cannot zoom, as a comment on a pull request (docs/PULL_REQUESTS.md §3): `change_picture` without the parts one line away; only its pieces' parts at A and at B, their boxes and the lines between them.
+ *
+ * @calls docair-core.change_steps.merged "both versions as one picture"
+ ***/
+pub fn change_cut(
+    a: &Graph,
+    b: &Graph,
+    changes: &Changes,
+    seed: &str,
+    pieces: &[&Piece],
+) -> Option<(Merged, FlowChange)> {
+    picture_of_change(a, b, changes, seed, pieces, false)
+}
+
+fn picture_of_change(
+    a: &Graph,
+    b: &Graph,
+    changes: &Changes,
+    seed: &str,
+    pieces: &[&Piece],
+    with_around: bool,
+) -> Option<(Merged, FlowChange)> {
     let moves: IdMoves = change_steps::id_moves(&changes.graph);
     let back: HashMap<&str, &str> = moves.iter().map(|(from, to)| (*to, *from)).collect();
     let mut at_a: HashSet<String> = HashSet::new();
@@ -472,9 +498,11 @@ pub fn change_picture(
         }
         extra
     };
-    let (more_a, more_b) = (around(a, &at_a), around(b, &at_b));
-    at_a.extend(more_a);
-    at_b.extend(more_b);
+    if with_around {
+        let (more_a, more_b) = (around(a, &at_a), around(b, &at_b));
+        at_a.extend(more_a);
+        at_b.extend(more_b);
+    }
     let m = picture_of(a, b, &moves, &at_a, &at_b)?;
     Some((m, f))
 }
@@ -636,6 +664,51 @@ mod tests {
         assert_eq!(w[0].part, "orders.create");
         assert!(w[0].after.contains("checked first") && !w[0].before.contains("checked"));
         assert_eq!(cut("abcdef", 3), "abc…");
+    }
+
+    /// docs/PULL_REQUESTS.md §3: a change's cut for a comment holds its pieces' parts, with the new
+    /// line between them, and none of the parts one line away that its picture on the page brings.
+    #[test]
+    fn a_change_s_cut_holds_only_its_pieces_parts() {
+        let (before, after, changes) = a_new_write();
+        let ps = pieces(&before, &after, &changes);
+        let write = ps
+            .iter()
+            .find(|p| p.step.lines_added.iter().any(|l| l.contains("orders-db")))
+            .unwrap();
+        let (cut, f) = change_cut(&before, &after, &changes, "review/1", &[write]).unwrap();
+        let (whole, _) = change_picture(&before, &after, &changes, "review/1", &[write]).unwrap();
+        let leaves = |m: &Merged| -> HashSet<String> {
+            let boxes: HashSet<&str> = m
+                .pic
+                .parts
+                .iter()
+                .filter_map(|p| p.parent.as_deref())
+                .collect();
+            m.pic
+                .parts
+                .iter()
+                .filter(|p| !boxes.contains(p.id.as_str()))
+                .map(|p| p.id.clone())
+                .collect()
+        };
+        let (in_cut, in_whole) = (leaves(&cut), leaves(&whole));
+        for p in write.step.parts() {
+            assert!(in_cut.contains(p), "{p}: {in_cut:?}");
+        }
+        assert!(
+            in_cut.len() < in_whole.len(),
+            "{in_cut:?} against {in_whole:?}"
+        );
+        assert!(in_cut.is_subset(&in_whole));
+        let marked = change_steps::marks(&cut, &f, &HashSet::new());
+        assert!(
+            marked
+                .lines
+                .values()
+                .any(|m| *m == change_steps::LineMark::Added),
+            "the new line is in the cut"
+        );
     }
 
     /// docair-8l6.33, 8l6.77: a change's picture holds its pieces' parts and one step around them,

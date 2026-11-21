@@ -476,7 +476,7 @@ fn before_after(graph: &Graph, s: &ChangeStep) -> String {
 }
 
 /// What a step of a change is about, in docair's own words: what the flow now and no longer goes through, the line, or the code that changed.
-fn docair_words(graph: &Graph, s: &ChangeStep) -> String {
+pub(crate) fn docair_words(graph: &Graph, s: &ChangeStep) -> String {
     fn refs(v: &[String]) -> Vec<&str> {
         v.iter().map(String::as_str).collect()
     }
@@ -620,14 +620,14 @@ fn sort_flow<'f>(f: &'f FlowChange, inside: &change_steps::ChangedInside) -> Flo
 }
 
 /// A flow's marks as the drawing takes them: a class for each part and graph line, a tag on each part a change is about.
-struct Classes {
-    parts: HashMap<String, &'static str>,
-    lines: HashMap<String, &'static str>,
-    tags: HashMap<String, &'static str>,
+pub(crate) struct Classes {
+    pub(crate) parts: HashMap<String, &'static str>,
+    pub(crate) lines: HashMap<String, &'static str>,
+    pub(crate) tags: HashMap<String, &'static str>,
 }
 
 /// The page's classes and tags for what docair-core marked (docs/CHANGES.md §8): `ch-added` *new*, `ch-removed` *gone*, `ch-changed` *code*, `ch-same`.
-fn classes(marks: &FlowMarks) -> Classes {
+pub(crate) fn classes(marks: &FlowMarks) -> Classes {
     let mut c = Classes {
         parts: HashMap::new(),
         lines: HashMap::new(),
@@ -830,7 +830,7 @@ fn docair_note(ch: &Value) -> &'static str {
 }
 
 /// docair's words as plain text with code in backticks: `<code>total</code>` → `` `total` ``.
-fn plain_words(html: &str) -> String {
+pub(crate) fn plain_words(html: &str) -> String {
     html.replace("<code>", "`")
         .replace("</code>", "`")
         .replace("&lt;", "<")
@@ -858,6 +858,72 @@ struct ReviewView {
     n: usize,
     details: Map<String, Value>,
     pictures: Vec<ChangePicture>,
+}
+
+/// The review's changes in the order the page lists them, at `#review/1`, `#review/2`, …
+pub(crate) struct ReviewList {
+    /// Each change as the store holds it (`title`, `how`, `why`, `off`, `check`, `recorded`); one in
+    /// docair's words has `recorded.by` `docair` and a `note`: empty (the AI put its piece in none),
+    /// `left` (the run did not reach it), `newer` (the review is older than it).
+    pub(crate) found: Vec<Value>,
+    /// How many stored changes no longer hold a piece that is there now.
+    pub(crate) dropped: usize,
+    /// The pieces the review does not cover, by id.
+    pub(crate) newer: Vec<String>,
+}
+
+/***
+ * The review's changes in the page's order (docair-8l6.63, 8l6.67), the one list the page and the pull request's comments number (docs/PULL_REQUESTS.md §2): the stored changes that still hold a piece, then every piece in no change, one the run did not reach and one newer than the review, each a change of its own, in docair's words. Without a stored review every piece is newer.
+ ***/
+pub(crate) fn review_list(
+    after: &Graph,
+    findings: Option<&Value>,
+    pieces: &[docair_core::review::Piece],
+) -> ReviewList {
+    let piece = |id: &str| pieces.iter().find(|p| p.id() == id);
+    let stored = review_changes(findings);
+    let other = review_other(findings);
+    // A stored change none of whose pieces are there now no longer says anything of this change.
+    let mut found: Vec<Value> = stored
+        .iter()
+        .filter(|ch| {
+            ch["how"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|h| h["piece"].as_str().is_some_and(|p| piece(p).is_some()))
+        })
+        .cloned()
+        .collect();
+    let dropped = stored.len() - found.len();
+    let left = review_ids(findings, "left");
+    let held: HashSet<&str> = stored
+        .iter()
+        .flat_map(|ch| ch["how"].as_array().into_iter().flatten())
+        .filter_map(|h| h["piece"].as_str())
+        .chain(other.iter().copied())
+        .chain(left.iter().copied())
+        .collect();
+    let newer: Vec<&str> = pieces
+        .iter()
+        .map(|p| p.id())
+        .filter(|p| !held.contains(p))
+        .collect();
+    for (ids, note) in [(&other, ""), (&left, "left"), (&newer, "newer")] {
+        for p in ids.iter().filter_map(|id| piece(id)) {
+            found.push(json!({
+                "title": plain_words(&docair_words(after, &p.step)),
+                "how": [{ "piece": p.id(), "words": "" }],
+                "recorded": { "by": "docair" },
+                "note": note,
+            }));
+        }
+    }
+    ReviewList {
+        found,
+        dropped,
+        newer: newer.into_iter().map(str::to_string).collect(),
+    }
 }
 
 /***
@@ -915,44 +981,11 @@ fn review_view(
     let pieces = docair_core::review::pieces(before, after, c);
     let piece = |id: &str| pieces.iter().find(|p| p.id() == id);
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    // Every piece is a change (docair-8l6.63, 8l6.67): one the AI put in none, one the run did not reach,
-    // and one newer than the review are each a change of its own, in docair's words.
-    // A stored change none of whose pieces are there now no longer says anything of this change.
-    let mut found: Vec<Value> = stored
-        .iter()
-        .filter(|ch| {
-            ch["how"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|h| h["piece"].as_str().is_some_and(|p| piece(p).is_some()))
-        })
-        .cloned()
-        .collect();
-    let dropped = stored.len() - found.len();
-    let left = review_ids(changed.findings, "left");
-    let held: HashSet<&str> = stored
-        .iter()
-        .flat_map(|ch| ch["how"].as_array().into_iter().flatten())
-        .filter_map(|h| h["piece"].as_str())
-        .chain(other.iter().copied())
-        .chain(left.iter().copied())
-        .collect();
-    let newer: Vec<&str> = pieces
-        .iter()
-        .map(|p| p.id())
-        .filter(|p| !held.contains(p))
-        .collect();
-    for (ids, note) in [(&other, ""), (&left, "left"), (&newer, "newer")] {
-        for p in ids.iter().filter_map(|id| piece(id)) {
-            found.push(json!({
-                "title": plain_words(&docair_words(after, &p.step)),
-                "how": [{ "piece": p.id(), "words": "" }],
-                "recorded": { "by": "docair" },
-                "note": note,
-            }));
-        }
-    }
+    let ReviewList {
+        found,
+        dropped,
+        newer,
+    } = review_list(after, changed.findings, &pieces);
     // A review older than the change says so, what it misses and what it left out, and offers to
     // review again (docair-8l6.67).
     if !newer.is_empty() || dropped > 0 {

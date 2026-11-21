@@ -20,6 +20,10 @@ pub mod layout_store;
  ***/
 pub mod svg;
 /***
+ * A picture drawn as text, for a comment on a pull request: the SVG's layout compressed to character cells, in box-drawing characters.
+ ***/
+pub mod text_pic;
+/***
  * The documentation as one page: every picture a reader can reach, laid out, drawn and packed by the CLI, and a thin script that shows them by their address.
  ***/
 pub mod doc_page;
@@ -47,6 +51,10 @@ mod page_tidy;
  * What changed between two versions, in the page, written by the CLI: the list of changed flows, and each flow's slice before and after, side by side.
  ***/
 mod page_changes;
+/***
+ * docair's review on a pull request: a summary comment and one per change, each with its cut drawn as text, and the plan that brings the pull request's comments up to date.
+ ***/
+pub mod pr;
 
 /// The page's stylesheet: its colours, light and dark, and its panels.
 const CSS: &str = include_str!("../assets/viewer.css");

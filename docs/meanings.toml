@@ -344,6 +344,11 @@ why = "Everyday participle in the sentences (laid out on the canvas); the Placed
 term = false
 why = "everyday word: where things are put; docair-layout's Placement is the result of placing a picture's parts"
 
+[plan]
+from = "docair-viewer.pr.plan"
+code = "docair-viewer.pr.plan"
+why = "the AI (docair glossary, 2026-11-21): the docs use `plan` as docair's command that updates a pull request's comments, not the everyday sense"
+
 [problem]
 term = false
 why = "the docs use the everyday word: what went wrong"
