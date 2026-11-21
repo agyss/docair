@@ -571,6 +571,7 @@ mod tests {
             a: "A".into(),
             b: "B".into(),
             working_tree: false,
+            base: None,
             graph,
             parts: vec![],
             flows: vec![],
@@ -619,6 +620,7 @@ mod tests {
             a: "A".into(),
             b: "B".into(),
             working_tree: false,
+            base: None,
             graph: GraphDiff {
                 changed: vec![ChangedItem {
                     id: "orders.create".into(),

@@ -456,6 +456,25 @@ pub struct Changed<'a> {
 pub struct CodeLinks {
     pub at_a: Option<String>,
     pub at_b: Option<String>,
+    /// A's commit and B's (none for the working tree), for the places the page in the editor opens
+    /// (docs/EDITOR.md §5).
+    pub rev_a: Option<String>,
+    pub rev_b: Option<String>,
+}
+
+/// A place in the code at one version (docs/EDITOR.md §5): its commit, none for the working tree;
+/// its file, as the project knows it; its line.
+pub(crate) fn place(rev: Option<&str>, path: &str, line: usize) -> Value {
+    json!({ "rev": rev, "path": path, "line": line })
+}
+
+/// ` data-open="…"`: where a place in the code is at the old and at the new version, null where it is
+/// not; the page in the editor opens it there instead of following a link (docs/EDITOR.md §5).
+pub(crate) fn data_open(old: Option<Value>, new: Option<Value>) -> String {
+    format!(
+        r#" data-open="{}""#,
+        escape_text(&json!({ "old": old, "new": new }).to_string())
+    )
 }
 
 impl CodeLinks {
@@ -485,7 +504,9 @@ pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Cha
         .iter()
         .filter_map(|s| s.addr.strip_prefix("box/").map(str::to_string))
         .collect();
-    let mut panels = page_panels::panels(graph, &sections);
+    // The version the page shows: B's commit, or the working tree (docs/EDITOR.md §5).
+    let rev = changed.and_then(|c| c.links.rev_b.as_deref());
+    let mut panels = page_panels::panels(graph, &sections, rev);
     if let Some(v) = &view {
         panels.data["changes"] = Value::String(v.list.clone());
         panels.data["flowChanges"] = Value::Object(v.details.clone());

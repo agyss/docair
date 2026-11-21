@@ -51,6 +51,10 @@ pub struct Changes {
     /// B is the working tree, not a commit: asking about the pair again leaves B out.
     #[serde(default)]
     pub working_tree: bool,
+    /// The commit compared from when it is not A itself: where B split from A, the merge base
+    /// (docs/EDITOR.md §2, docair-p2c.1), so a branch shows what it adds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     pub graph: GraphDiff,
     /// The parts the change touches, at B's ids (A's for removed parts).
     pub parts: Vec<String>,
@@ -253,10 +257,27 @@ pub fn changes(
         a: names.0.to_string(),
         b: names.1.to_string(),
         working_tree: false,
+        base: None,
         graph,
         parts: parts.into_iter().collect(),
         flows,
     }
+}
+
+/// Where B left A, when the comparison starts there and not at A (docs/EDITOR.md §2), in Markdown:
+/// *Compared from where `feature` left `main`: `3f2a9c1d0e4b`.*
+pub fn split_from(c: &Changes) -> Option<String> {
+    let base = c.base.as_deref()?;
+    let b = if c.working_tree {
+        "the working tree".to_string()
+    } else {
+        format!("`{}`", c.b)
+    };
+    Some(format!(
+        "Compared from where {b} left `{}`: `{}`.",
+        c.a,
+        &base[..base.len().min(12)]
+    ))
 }
 
 /***
@@ -266,6 +287,9 @@ pub fn changes(
  ***/
 pub fn markdown(c: &Changes) -> String {
     let mut out = format!("## Changes from `{}` to `{}`\n\n", c.a, c.b);
+    if let Some(line) = split_from(c) {
+        out.push_str(&format!("{line}\n\n"));
+    }
     // Each commit is read with its own docair.toml: what changed in it comes first (docair-zrr.31).
     if !c.graph.toml.is_empty() {
         out.push_str(&format!(

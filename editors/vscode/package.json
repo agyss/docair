@@ -1,0 +1,71 @@
+{
+  "name": "docair-vscode",
+  "displayName": "docair",
+  "description": "docair's documentation of a system beside the code: compare two versions from the git history and open what changed.",
+  "version": "0.1.0",
+  "publisher": "docair",
+  "private": true,
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Visualization",
+    "SCM Providers"
+  ],
+  "activationEvents": [
+    "workspaceContains:docair.toml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "docair.open",
+        "title": "Show the documentation",
+        "category": "docair"
+      },
+      {
+        "command": "docair.compare",
+        "title": "Compare two versions…",
+        "category": "docair",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "docair.compareWithWorkingTree",
+        "title": "Compare the working tree with…",
+        "category": "docair"
+      },
+      {
+        "command": "docair.stopComparing",
+        "title": "Stop comparing",
+        "category": "docair"
+      },
+      {
+        "command": "docair.restart",
+        "title": "Restart the server",
+        "category": "docair"
+      }
+    ],
+    "configuration": {
+      "title": "docair",
+      "properties": {
+        "docair.path": {
+          "type": "string",
+          "default": "docair",
+          "markdownDescription": "The `docair` program: a name on the PATH, or a path to it; `${workspaceFolder}` is the project's folder, e.g. `${workspaceFolder}/target/release/docair`. It runs `docair serve` for the workspace."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "tsc -p . && node --test \"out/test/*.test.js\"",
+    "package": "tsc -p . && vsce package --skip-license --allow-missing-repository --out docair.vsix",
+    "vscode:prepublish": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.140.0",
+    "@vscode/vsce": "4.1.0",
+    "typescript": "6.0.3"
+  }
+}

@@ -128,6 +128,9 @@ impl Config {
  * @calls   docair-server.project.tidy_apply (POST /api/tidy: tags) -> ServeApplied
  * @calls   docair-server.project.explain (POST /api/explain: a, b) -> ExplainJob
  * @calls   docair-server.project.explain_job (GET /api/explain/<job>) -> ExplainJob
+ * @calls   docair-server.project.changes (GET /api/changes) -> ServeChanges
+ * @calls   docair-server.project.compare (POST /api/changes: old, new) -> ServeChanges
+ * @calls   docair-server.project.stop_comparing (DELETE /api/changes) -> ServeChanges
  * @calls   docair-server.ask (POST /api/ask: question, graph, history) -> Reply
  * @calls   docair-server.patch (POST /api/patch: changes, files) -> PatchAnswer
  * @calls   docair-server.word (POST /api/word: graph, scope) -> Reply
@@ -153,7 +156,13 @@ pub fn router(config: Config) -> Router {
                 get(project::tidy_list).post(project::tidy_apply),
             )
             .route("/api/explain", post(project::explain))
-            .route("/api/explain/{job}", get(project::explain_job));
+            .route("/api/explain/{job}", get(project::explain_job))
+            .route(
+                "/api/changes",
+                get(project::changes)
+                    .post(project::compare)
+                    .delete(project::stop_comparing),
+            );
     }
     let mut app = upload_router(config.clone()).merge(
         routes

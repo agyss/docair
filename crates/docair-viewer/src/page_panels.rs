@@ -114,6 +114,8 @@ struct PanelGraph<'g> {
     kids: HashMap<&'g str, Vec<&'g str>>,
     sections: &'g HashSet<String>,
     tidy: &'g crate::page_tidy::Tidy,
+    /// The commit the page shows, none for the working tree: where a part's source opens in the editor.
+    rev: Option<&'g str>,
 }
 
 impl<'g> PanelGraph<'g> {
@@ -318,11 +320,21 @@ impl<'g> PanelGraph<'g> {
                 })
                 .unwrap_or_default(),
         );
+        // In the editor, a part's source opens at the version the page shows (docs/EDITOR.md §5).
         row(
             "source",
             n.source
                 .as_ref()
-                .map(|s| code(&format!("{}:{}", s.file, s.line)))
+                .map(|s| {
+                    format!(
+                        "<code{}>{}</code>",
+                        crate::doc_page::data_open(
+                            None,
+                            Some(crate::doc_page::place(self.rev, &s.file, s.line))
+                        ),
+                        escape_text(&format!("{}:{}", s.file, s.line))
+                    )
+                })
                 .unwrap_or_default(),
         );
         row(
@@ -1016,7 +1028,7 @@ impl<'g> PanelGraph<'g> {
 /***
  * Write the panels: each part's details and tip, each line's tip, the tree, the search words, the legend, the diagnostics and the tests switch.
  ***/
-pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
+pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>, rev: Option<&str>) -> Panels {
     let mut kids: HashMap<&str, Vec<&str>> = HashMap::new();
     for n in &graph.nodes {
         if n.id == graph.system || n.kind == "data" {
@@ -1033,6 +1045,7 @@ pub(crate) fn panels(graph: &Graph, sections: &HashSet<String>) -> Panels {
         kids,
         sections,
         tidy: &tidy,
+        rev,
     };
     let linker = crate::page_glossary::Linker::new(graph);
     let glossary = crate::page_glossary::glossary(graph, &linker);

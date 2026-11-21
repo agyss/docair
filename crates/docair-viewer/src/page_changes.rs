@@ -203,11 +203,26 @@ fn parts_code(mut ids: Vec<(&str, &str)>, refs: &CodeRefs) -> String {
         ),
         None => format!("<code>{}:{}</code>", escape_text(&at.0), at.1),
     };
+    // Where the part is at each version, for the page in the editor (docs/EDITOR.md §5).
+    let side = |rev: Option<&String>, p: &(String, usize)| {
+        crate::doc_page::place(rev.map(String::as_str), &p.0, p.1)
+    };
+    let (rev_a, rev_b) = (refs.links.rev_a.as_ref(), refs.links.rev_b.as_ref());
     let mut items = String::new();
     let mut n = 0;
     for (id, what) in ids {
         let (a, b) = (place(refs.before, id), place(refs.after, id));
         let at = |p: &(String, usize)| format!("{}:{}", p.0, p.1);
+        let open = match (what, &a, &b) {
+            ("new", _, Some(b)) => crate::doc_page::data_open(None, Some(side(rev_b, b))),
+            ("gone", Some(a), _) => crate::doc_page::data_open(Some(side(rev_a, a)), None),
+            (_, Some(a), Some(b)) => {
+                crate::doc_page::data_open(Some(side(rev_a, a)), Some(side(rev_b, b)))
+            }
+            (_, _, Some(b)) => crate::doc_page::data_open(None, Some(side(rev_b, b))),
+            (_, Some(a), None) => crate::doc_page::data_open(Some(side(rev_a, a)), None),
+            _ => String::new(),
+        };
         let links = match (what, &a, &b) {
             ("new", _, Some(b)) => link(&at(b), refs.links.at_b.as_ref(), b),
             ("gone", Some(a), _) => link(&at(a), refs.links.at_a.as_ref(), a),
@@ -222,7 +237,7 @@ fn parts_code(mut ids: Vec<(&str, &str)>, refs: &CodeRefs) -> String {
         };
         let _ = write!(
             items,
-            r#"<li data-test="code-part"><code>{}</code> <span class="muted">{what}</span> · {links}</li>"#,
+            r#"<li data-test="code-part"{open}><code>{}</code> <span class="muted">{what}</span> · {links}</li>"#,
             escape_text(id)
         );
         n += 1;
@@ -1413,6 +1428,20 @@ pub(crate) fn change_view(after: &Graph, changed: &Changed, keep: Option<&Path>)
             format!("{} changed", count(n, "flow"))
         }
     );
+    // Where the comparison starts when it is not A itself: where B left A (docs/EDITOR.md §2).
+    if let Some(base) = &c.base {
+        let _ = write!(
+            list,
+            r#"<p class="muted" data-test="split-from">Compared from where {} left <code>{}</code>: <code>{}</code>.</p>"#,
+            if c.working_tree {
+                "the working tree".to_string()
+            } else {
+                format!("<code>{}</code>", escape_text(b))
+            },
+            escape_text(a),
+            escape_text(&base[..base.len().min(12)])
+        );
+    }
     // Each commit is read with its own docair.toml: what changed in it comes first (docair-zrr.31).
     if !c.graph.toml.is_empty() {
         let lines: Vec<String> = c
@@ -1723,6 +1752,7 @@ mod tests {
             a: "A".into(),
             b: "B".into(),
             working_tree: false,
+            base: None,
             graph: docair_core::diff::GraphDiff {
                 toml: vec!["- hide = [\"web\"]".into(), "+ hide = []".into()],
                 ..Default::default()

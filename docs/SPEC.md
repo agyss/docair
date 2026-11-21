@@ -152,9 +152,9 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 
 | Command          | Runs stages | Result |
 |------------------|-------------|--------|
-| `docair build` | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair |
+| `docair build` | 1–7 | builds the documentation on demand: writes `docair.graph.json` and `docair.html` to `--out` (default `.docair/`); exits 0 with warnings, 1 with errors (outputs are written anyway); `--changes <A>` adds the page's changes section: what the working tree changes since commit A (docs/CHANGES.md), with the findings `docair explain` stored for that pair; with `--to <B>`, what commit B changes since A, and the page is B's documentation (docs/EDITOR.md §3) |
 | `docair tidy [root] [--apply]` | 1–6, tidy | lists the hand-written tags that only repeat what the code says (docs/ADAPTERS.md §6.1) by file, each with the code that says the same, and writes `docair.patch` to `--out`; `--apply` writes the edits into the files. `docair build` and `docair check` end with one line while any repeat: *4 tags repeat the code: run `docair tidy`* |
-| `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree: each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
+| `docair diff <A> [<B>] [--root .] [--json]` | 1–6 twice, diff | what two commits change in the system's flows (docs/CHANGES.md), or a commit and the working tree, compared from where B left A (their merge base, unless A is an ancestor of B already, B an ancestor of A, or the two share no commit: then from A; `base` in `changes.json`, docs/EDITOR.md §2): each commit read from a detached git worktree and its graph kept in the cache folder (`graphs/`); the changed parts (the graph diff's, moves found by the body's fingerprint, and the parts the changed lines fall in) and every scenario, walkthrough, datum and route slice through them compared at A and at B; `changes.json` (`docair.changes/0`) to `--out`, a Markdown summary on stdout |
 | `docair explain <A> [<B>] [--root .] [--json]` | 1–6 twice, diff, AI | the review of what `docair diff` finds (docs/EXPLAIN.md §9): docair's pieces of the whole change (`docair_core::review::pieces`) with each changed part's whole text before and after, the changed files no part holds, the commit messages and the changed docs (as claims, without ids) go to the model, which groups the pieces into changes, one difference in what the app does each, with what, how, why in its own words, the commits and docs it read for each change, folded (docair-8l6.71), what it found off (each a contradiction, what a commit message, a doc or a code comment says, and which one, against what the code clearly does otherwise; or what the code does that nothing mentions; or a risk in the code), and what to check; every claim bound against both graphs and the pieces, every piece a change, one the AI puts in none shown as a change of its own in docair's words; kept in `[explain] store` (default `.docair/changes/<A>..<B>.json`, `docair.explained/2`; docair serve notices one stored there, docair-8l6.74), asked again whole when its changes and the pieces it put in none no longer cover the pieces, else kept as stored (no hand corrections, docair-8l6.75); everything that changed goes whole, nothing cut, in one request of at most `[explain] max_chars` (default 1,000,000 characters; a review that needs more is an error, never split, docair-8l6.79), its answer streamed, with `[explain] reasoning` (default low), and one more request that places the pieces left in no change or makes changes of them (docair-8l6.69); progress on stderr, each change as soon as it is whole; the review as a pull request comment on stdout |
 | `docair check`   | 1–6         | prints diagnostics; exits non-zero on errors (CI gate) |
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
@@ -166,7 +166,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair ai [--check]` | none   | prints the AI settings and where the key comes from; `--check` sends one short request (§10.1) |
 | `docair slice [seed] [--all]` | 1–6 | prints a slice as JSON: one part of the system, from a seed to its ends (§3.7); without a seed it lists the seeds, `--all` prints every slice. `check --coverage` also says, for each datum, how many of its lines its slice reaches |
 | `docair layer [layer] [--open id] [--tests bool] [--all]` | 1–6 | prints what a layer draws as JSON (§3.4): each part with the box it stands in, open or closed, and each line with the lines of the graph it stands for and the parts it passes; without a layer it lists the layers the project offers |
-| `docair serve [root] [--bind addr] [--app dir] [--changes A]` | 1–7, watch | serves the project's documentation at `/` and writes it again when its files change; `--changes A` gives the page its changes section, as `docair build --changes A` does (the system's file events, acted on once they are quiet for 0.4 s; outputs and what a scan skips do not count), after an answer with a walkthrough, and after applied edits; `/api/ask`, `/api/word`, `/api/glossary`, `/api/apply` on the server's own graph, `/api/version` to poll, uploads as docair-server (docs/SLICES.md §8) |
+| `docair serve [root] [--bind addr] [--app dir] [--changes A [--to B]]` | 1–7, watch | serves the project's documentation at `/` and writes it again when its files change; `--changes A [--to B]` gives the page its changes section, as `docair build` does (with `--to`, the page is B's documentation; the chat, edits and `docair.graph.json` stay the working tree's) (the system's file events, acted on once they are quiet for 0.4 s; outputs and what a scan skips do not count), after an answer with a walkthrough, and after applied edits; `/api/ask`, `/api/word`, `/api/glossary`, `/api/apply` on the server's own graph, `/api/version` to poll, uploads as docair-server (docs/SLICES.md §8) |
 
 ---
 
@@ -211,6 +211,30 @@ Before the upload, the picked files are read into memory (*Reading the
 folder · 286 files so far*), so a file that changes on disk meanwhile cannot
 break it. A file that cannot be read says *A file changed while it was
 read; pick the folder again.*
+
+### 1.4 The VS Code extension: the page beside the code
+
+`editors/vscode/` (docs/EDITOR.md) starts `docair serve` for the workspace's
+folder (the first with a `docair.toml`) on a free local port, and frames the
+page beside the editor at `?editor=vscode`. It picks two versions from the git
+history and has serve compare them (`POST /api/changes`, §10.5):
+
+| Command | Does |
+|---------|------|
+| docair: Show the documentation | starts serve when it does not run, opens the panel |
+| docair: Compare two versions… | picks old (a branch, a tag, one of the last 50 commits), then new (the same, or the working tree first) |
+| docair: Compare the working tree with… | picks old; new is the working tree |
+| docair: Stop comparing | `DELETE /api/changes` |
+| docair: Restart the server | serve again, the pair compared again |
+
+In the editor, a place in the code (`data-open`: a changed part, a part's
+source) is not followed as a link: the page posts `{ type: 'docair:open',
+old, new }` to the frame around it, each side `{ rev, path, line }` with `rev`
+the commit's sha, null for the working tree. Both sides open in VS Code's diff
+editor, old at its commit on the left; one side opens alone. A file at a commit
+is read-only, from `git show`. The status bar names the pair. The setting
+`docair.path` is the `docair` program (`${workspaceFolder}` in it is the
+project's folder).
 
 ## 2. Doc blocks (stage 2: extract)
 
@@ -1957,6 +1981,9 @@ question; the key stays with the server.
 | `POST /api/tidy` | `{ tags?: [{ node, tag }] }` → `{ edited, regenerated, version }`: the picked tags removed (all when none are named), the documentation written again; 409 when no tag repeats |
 | `POST /api/explain` | `{ a, b? }` → 202 and an `ExplainJob` at once (docs/EXPLAIN.md §8): the job explains what the served project changes since commit `a` (or between `a` and `b`), the flows without stored findings sent to the model at most 3 requests at once and stored as `docair explain` stores them; a page served with `--changes` is written again with them. A second call while a job runs answers that job (the same commits) or 409 (others); 409 for a project without git history (an upload), 503 when AI is off |
 | `GET /api/explain/<job>` | `ExplainJob`: `job`, `a`, `b`, `running`, `phase` (`comparing`, `asking`, `done`, `failed`), `flows`, `requests`, `started`, `answered`, `left`, `asking` (the flows the model works on now), `seconds`, `error`, `text` (what the page shows, e.g. *The AI explains 30 flows in 5 requests · 2 answered · 1:12*), `found` (the changes made so far, each bound as soon as the requests before it are; docair-8l6.65), `html` (the bar and those changes, as the page shows them), and at the end `findings` and the documentation's new `version`; kept 10 minutes after it ends, then 404 |
+| `GET /api/changes` | `ServeChanges`: what the page compares (docs/EDITOR.md §4): `old` (null without a changes section), `new` (null for the working tree), `base` (the commit compared from when it is not `old`, §2), `comparing`, `error` (why the page has no changes section when a side could not be read), `version` |
+| `POST /api/changes` | `{ old, new? }`: both names are checked at once (400 for one git does not know, or one starting with `-`); 409 without git history or while a comparison is being written; else 202 and `ServeChanges`, and the page is written again in the background with what `new` (the working tree without it) changes since `old`, from where it left `old`; its version grows and it reloads |
+| `DELETE /api/changes` | the page without its changes section, written again; `ServeChanges`; 409 while a comparison is being written |
 
 An uploaded page asks the same routes under `/api/projects/<id>/` (§1.3):
 the server keeps the upload as a project, and answers any origin, since the

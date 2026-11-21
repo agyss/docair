@@ -68,6 +68,9 @@ a.seg { color: inherit; text-decoration: none; display: inline-block; }
 .badge.tidy { color: var(--accent); }
 /* What needs docair serve shows once a server answers. */
 body[data-served="true"] [data-served][hidden] { display: inline-block; }
+/* In the editor, a place in the code opens there (docs/EDITOR.md §5). */
+body[data-editor] [data-open] { cursor: pointer; }
+body[data-editor] code[data-open] { text-decoration: underline dotted; }
 /* Changes (docs/CHANGES.md §7): a flow before and after, side by side; what it gained green, what it lost red and dashed. */
 .docair-pic .side-missing rect { fill: none; stroke: var(--muted); stroke-dasharray: 6 4; }
 .docair-pic .side-missing text { fill: var(--muted); font-size: 14px; text-anchor: middle; dominant-baseline: middle; }

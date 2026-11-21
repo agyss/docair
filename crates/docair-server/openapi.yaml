@@ -98,6 +98,47 @@ paths:
       responses:
         '200': {description: ExplainJob.}
         '404': {description: The job is no longer kept (10 minutes after it ends).}
+  /api/changes:
+    get:
+      operationId: changes
+      summary: What the served page compares (docs/EDITOR.md §4), whether a comparison is being written, and why the page has no changes section when a side could not be read.
+      responses:
+        '200':
+          description: The pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeChanges'
+        '404': {description: The server serves no project.}
+    post:
+      operationId: compare
+      summary: Compare old with new (the working tree without it), from where new left old; the page is written again in the background and reloads.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComparedSides'
+      responses:
+        '202':
+          description: Being compared; GET says when it is done.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeChanges'
+        '400': {description: git knows no commit by one of the names.}
+        '409': {description: The project has no git history, or a comparison is being written.}
+    delete:
+      operationId: stop_comparing
+      summary: The page without its changes section, written again.
+      responses:
+        '200':
+          description: The page compares nothing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeChanges'
+        '409': {description: A comparison is being written.}
   /api/tidy:
     get:
       operationId: tidy_list
@@ -235,6 +276,21 @@ components:
         html: {type: string}
         graph: {type: object}
         page: {type: string, description: "Where the server keeps the upload as a project: /api/projects/<id>/."}
+    ComparedSides:
+      type: object
+      required: [old]
+      properties:
+        old: {type: string, description: "A branch, tag or commit."}
+        new: {type: [string, "null"], description: "A branch, tag or commit; none for the working tree."}
+    ServeChanges:
+      type: object
+      properties:
+        old: {type: [string, "null"]}
+        new: {type: [string, "null"]}
+        base: {type: [string, "null"], description: "The commit compared from when it is not old: where new left old."}
+        comparing: {type: boolean}
+        error: {type: [string, "null"]}
+        version: {type: integer}
     ServeVersion:
       type: object
       properties:

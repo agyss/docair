@@ -98,8 +98,26 @@ pub struct ProjectSession {
     pub save: bool,
     /// An upload: no indexer runs on it, since an indexer builds the code and build scripts run.
     pub untrusted: bool,
-    /// `docair serve --changes <A>`: the page also shows what the working tree changes since commit A.
-    pub changes: Option<String>,
+    /// `docair serve --changes <A> [--to <B>]`: the page also shows what B (the working tree without
+    /// one) changes since commit A.
+    pub changes: Option<ComparedSides>,
+}
+
+/// What writing a page with a changes section came to: the commit compared from when it is not the
+/// old side (the merge base, docs/EDITOR.md §2), or why the page has no changes section.
+#[derive(Debug, Clone, Default)]
+pub struct CompareOutcome {
+    pub base: Option<String>,
+    pub error: Option<String>,
+}
+
+/// What a served page compares (docs/EDITOR.md §3, §4): the old side, a branch, tag or commit; the
+/// new side, one too, or the working tree when there is none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComparedSides {
+    pub old: String,
+    #[serde(default)]
+    pub new: Option<String>,
 }
 
 /// AI settings that ask nothing, for a session that only scans and applies.
@@ -174,29 +192,45 @@ impl ProjectSession {
     }
 
     /***
-     * Write the graph and the page; with `changes`, the page with its changes section, and `changes.json`. When commit A cannot be read, the page has no changes section and the reason is printed.
+     * Write the graph and the page; with `changes`, the page with its changes section, and `changes.json`: B's page, the working tree's without B. When a side cannot be read, the page has no changes section and the reason is printed.
      *
      * @calls docair-server.commits.compare_work "compares the working tree with commit A"
+     * @calls docair-server.commits.compare "compares commit A with commit B"
      * @calls docair-server.commits.changes_page "writes the page with its changes section"
      ***/
     pub fn write_outputs(&self) -> Result<PathBuf> {
+        Ok(self.write_outputs_comparing()?.0)
+    }
+
+    /// As `write_outputs`, with what the comparison came to: the commit it started from, or why the
+    /// page has no changes section (docs/EDITOR.md §4).
+    pub fn write_outputs_comparing(&self) -> Result<(PathBuf, CompareOutcome)> {
         let html = self.out.join("docair.html");
         docair_core::emit::write_json(&self.graph, &self.out.join("docair.graph.json"))?;
-        if let Some(a) = &self.changes {
-            match crate::commits::compare_work(&self.root, a, &self.graph, self.lenient) {
+        let mut compared = CompareOutcome::default();
+        if let Some(c) = &self.changes {
+            let pair = match &c.new {
+                None => crate::commits::compare_work(&self.root, &c.old, &self.graph, self.lenient),
+                Some(b) => crate::commits::compare(&self.root, &c.old, Some(b), self.lenient),
+            };
+            match pair {
                 Ok(pair) => {
                     std::fs::write(&html, crate::commits::changes_page(&pair))?;
                     std::fs::write(
                         self.out.join("changes.json"),
                         serde_json::to_string_pretty(&pair.changes)? + "\n",
                     )?;
-                    return Ok(html);
+                    compared.base = pair.changes.base.clone();
+                    return Ok((html, compared));
                 }
-                Err(e) => eprintln!("docair serve: the page has no changes section: {e:#}"),
+                Err(e) => {
+                    eprintln!("docair serve: the page has no changes section: {e:#}");
+                    compared.error = Some(format!("{e:#}"));
+                }
             }
         }
         docair_viewer::write_html(&self.graph, &html)?;
-        Ok(html)
+        Ok((html, compared))
     }
 
     /// Edits of the reply applied to the files on disk, in memory.
@@ -420,6 +454,10 @@ pub struct ServedProject {
     pub ai_on: bool,
     /// The project's files as they were when last scanned: names, sizes and times.
     seen: Mutex<u64>,
+    /// A comparison set by `POST /api/changes` runs (docs/EDITOR.md §4).
+    comparing: std::sync::atomic::AtomicBool,
+    /// What the last page written with a changes section came to.
+    compared: Mutex<CompareOutcome>,
 }
 
 impl std::fmt::Debug for ServedProject {
@@ -443,24 +481,26 @@ impl ServedProject {
         Self::open_comparing(root, out, lenient, ai, None)
     }
 
-    /// As `open`; with `changes`, the page shows what the working tree changes since that commit, written again with each change.
+    /// As `open`; with `changes`, the page shows what its new side (the working tree, or a commit) changes since its old one, written again with each change.
     pub fn open_comparing(
         root: &Path,
         out: Option<PathBuf>,
         lenient: bool,
         ai: Option<AiConfig>,
-        changes: Option<String>,
+        changes: Option<ComparedSides>,
     ) -> Result<ServedProject> {
         let ai_on = ai.is_some();
         let mut session = ProjectSession::load(root, out, lenient, true, ai.unwrap_or_else(no_ai))?;
         session.changes = changes;
-        session.write_outputs()?;
+        let (_, compared) = session.write_outputs_comparing()?;
         let seen = files_seen(root, &session.out);
         Ok(ServedProject {
             session: Mutex::new(session),
             version: AtomicU64::new(1),
             ai_on,
             seen: Mutex::new(seen),
+            comparing: Default::default(),
+            compared: Mutex::new(compared),
         })
     }
 
@@ -476,6 +516,8 @@ impl ServedProject {
             version: AtomicU64::new(1),
             ai_on,
             seen: Mutex::new(seen),
+            comparing: Default::default(),
+            compared: Default::default(),
         })
     }
 
@@ -497,7 +539,8 @@ impl ServedProject {
 
     /// The documentation written again; the new version.
     fn written(&self, session: &ProjectSession) -> Result<u64> {
-        session.write_outputs()?;
+        let (_, compared) = session.write_outputs_comparing()?;
+        *self.compared.lock().unwrap_or_else(|e| e.into_inner()) = compared;
         *self.seen.lock().unwrap_or_else(|e| e.into_inner()) =
             files_seen(&session.root, &session.out);
         Ok(self.version.fetch_add(1, Ordering::SeqCst) + 1)
@@ -1233,6 +1276,149 @@ fn run_job(
     }
 }
 
+// ── The pair the page compares (docs/EDITOR.md §4) ──
+
+/// `GET /api/changes`: what the served page compares. `old` is none when the page has no changes
+/// section, `new` none for the working tree; `base` is the commit compared from when it is not `old`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServeChanges {
+    pub old: Option<String>,
+    pub new: Option<String>,
+    pub base: Option<String>,
+    /// A comparison set by `POST /api/changes` is being written.
+    pub comparing: bool,
+    /// Why the page has no changes section, when a side could not be read.
+    pub error: Option<String>,
+    pub version: u64,
+}
+
+impl ServedProject {
+    /// What the page compares now.
+    pub fn changes_now(&self) -> ServeChanges {
+        let c = self.lock().changes.clone();
+        let compared = self
+            .compared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let comparing = self.comparing.load(Ordering::SeqCst);
+        ServeChanges {
+            old: c.as_ref().map(|c| c.old.clone()),
+            new: c.and_then(|c| c.new),
+            base: compared.base,
+            comparing,
+            error: if comparing { None } else { compared.error },
+            version: self.version.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Compare `changes`, or nothing, and write the page again; the new version.
+    pub fn compare(&self, changes: Option<ComparedSides>) -> Result<u64> {
+        let mut s = self.lock();
+        s.changes = changes;
+        self.written(&s)
+    }
+}
+
+fn served_project(config: &crate::Config) -> Result<std::sync::Arc<ServedProject>, ApiError> {
+    config.project.clone().ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "this server serves no project".into(),
+        )
+    })
+}
+
+/***
+ * `GET /api/changes`: what the served page compares, whether a comparison is being written, and why the page has no changes section when a side could not be read (docs/EDITOR.md §4).
+ ***/
+pub(crate) async fn changes(
+    State(config): State<crate::Config>,
+) -> Result<Json<ServeChanges>, ApiError> {
+    Ok(Json(served_project(&config)?.changes_now()))
+}
+
+/***
+ * `POST /api/changes`: compare `old` with `new` (the working tree without it), from where new left old (docs/EDITOR.md §2, §4). Both names are checked at once: 400 for one git does not know, 409 without git history or while a comparison runs; else 202, and the page is written again in the background, so its version grows and it reloads.
+ *
+ * @calls docair-server.project.served-project.compare "writes the page with its changes section"
+ ***/
+pub(crate) async fn compare(
+    State(config): State<crate::Config>,
+    Json(req): Json<ComparedSides>,
+) -> Result<Response, ApiError> {
+    let shared = served_project(&config)?;
+    let root = shared.lock().root.clone();
+    if crate::commits::git(&root, &["rev-parse", "--show-toplevel"]).is_err() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no commits to compare: this project has no git history".into(),
+        ));
+    }
+    for name in std::iter::once(&req.old).chain(req.new.as_ref()) {
+        let known = !name.is_empty()
+            && !name.starts_with('-')
+            && crate::commits::git(
+                &root,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{name}^{{commit}}"),
+                ],
+            )
+            .is_ok();
+        if !known {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("git knows no commit `{name}`"),
+            ));
+        }
+    }
+    if shared.comparing.swap(true, Ordering::SeqCst) {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "a comparison is being written; ask again when GET /api/changes says it is done".into(),
+        ));
+    }
+    let running = shared.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = running.compare(Some(req)) {
+            running
+                .compared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .error = Some(format!("{e:#}"));
+        }
+        running.comparing.store(false, Ordering::SeqCst);
+    });
+    let mut now = shared.changes_now();
+    now.comparing = true;
+    Ok((StatusCode::ACCEPTED, Json(now)).into_response())
+}
+
+/***
+ * `DELETE /api/changes`: the page without its changes section, written again; 409 while a comparison runs.
+ *
+ * @calls docair-server.project.served-project.compare "writes the page without a changes section"
+ ***/
+pub(crate) async fn stop_comparing(
+    State(config): State<crate::Config>,
+) -> Result<Json<ServeChanges>, ApiError> {
+    let shared = served_project(&config)?;
+    if shared.comparing.load(Ordering::SeqCst) {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "a comparison is being written; ask again when GET /api/changes says it is done".into(),
+        ));
+    }
+    let dropped = shared.clone();
+    tokio::task::spawn_blocking(move || dropped.compare(None))
+        .await?
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
+    Ok(Json(shared.changes_now()))
+}
+
 // ── Uploads kept as projects ──
 
 /// At most this many uploads are kept; the one used longest ago goes first.
@@ -1394,6 +1580,49 @@ mod tests {
         std::fs::write(
             dir.path().join("README.md"),
             "# tiny\n\n```docair\nThe app.\n\n@id      app\n@kind    module\n@part-of tiny\n```\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// git in a test's project folder, as a test user.
+    fn git_in(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=docair test",
+                "-c",
+                "user.email=test@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// The tiny project in git: commit `main~1` holds the app, `main` adds the orders, and the
+    /// working tree adds the notes, not committed.
+    fn tiny_history() -> tempfile::TempDir {
+        let dir = tiny();
+        git_in(dir.path(), &["init", "-q", "-b", "main"]);
+        git_in(dir.path(), &["add", "."]);
+        git_in(dir.path(), &["commit", "-q", "-m", "the app"]);
+        std::fs::write(
+            dir.path().join("ORDERS.md"),
+            "# orders\n\n```docair\nThe orders.\n\n@id      orders\n@kind    module\n@part-of tiny\n```\n",
+        )
+        .unwrap();
+        git_in(dir.path(), &["add", "."]);
+        git_in(dir.path(), &["commit", "-q", "-m", "the orders"]);
+        std::fs::write(
+            dir.path().join("NOTES.md"),
+            "# notes\n\n```docair\nThe notes.\n\n@id      notes\n@kind    module\n@part-of tiny\n```\n",
         )
         .unwrap();
         dir
@@ -1687,13 +1916,148 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
     }
 
+    /// docs/EDITOR.md §3, docair-p2c.2: a commit as the new side: the page is that commit's
+    /// documentation with its changes section, while serve's own graph stays the working tree's.
+    #[test]
+    fn a_page_compares_two_commits() {
+        let dir = tiny_history();
+        let project = ServedProject::open_comparing(
+            dir.path(),
+            None,
+            true,
+            None,
+            Some(ComparedSides {
+                old: "main~1".into(),
+                new: Some("main".into()),
+            }),
+        )
+        .unwrap();
+        let out = dir.path().join(".docair");
+        let html = std::fs::read_to_string(out.join("docair.html")).unwrap();
+        assert!(html.contains(r#"id="btn-changes""#), "a changes section");
+        let changes: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out.join("changes.json")).unwrap())
+                .unwrap();
+        assert_eq!(changes["b"], "main");
+        assert_eq!(changes["working_tree"], false);
+        let parts = changes["parts"].as_array().unwrap();
+        assert!(parts.iter().any(|p| p == "orders"), "{parts:?}");
+        assert!(
+            !parts.iter().any(|p| p == "notes"),
+            "the notes are only in the working tree"
+        );
+        assert!(
+            project.lock().graph.nodes.iter().any(|n| n.id == "notes"),
+            "the chat and edits stay on the working tree"
+        );
+    }
+
+    /// docs/EDITOR.md §4, docair-p2c.3: the pair changes while serve runs: set in the background,
+    /// read, dropped; a name git does not know is 400, a POST while a comparison runs 409.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_page_compares_the_pair_it_is_given() {
+        use axum::body::Body;
+        use axum::http::Request;
+        let dir = tiny_history();
+        let (project, router) = served(dir.path());
+        let send = |method: &str, body: &str| {
+            Request::builder()
+                .method(method)
+                .uri("/api/changes")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let now = |router: axum::Router| async move {
+            let (status, body) = call(
+                router,
+                Request::get("/api/changes").body(Body::empty()).unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()
+        };
+        let done = |router: axum::Router| async move {
+            for _ in 0..600 {
+                let n = now(router.clone()).await;
+                if n["comparing"] == false {
+                    return n;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            panic!("the comparison never ended");
+        };
+        let page = || std::fs::read_to_string(dir.path().join(".docair/docair.html")).unwrap();
+        let n = now(router.clone()).await;
+        assert!(n["old"].is_null() && n["comparing"] == false, "{n}");
+
+        for bad in [r#"{"old":"nope"}"#, r#"{"old":"main","new":"--output=x"}"#] {
+            let (status, body) = call(router.clone(), send("POST", bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+            assert!(body.contains("git knows no commit"), "{body}");
+        }
+        project.comparing.store(true, Ordering::SeqCst);
+        let (status, _) = call(router.clone(), send("POST", r#"{"old":"main~1"}"#)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "one comparison at a time");
+        let (status, _) = call(router.clone(), send("DELETE", "")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        project.comparing.store(false, Ordering::SeqCst);
+
+        let before = project.version.load(Ordering::SeqCst);
+        let (status, body) = call(
+            router.clone(),
+            send("POST", r#"{"old":"main~1","new":"main"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert!(body.contains(r#""comparing":true"#), "{body}");
+        let n = done(router.clone()).await;
+        assert_eq!(
+            (n["old"].as_str(), n["new"].as_str()),
+            (Some("main~1"), Some("main"))
+        );
+        assert!(n["error"].is_null(), "{n}");
+        assert!(
+            n["version"].as_u64().unwrap() > before,
+            "written again: {n}"
+        );
+        assert!(page().contains(r#"id="btn-changes""#));
+
+        // The working tree as the new side.
+        let (status, _) = call(router.clone(), send("POST", r#"{"old":"main~1"}"#)).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let n = done(router.clone()).await;
+        assert!(n["new"].is_null() && n["old"] == "main~1", "{n}");
+        let changes = std::fs::read_to_string(dir.path().join(".docair/changes.json")).unwrap();
+        assert!(
+            changes.contains(r#""working_tree": true"#) && changes.contains(r#""notes""#),
+            "{changes}"
+        );
+
+        let (status, body) = call(router.clone(), send("DELETE", "")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""old":null"#), "{body}");
+        assert!(
+            !page().contains(r#"id="btn-changes""#),
+            "the changes section is gone"
+        );
+    }
+
     /// `--changes` on a folder without git history: the page is written without a changes section, and says why.
     #[test]
     fn a_page_without_commits_has_no_changes_section() {
         let dir = tiny();
-        let project =
-            ServedProject::open_comparing(dir.path(), None, true, None, Some("HEAD~1".into()))
-                .unwrap();
+        let project = ServedProject::open_comparing(
+            dir.path(),
+            None,
+            true,
+            None,
+            Some(ComparedSides {
+                old: "HEAD~1".into(),
+                new: None,
+            }),
+        )
+        .unwrap();
         let html = std::fs::read_to_string(dir.path().join(".docair").join("docair.html")).unwrap();
         assert!(html.contains("docair-packed"), "the page is written");
         assert!(
@@ -1786,7 +2150,10 @@ mod tests {
                 None,
                 true,
                 Some(ai.clone()),
-                Some("HEAD".into()),
+                Some(ComparedSides {
+                    old: "HEAD".into(),
+                    new: None,
+                }),
             )
             .unwrap(),
         );

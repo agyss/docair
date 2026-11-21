@@ -98,6 +98,20 @@ code.
 | Getting images into kind | `docker save` piped into `ctr images import` in the node | no registry needed; this is what `kind load` does | a local registry |
 | Checks without Docker | `helm lint`, `kubeconform` 0.8, `terraform validate` | validate charts and Terraform where no cluster can run | — |
 
+## The VS Code extension (`editors/vscode/`)
+
+No runtime dependencies: the extension uses Node's own `child_process`, `fetch`
+and `crypto`, and VS Code's API (docs/EDITOR.md §6, decision docair-p2c.12).
+Dev dependencies, pinned exactly, each older than two weeks on 2026-11-21:
+
+| Concern | Choice | Why | Not chosen |
+|---------|--------|-----|------------|
+| Compiler | `typescript` `=6.0.3` (2026-04-16) | the 6.0 line docair-web uses; `tsc` alone, no bundler, for six files | 7.0 (the native compiler, a new line), esbuild (one more tool) |
+| VS Code's API types | `@types/vscode` `=1.140.0` (2026-10-01), with `engines.vscode` `^1.140.0` | the oldest VS Code the extension promises to run on; this devcontainer's is 1.143.1 | a newer one, which would raise the minimum |
+| Node's types | `@types/node` `=22.20.5` (2026-10-01) | Node 22's API, which VS Code's extension host offers at least | 24 or 26 (APIs the host may not have) |
+| Packaging | `@vscode/vsce` `=4.1.0` (2026-10-28) | VS Code's own packager, for the local `.vsix` (decision docair-p2c.18); 4.1.1 was younger than two weeks. `npm audit` reports two moderate findings in `minimatch` under it, a denial of service by crafted globs; it only reads the extension's own files | — |
+| Tests | Node's `node:test` and `node:assert` | built in; the extension's logic needs no VS Code (decision docair-p2c.17) | `@vscode/test-electron` (downloads VS Code, needs a display), mocha |
+
 ## Versions and supply chain
 
 * The JS libraries are vendored in `crates/docair-viewer/vendor/` with their

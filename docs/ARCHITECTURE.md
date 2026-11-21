@@ -79,6 +79,7 @@ Around the crates:
 | Directory | Purpose |
 |-----------|---------|
 | `web/` | docair-web, the Angular frontend: upload a folder, show the generated page |
+| `editors/vscode/` | docair-vscode, the VS Code extension: starts `docair serve`, frames the page beside the editor, picks two versions to compare, opens a changed part in the diff editor ([EDITOR.md](EDITOR.md)) |
 | `docker/` | the images: docair-server (distroless) and docair-web (nginx) |
 | `deploy/helm/docair/` | the chart: two Deployments, two Services, Ingress, ConfigMap, NetworkPolicy |
 | `infra/terraform/` | a kind cluster, the images, Traefik and the chart, from one `terraform apply` |

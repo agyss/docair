@@ -124,7 +124,8 @@ pub struct CommitPair {
     pub a: Graph,
     pub b: Graph,
     pub changes: docair_core::changes::Changes,
-    /// `<sha of A>..<sha of B or "work">`, short, for the store's file name.
+    /// `<sha of A>..<sha of B or "work">`, short, for the store's file name; A is the commit compared
+    /// from, the merge base when the comparison starts there.
     pub key: String,
     /// What was meant (docs/EXPLAIN.md §9.2): the commit messages, the changed docs, the doc blocks whose words changed.
     pub intent: docair_core::review::Intent,
@@ -158,6 +159,8 @@ fn code_links(
             Some(sha) => at(sha),
             None => Some(format!("vscode://file{}/{{path}}:{{line}}", root.display())),
         },
+        rev_a: Some(sha_a.to_string()),
+        rev_b: sha_b.map(str::to_string),
     }
 }
 
@@ -203,7 +206,18 @@ fn web_of(remote: &str) -> Option<(String, &'static str)> {
 }
 
 /***
- * Compare two commits, or a commit and the working tree: both graphs (kept in the cache), the graph diff, the changed lines and the flows through the changed parts.
+ * Where `new` split from `old`, when a comparison should start there and not at `old` (docs/EDITOR.md
+ * §2, docair-p2c.1): their merge base, unless that is `old` itself (old is an ancestor of new already)
+ * or `new` (new is an ancestor of old: comparing backwards keeps the tips); none either when the two
+ * share no commit.
+ ***/
+pub fn split_point(top: &Path, old: &str, new: &str) -> Option<String> {
+    let base = git(top, &["merge-base", old, new]).ok()?.trim().to_string();
+    (!base.is_empty() && base != old && base != new).then_some(base)
+}
+
+/***
+ * Compare two commits, or a commit and the working tree, from where the new side left the old one (`split_point`): both graphs (kept in the cache), the graph diff, the changed lines and the flows through the changed parts.
  *
  * @calls docair-server.commits.graph_at "reads each commit's graph"
  * @calls docair-core.diff.diff "compares the graphs"
@@ -243,7 +257,17 @@ fn compare_inner(
         .trim()
         .to_string())
     };
-    let sha_a = sha(a)?;
+    // The comparison starts where B left A (docs/EDITOR.md §2, docair-p2c.1): a branch shows what
+    // it adds, not A's newer work as if B had removed it.
+    let new_side = match b {
+        Some(b) => sha(b)?,
+        None => sha("HEAD")?,
+    };
+    let base = split_point(&top, &sha(a)?, &new_side);
+    let sha_a = match &base {
+        Some(base) => base.clone(),
+        None => sha(a)?,
+    };
     let at_a = graph_at(&top, &prefix, &sha_a, lenient)?;
     let (at_b, name_b, range) = match b {
         Some(b) => {
@@ -321,6 +345,7 @@ fn compare_inner(
     let mut changes =
         docair_core::changes::changes(&at_a.graph, &at_b.graph, graph, &lines, (a, &name_b));
     changes.working_tree = b.is_none();
+    changes.base = base;
     let short = |s: &str| s.chars().take(12).collect::<String>();
     let key = format!(
         "{}..{}",
@@ -694,5 +719,80 @@ mod tests {
         // The working tree as B: the commits up to HEAD, and what is not committed said.
         let work = compare(dir.path(), "HEAD~1", None, false).unwrap();
         assert!(work.intent.uncommitted && work.intent.commits.len() == 1);
+    }
+    /// docs/EDITOR.md §2, docair-p2c.1: a branch is compared from where it left the other side, so
+    /// main's newer work does not show as removed; an ancestor, a backward comparison and unrelated
+    /// histories keep the tips.
+    #[test]
+    fn a_branch_is_compared_from_where_it_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = |rel: &str, text: &str| {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let part =
+            |id: &str| format!("/***\n * {id}.\n *\n * @id shop.{id}\n ***/\npub fn {id}() {{}}\n");
+        w("docair.toml", "system = \"shop\"\n");
+        w("src/lib.rs", &part("buy"));
+        run(dir.path(), &["init", "-q", "-b", "main"]);
+        run(dir.path(), &["add", "."]);
+        run(dir.path(), &["commit", "-q", "-m", "buy"]);
+        let split = git(dir.path(), &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        run(dir.path(), &["checkout", "-q", "-b", "feature"]);
+        w("src/audit.rs", &part("audit"));
+        run(dir.path(), &["add", "."]);
+        run(dir.path(), &["commit", "-q", "-m", "audit"]);
+        run(dir.path(), &["checkout", "-q", "main"]);
+        w("src/refund.rs", &part("refund"));
+        run(dir.path(), &["add", "."]);
+        run(dir.path(), &["commit", "-q", "-m", "refund"]);
+
+        let pair = compare(dir.path(), "main", Some("feature"), false).unwrap();
+        assert_eq!(pair.changes.base.as_deref(), Some(split.as_str()));
+        assert!(
+            pair.changes.parts.iter().any(|p| p == "shop.audit"),
+            "{:?}",
+            pair.changes.parts
+        );
+        assert!(
+            !pair.changes.parts.iter().any(|p| p == "shop.refund"),
+            "main's newer work is no change of the branch: {:?}",
+            pair.changes.parts
+        );
+        assert!(pair.key.starts_with(&split[..12]), "{}", pair.key);
+        let summary = docair_core::changes::markdown(&pair.changes);
+        assert!(
+            summary.contains(&format!(
+                "Compared from where `feature` left `main`: `{}`.",
+                &split[..12]
+            )),
+            "{summary}"
+        );
+        // The working tree on the branch: from where HEAD left main.
+        run(dir.path(), &["checkout", "-q", "feature"]);
+        let work = compare(dir.path(), "main", None, false).unwrap();
+        assert_eq!(work.changes.base.as_deref(), Some(split.as_str()));
+        assert!(
+            docair_core::changes::markdown(&work.changes)
+                .contains("where the working tree left `main`")
+        );
+        // An ancestor, and backwards: the tips.
+        let ahead = compare(dir.path(), "feature~1", Some("feature"), false).unwrap();
+        assert_eq!(ahead.changes.base, None);
+        let back = compare(dir.path(), "feature", Some("feature~1"), false).unwrap();
+        assert_eq!(back.changes.base, None);
+        assert!(
+            back.changes.parts.iter().any(|p| p == "shop.audit"),
+            "gone going back"
+        );
+        // Two histories that share no commit: the tips.
+        run(dir.path(), &["checkout", "-q", "--orphan", "other"]);
+        run(dir.path(), &["commit", "-q", "-m", "other"]);
+        let apart = compare(dir.path(), "main", Some("other"), false).unwrap();
+        assert_eq!(apart.changes.base, None);
     }
 }

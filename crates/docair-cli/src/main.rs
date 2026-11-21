@@ -40,6 +40,9 @@ enum Command {
         /// Add a changes section: what the working tree changes since this commit (docs/CHANGES.md).
         #[arg(long, value_name = "A")]
         changes: Option<String>,
+        /// With --changes: compare with this commit instead of the working tree; the page is its documentation (docs/EDITOR.md §3).
+        #[arg(long, value_name = "B", requires = "changes")]
+        to: Option<String>,
     },
     /// What two commits change in the system's flows (docs/CHANGES.md); without B, the working tree is B.
     Diff {
@@ -246,6 +249,9 @@ enum Command {
         /// Add a changes section: what the working tree changes since this commit, written again with each change.
         #[arg(long, value_name = "A")]
         changes: Option<String>,
+        /// With --changes: compare with this commit instead of the working tree; the page is its documentation (docs/EDITOR.md §3).
+        #[arg(long, value_name = "B", requires = "changes")]
+        to: Option<String>,
     },
     /// Show the AI settings and where the key comes from.
     Ai {
@@ -306,7 +312,8 @@ fn main() -> ExitCode {
             out,
             lenient,
             changes,
-        } => cmd_scan(&root, out, lenient, changes.as_deref()),
+            to,
+        } => cmd_scan(&root, out, lenient, changes.as_deref(), to.as_deref()),
         Command::Tidy {
             root,
             out,
@@ -400,7 +407,15 @@ fn main() -> ExitCode {
             bind,
             app,
             changes,
-        } => serve::cmd_serve(&root, out, lenient, &bind, app, changes),
+            to,
+        } => serve::cmd_serve(
+            &root,
+            out,
+            lenient,
+            &bind,
+            app,
+            changes.map(|old| docair_server::project::ComparedSides { old, new: to }),
+        ),
         Command::Ai { root, check } => ask::cmd_ai(&root, check),
         Command::Adapters => Ok(cmd_adapters()),
     };
@@ -420,7 +435,7 @@ fn main() -> ExitCode {
  * @calls docair-core.scan "builds the graph of the project"
  * @calls docair-core.emit.write_json "saves the graph for other tools"
  * @calls docair-viewer.write_html "renders the viewer page"
- * @calls docair-server.commits.compare "with --changes: compares the working tree with a commit"
+ * @calls docair-server.commits.compare "with --changes: compares a commit with the working tree, or with --to's commit"
  * @calls docair-server.commits.changes_page "with --changes: the page with its changes section"
  * @calls docair-cli.print_diagnostics "reports each diagnostic with its location"
  ***/
@@ -429,6 +444,7 @@ fn cmd_scan(
     out: Option<PathBuf>,
     lenient: bool,
     changes: Option<&str>,
+    to: Option<&str>,
 ) -> Result<ExitCode> {
     let out = out.unwrap_or_else(|| root.join(".docair"));
     let json = out.join("docair.graph.json");
@@ -448,9 +464,10 @@ fn cmd_scan(
             graph
         }
         Some(a) => {
-            // The working tree compared with commit A: the page gets a changes section, with the
-            // findings `docair explain` stored for this pair, when there are any.
-            let pair = docair_server::commits::compare(root, a, None, lenient)?;
+            // Commit A compared with the working tree, or with commit B (`--to`, docs/EDITOR.md §3):
+            // the page is B's, with a changes section and the findings `docair explain` stored for
+            // this pair, when there are any.
+            let pair = docair_server::commits::compare(root, a, to, lenient)?;
             let page = docair_server::commits::changes_page(&pair);
             std::fs::create_dir_all(&out)?;
             docair_core::emit::write_json(&pair.b, &json)?;
@@ -460,8 +477,9 @@ fn cmd_scan(
                 serde_json::to_string_pretty(&pair.changes)? + "\n",
             )?;
             println!(
-                "docair: {} changed flows since {a} in the page's changes section",
-                pair.changes.flows.len()
+                "docair: {} changed flows from {a} to {} in the page's changes section",
+                pair.changes.flows.len(),
+                to.unwrap_or("the working tree")
             );
             pair.b
         }

@@ -180,6 +180,8 @@ function wirePopups() {
     if (t && !t.closest('#term-pop')) open(t);
   });
   document.addEventListener('click', (ev) => {
+    const at = document.body.dataset.editor && ev.target.closest?.('[data-open]'); // In the editor, a place in the code opens there (docs/EDITOR.md §5).
+    if (at) return ev.preventDefault(), window.parent.postMessage({ type: 'docair:open', ...JSON.parse(at.dataset.open) }, '*');
     const a = ev.target.closest?.('a[href]');
     if (a) {
       pop.hidden = true;
@@ -1041,6 +1043,7 @@ unpack(IX.panels)
   })
   .then(() => {
     document.body.dataset.ready = 'true';
+    if (new URLSearchParams(location.search).has('editor')) document.body.dataset.editor = 'true';
     // The page around this one (the web app) stops saying the page is on its way.
     if (window.parent !== window) window.parent.postMessage({ type: 'docair:ready' }, '*');
   });

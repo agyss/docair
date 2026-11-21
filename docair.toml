@@ -6,8 +6,10 @@
 #***
 system = "docair"
 # e2e/fixtures is a sample project the tests document, not part of docair; the
-# rule fixtures are code the adapters' rules are tested on (docs/ADAPTERS.md §9.1).
-exclude = ["crates/docair-viewer/vendor/**", "e2e/fixtures/**", "e2e/.out/**", "crates/*/rules/*.fixture.*"]
+# rule fixtures are code the adapters' rules are tested on (docs/ADAPTERS.md §9.1);
+# editors/vscode/out is the extension compiled from its src; its unit tests are
+# left out too, as their fakes of VS Code and docair serve are not part of docair.
+exclude = ["crates/docair-viewer/vendor/**", "e2e/fixtures/**", "e2e/.out/**", "crates/*/rules/*.fixture.*", "editors/vscode/out/**", "editors/vscode/src/test/**"]
 
 # The e2e results of the last run (cd e2e && npm test) show on the test nodes (SPEC §12).
 [tests]

@@ -633,6 +633,7 @@ fn a_changed_flow_shows_before_and_after() {
         a: "0123456789abcdef0123456789abcdef01234567".to_string(),
         b: "work".to_string(),
         working_tree: false,
+        base: None,
         graph: GraphDiff {
             moved: vec![MoveMatch {
                 from: "orders.make".to_string(),
@@ -723,6 +724,130 @@ fn a_changed_flow_shows_before_and_after() {
     );
 }
 
+/// The first `data-open` in some HTML, as its JSON (docs/EDITOR.md §5).
+fn data_open(html: &str) -> Option<Value> {
+    let at = html.find(r#"data-open=""#)? + r#"data-open=""#.len();
+    let raw = &html[at..at + html[at..].find('"')?];
+    serde_json::from_str(&raw.replace("&quot;", "\"").replace("&amp;", "&")).ok()
+}
+
+/// docs/EDITOR.md §5, docair-p2c.4: a part's source in its details opens in the editor at the version
+/// the page shows: the working tree's page at no commit, a page of commit B at B.
+#[test]
+fn a_parts_source_opens_at_the_version_the_page_shows() {
+    let (g, page) = page_of("shop");
+    let source = |page: &str| {
+        let ix = script(page, "docair-index");
+        let packed = script(page, "docair-packed");
+        let panels: Value = serde_json::from_str(&unpack(
+            packed[ix["panels"].as_u64().unwrap() as usize]
+                .as_str()
+                .unwrap(),
+        ))
+        .unwrap();
+        let details = panels["details"]["orders.create"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        data_open(&details).expect("its source carries its place")
+    };
+    let src = g
+        .nodes
+        .iter()
+        .find(|n| n.id == "orders.create")
+        .and_then(|n| n.source.clone())
+        .unwrap();
+    assert_eq!(
+        source(&page),
+        serde_json::json!({"old": null, "new": {"rev": null, "path": src.file, "line": src.line}})
+    );
+    let changes = docair_core::changes::Changes {
+        schema: docair_core::changes::SCHEMA.to_string(),
+        a: "main".to_string(),
+        b: "feature".to_string(),
+        working_tree: false,
+        base: None,
+        graph: docair_core::diff::GraphDiff::default(),
+        parts: vec![],
+        flows: vec![],
+    };
+    let links = docair_viewer::doc_page::CodeLinks {
+        rev_a: Some("a".repeat(40)),
+        rev_b: Some("b".repeat(40)),
+        ..Default::default()
+    };
+    let changed = docair_viewer::doc_page::Changed {
+        before: &g,
+        changes: &changes,
+        findings: None,
+        links: &links,
+    };
+    let at_b = docair_viewer::doc_page::render_page_with(&g, None, Some(&changed));
+    assert_eq!(source(&at_b)["new"]["rev"], "b".repeat(40));
+    let script = include_str!("../assets/page.js");
+    assert!(
+        script.contains("window.parent.postMessage({ type: 'docair:open', ...JSON.parse(at.dataset.open) }, '*')")
+            && script.contains("has('editor')) document.body.dataset.editor"),
+        "with ?editor, the page posts the place to the frame around it"
+    );
+}
+
+/// The changes' panel, with no review and no flow changed.
+fn changes_panel(
+    changes: &docair_core::changes::Changes,
+    links: &docair_viewer::doc_page::CodeLinks,
+) -> String {
+    let after = graph("shop");
+    let changed = docair_viewer::doc_page::Changed {
+        before: &after,
+        changes,
+        findings: None,
+        links,
+    };
+    let page = docair_viewer::doc_page::render_page_with(&after, None, Some(&changed));
+    let ix = script(&page, "docair-index");
+    let packed = script(&page, "docair-packed");
+    let panels: Value = serde_json::from_str(&unpack(
+        packed[ix["panels"].as_u64().unwrap() as usize]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    panels["changes"].as_str().unwrap().to_string()
+}
+
+/// docs/EDITOR.md §2, docair-p2c.1: a comparison that starts where B left A says so, with the commit.
+#[test]
+fn a_comparison_from_where_a_branch_split_says_so() {
+    let mut changes = docair_core::changes::Changes {
+        schema: docair_core::changes::SCHEMA.to_string(),
+        a: "main".to_string(),
+        b: "feature".to_string(),
+        working_tree: false,
+        base: Some("3f2a9c1d0e4b5a6978877665544332211aabbccd".to_string()),
+        graph: docair_core::diff::GraphDiff::default(),
+        parts: vec![],
+        flows: vec![],
+    };
+    let links = docair_viewer::doc_page::CodeLinks::default();
+    let list = changes_panel(&changes, &links);
+    assert!(
+        list.contains(r#"<p class="muted" data-test="split-from">Compared from where <code>feature</code> left <code>main</code>: <code>3f2a9c1d0e4b</code>.</p>"#),
+        "{list}"
+    );
+    changes.working_tree = true;
+    changes.b = "the working tree".to_string();
+    assert!(
+        changes_panel(&changes, &links)
+            .contains("Compared from where the working tree left <code>main</code>")
+    );
+    changes.base = None;
+    assert!(
+        !changes_panel(&changes, &links).contains("split-from"),
+        "from A itself: nothing to say"
+    );
+}
+
 /// The review in the page (docs/EXPLAIN.md §9.5, docair-8l6.22): the AI's changes lead the changes'
 /// list, each opens at #review/<n> on its own picture, walked through its pieces with the model's
 /// words; its details lead with how, why (with its sources), what to check and where it disagrees,
@@ -749,6 +874,7 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
         a: "0123456789abcdef0123456789abcdef01234567".to_string(),
         b: "fedcba9876543210fedcba9876543210fedcba98".to_string(),
         working_tree: false,
+        base: None,
         graph: GraphDiff {
             changed: vec![ChangedItem {
                 id: "orders.create".to_string(),
@@ -788,6 +914,8 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
     let links = docair_viewer::doc_page::CodeLinks {
         at_a: Some("https://example.test/A/{path}#L{line}".into()),
         at_b: Some("https://example.test/B/{path}#L{line}".into()),
+        rev_a: Some("a".repeat(40)),
+        rev_b: None,
     };
     let render = |findings: Option<&Value>| {
         let changed = docair_viewer::doc_page::Changed {
@@ -905,6 +1033,17 @@ fn a_review_shows_its_changes_on_their_own_pictures() {
             && card.contains(r#"<a class="link" href="https://example.test/A/api/src/lib.rs#L1" target="_blank" rel="noopener" data-test="code-link" title="api/src/lib.rs:1">before</a>"#)
             && card.contains(r#"<a class="link" href="https://example.test/B/api/src/lib.rs#L1" target="_blank" rel="noopener" data-test="code-link" title="api/src/lib.rs:1">after, api/src/lib.rs:1</a>"#)
             && !card.contains("code-diff"),
+        "{card}"
+    );
+    // docs/EDITOR.md §5, docair-p2c.4: in the editor the part opens at both versions, A at its commit,
+    // B in the working tree.
+    let open = data_open(card).expect("the part carries both places");
+    assert_eq!(
+        open,
+        serde_json::json!({
+            "old": {"rev": "a".repeat(40), "path": "api/src/lib.rs", "line": 1},
+            "new": {"rev": null, "path": "api/src/lib.rs", "line": 1},
+        }),
         "{card}"
     );
     assert!(

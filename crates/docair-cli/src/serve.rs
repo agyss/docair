@@ -43,7 +43,7 @@ pub fn cmd_serve(
     lenient: bool,
     bind: &str,
     app: Option<PathBuf>,
-    changes: Option<String>,
+    changes: Option<docair_server::project::ComparedSides>,
 ) -> Result<ExitCode> {
     let ai = crate::ask::ai_config(root)?;
     let project = Arc::new(ServedProject::open_comparing(

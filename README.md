@@ -17,6 +17,7 @@ browser ─► 127.0.0.1:8080 ─► kind node :30080 ─► Traefik ─► Ingr
 |------|------------|
 | [crates/](crates/) | the Rust workspace: the pipeline library, the CLI, the HTTP server |
 | [web/](web/) | docair-web, the Angular frontend: upload a folder, get its docair page |
+| [editors/vscode/](editors/vscode/) | the VS Code extension: the page beside the code, two versions from the git history compared, a changed part opened in the diff editor ([EDITOR](docs/EDITOR.md)) |
 | [docker/](docker/) | the two images: docair-server (distroless) and docair-web (nginx) |
 | [deploy/helm/docair/](deploy/helm/docair/) | the Helm chart: Deployments, Services, Ingress, ConfigMap, NetworkPolicy |
 | [infra/](infra/) | Terraform: the kind cluster, the images, Traefik and the chart |
