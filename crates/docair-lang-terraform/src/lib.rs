@@ -28,15 +28,29 @@ impl Adapter for TerraformAdapter {
     }
 
     fn languages(&self) -> &'static [LanguageSpec] {
-        &[LanguageSpec {
-            name: "terraform",
-            extensions: &["tf"],
-            family: Family::Hash,
-        }]
+        // Its templates and variable files too: `templatefile("values.yaml.tftpl", …)`, `dev.tfvars`
+        // (docair-4wk.46).
+        &[
+            LanguageSpec {
+                name: "terraform",
+                extensions: &["tf"],
+                family: Family::Hash,
+            },
+            LanguageSpec {
+                name: "tftpl",
+                extensions: &["tftpl"],
+                family: Family::Hash,
+            },
+            LanguageSpec {
+                name: "tfvars",
+                extensions: &["tfvars"],
+                family: Family::Hash,
+            },
+        ]
     }
 
     fn handles(&self, file: &SourceFile) -> bool {
-        file.lang.name == "terraform"
+        matches!(file.lang.name, "terraform" | "tftpl" | "tfvars")
     }
 
     /***

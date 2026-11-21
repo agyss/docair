@@ -188,6 +188,7 @@ mod tests {
             model: Some("m".into()),
             api_key_env: Some("DOCAIR_TEST_KEY_VAR".into()),
             max_tokens: None,
+            glossary_reasoning: None,
         };
         let env = Env::from_pairs(&[("DOCAIR_TEST_KEY_VAR", "secret")]);
         let cfg = AiConfig::resolve(Some(&settings), &env).unwrap();

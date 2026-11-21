@@ -331,15 +331,18 @@ TypeScript are, on one shared reading:
 | Crate | Kind | Reads | Reports |
 |-------|------|-------|---------|
 | `docair-infra` | library | every Terraform file, chart, manifest, Dockerfile and `Cargo.toml` once, into one index (`Index`): resources, objects, values, image builds | — |
-| `docair-lang-terraform` | infra | `.tf` | resources, the root modules, what they create (clusters, namespaces, releases), what they use |
-| `docair-lang-helm` | infra | a chart's YAML (`Chart.yaml`, `values.yaml`, `templates/`) | its objects with `.Values` filled in, a chart no Terraform installs as its own release |
+| `docair-lang-terraform` | infra | `.tf`, its templates `.tftpl` and variables `.tfvars` | resources, the root modules, what they create (clusters, namespaces, releases), what they use; a file of the project a resource reads (`templatefile(…)`, `file(…)`) as a part it reads, with the file's own doc block; a local module (`module "net" { source = "./modules/net" }`) as a part that calls the module's directory, which sits in its caller |
+| `docair-lang-helm` | infra | a chart's YAML (`Chart.yaml`, `values.yaml`, `templates/`) and its `.tpl` files | its objects with `.Values` filled in, a chart no Terraform installs as its own release; each named template (`define "app.labels"`) as a part the objects that `include` it call; a subchart's objects in its parent's release |
 | `docair-lang-k8s` | infra | other Kubernetes YAML | its objects: what an Ingress routes, a Service selects, a pod runs and sets |
 
 Each reports only its own files' symbols, keyed `terraform:n`, `helm:n`,
 `k8s:n`; lines across them go by node id, as before, so the graph is the same
 as with one adapter (the golden graphs do not move). Dockerfiles stay read
 by the shared index only: they make no part of their own, only the program a
-pod runs.
+pod runs. The files the tools pull in (docair-4wk.46, fixture `tools`) are
+read too, as the table says. Not yet: `kustomization.yaml`, manifests in
+JSON, a chart's `NOTES.txt`, the remote charts `Chart.lock` names, a module
+from a registry or git.
 
 ### 5.4 Who calls whom: one index format for every language
 

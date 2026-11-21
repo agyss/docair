@@ -42,6 +42,11 @@ function reply(messages) {
       checks,
     };
   }
+  // Which part a word written as code names (docair-8l6.90): its first part.
+  if ((messages[0]?.content || '').startsWith('You read software documentation. Each word below is written as code')) {
+    const words = JSON.parse(messages[1]?.content || '[]');
+    return { code: words.map((w) => ({ word: w.word, part: w.parts[0]?.id || '' })) };
+  }
   // The last request of a review (docs/EXPLAIN.md §9.2): nothing came back twice, no piece placed; the
   // pieces left make one change of their own (docair-8l6.63).
   if ((messages[0]?.content || '').startsWith('You finish a review')) {

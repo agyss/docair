@@ -14,6 +14,9 @@ use crate::ask::Reply;
 use crate::client::{Message, Usage};
 use crate::config::AiConfig;
 
+/// The short question about words written as code (docair-8l6.90).
+const CODE_PROMPT: &str = r#"You read software documentation. Each word below is written as code in the sentences "as code" (in backticks, with :: or ()). Say which of its "parts" those uses name: its id, or "" when they name none of them. Reply with exactly one JSON object: {"code": [{"word": "...", "part": "<id or empty>"}]}"#;
+
 /// The rules for the entries, the decisions and the checks.
 pub const GLOSSARY_PROMPT: &str = r#"You write the glossary of a software project's documentation. You get the texts of the docs (summaries and descriptions of the parts of the system, and the words on the lines between them) and the terms the glossary already explains.
 
@@ -28,7 +31,7 @@ For each term:
 
 The request may also list "Open words": words that name parts of the code, each with those parts' texts, and the glossary's entry when there is one. The code is the best source of what a word means. Decide each word once:
 - "term": false when it is an everyday word here that a reader knows (a verb such as "check", a plain noun such as "message"). Look at "used", the sentences that use it: when they use it in its everyday sense ("the following", "placed", "a change", "the project"), it is an everyday word here, even though a part has that name. true only when a reader should get it explained.
-- "from": the id of the part whose text says what the word means in those sentences; only one of the ids listed with the word; "" when none of them does. A part that merely shares the name is not it: a parser's tree node does not define "node" when the sentences mean a part on the chart.
+- "from": the id of the part whose text says what the word means in those sentences; one of the ids listed with the word, or of "named so in the code"; "" when none of them does. A part that merely shares the name is not it: a parser's tree node does not define "node" when the sentences mean a part on the chart.
 - "code": the id of the part the word names where it is written as code ("as code": in backticks such as `merged` or `change_steps::merged`, or called, merged()); one of "named so in the code", which may be a function; "" only when "as code" is empty or its uses mean none of them. Whenever an "as code" sentence names one of "named so in the code", set "code" to that id, also when "term" is false. Decide it apart from "term": a word can be everyday in prose ("edges are merged", term false) and still name a part where it is written as code. Judge each use on its own; when one is in doubt, decide it from the sentence around it.
 - "definition": only with "from", and only when the part's text is too terse for a newcomer: that text in 1 to 3 plain sentences, never changing its meaning; else "".
 - "agrees": only with "from" and a glossary entry: true when the entry means the same as the part's text; false when it does not, and then "definition" says it the way the code does.
@@ -259,16 +262,46 @@ pub fn names_word(code: &str, word: &str) -> bool {
     last.eq_ignore_ascii_case(word) || meanings::stem(&last.to_lowercase()) == meanings::stem(word)
 }
 
-/// Ask once, streamed and reasoning little, so a long input is not cut off by the time a whole
-/// answer may take (docair-8l6.88, as the review asks); a model that still thinks until its budget is
-/// gone gets the short version instead.
-fn ask(cfg: &AiConfig, full: &str, short: Option<&str>) -> Result<crate::client::Reply> {
+/// How much the model reasons before it explains, unless the user says (docair-8l6.89).
+pub const REASONING: &str = "low";
+
+/// The reasoning a user asked for: `low`, `medium` or `high`, else the default; another word is an error.
+pub fn reasoning_of(asked: Option<&str>) -> Result<&'static str> {
+    match asked.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(REASONING),
+        Some("low") => Ok("low"),
+        Some("medium") => Ok("medium"),
+        Some("high") => Ok("high"),
+        Some(other) => anyhow::bail!("reasoning `{other}` is none of low, medium, high"),
+    }
+}
+
+/// What happened while asking, said in the reply (docair-8l6.89).
+#[derive(Default)]
+struct HowItWent {
+    requests: usize,
+    short: usize,
+}
+
+/// Ask once, streamed, so a long input is not cut off by the time a whole answer may take
+/// (docair-8l6.88, as the review asks); a model that still thinks until its budget is gone gets the
+/// short version instead, and the reply says so.
+fn ask(
+    cfg: &AiConfig,
+    full: &str,
+    short: Option<&str>,
+    reasoning: &str,
+    how: &mut HowItWent,
+) -> Result<crate::client::Reply> {
     let asked = |text: &str| {
         let messages = [Message::system(GLOSSARY_PROMPT), Message::user(text)];
-        crate::client::chat_streamed(cfg, &messages, true, Some("low"), &|_| {})
+        crate::client::chat_streamed(cfg, &messages, true, Some(reasoning), &|_| {})
     };
+    how.requests += 1;
     match asked(full) {
         Err(e) if e.to_string().contains("max_tokens") && short.is_some() => {
+            how.requests += 1;
+            how.short += 1;
             asked(short.unwrap_or_default())
         }
         other => other,
@@ -282,7 +315,8 @@ fn ask(cfg: &AiConfig, full: &str, short: Option<&str>) -> Result<crate::client:
  * @calls   docair-ai.client.chat (texts + known terms + open words + entries to check) -> entries, decisions, checks "asks the model for the missing terms and what the open words mean"
  * @out     reply: Reply with the entries and one edit: new and rewritten entries, the decisions file
  ***/
-pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
+pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize, reasoning: &str) -> Result<Reply> {
+    let mut how = HowItWent::default();
     let mut texts = Vec::new();
     let mut corpus = String::new();
     for n in &graph.nodes {
@@ -405,13 +439,13 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
                 graph.system,
                 serde_json::to_string(&short).expect("texts serialize"),
             );
-            ask(cfg, &full, Some(&short))?
+            ask(cfg, &full, Some(&short), reasoning, &mut how)?
         } else {
             let full = format!(
                 "System `{}`. Explained already: {known_text}.\nAt most 0 new terms.{tail}",
                 graph.system
             );
-            ask(cfg, &full, None)?
+            ask(cfg, &full, None, reasoning, &mut how)?
         };
         usage += reply.usage;
         seconds += reply.seconds;
@@ -559,8 +593,10 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
             continue;
         }
         let from = given(&d.from);
+        // One of its parts, or any part of that name: a constant may say what a tag means (docair-8l6.90).
         if let Some(f) = &from
             && !o.parts.contains(f)
+            && !named_so(graph, &o.word).contains(f)
         {
             problems.push(format!(
                 "`{}`: `{f}` is not one of its parts; it stays open",
@@ -644,6 +680,71 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
         decisions.insert(key, dec);
         checked += 1;
     }
+    // A word the docs also write as code, settled without saying which part those uses name: one
+    // short question about those uses alone, since the model leaves that field out of the long
+    // answer (docair-8l6.90).
+    let unnamed_code: Vec<(String, Vec<String>, Vec<String>)> = open
+        .iter()
+        .filter(|o| {
+            decisions
+                .get(&o.word.to_lowercase())
+                .is_some_and(|d| d.code.is_none())
+        })
+        .filter_map(|o| {
+            let uses = as_code(graph, &o.word, &o.parts);
+            let parts = named_so(graph, &o.word);
+            (!uses.is_empty() && !parts.is_empty()).then(|| (o.word.clone(), uses, parts))
+        })
+        .collect();
+    if !unnamed_code.is_empty() {
+        let asked: Vec<Value> = unnamed_code
+            .iter()
+            .map(|(word, uses, parts)| {
+                json!({
+                    "word": word,
+                    "as code": uses,
+                    "parts": parts.iter().map(|id| part_json(graph, id)).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let messages = [
+            Message::system(CODE_PROMPT),
+            Message::user(serde_json::to_string(&asked).expect("words serialize")),
+        ];
+        how.requests += 1;
+        match crate::client::chat_streamed(cfg, &messages, true, Some(reasoning), &|_| {}) {
+            Ok(r) => {
+                usage += r.usage;
+                seconds += r.seconds;
+                let content = &r.content;
+                let json = content
+                    .find('{')
+                    .zip(content.rfind('}'))
+                    .map_or("{}", |(a, b)| &content[a..=b]);
+                let named: Vec<Value> = serde_json::from_str::<Value>(json)
+                    .ok()
+                    .and_then(|v| v.get("code").and_then(Value::as_array).cloned())
+                    .unwrap_or_default();
+                for n in named {
+                    let word = n["word"].as_str().unwrap_or("").trim();
+                    let part = n["part"].as_str().unwrap_or("").trim();
+                    let Some((w, _, parts)) =
+                        unnamed_code.iter().find(|(w, ..)| stem(w) == stem(word))
+                    else {
+                        continue;
+                    };
+                    if parts.iter().any(|p| p == part)
+                        && let Some(d) = decisions.get_mut(&w.to_lowercase())
+                    {
+                        d.code = Some(part.to_string());
+                    }
+                }
+            }
+            Err(e) => problems.push(format!(
+                "asking which parts the words written as code name failed: {e:#}"
+            )),
+        }
+    }
     if terms.is_empty() && settled == 0 && checked == 0 && !problems.is_empty() {
         bail!("the model proposed no term that the docs use, and settled no word");
     }
@@ -713,6 +814,27 @@ pub fn explain(cfg: &AiConfig, graph: &Graph, limit: usize) -> Result<Reply> {
     if left > 0 {
         answer.push_str(&format!(" {left} more are left for the next run."));
     }
+    // What happened, said plainly (docair-8l6.89).
+    let texts = if limit > 0 {
+        "the docs' texts went along to find new terms"
+    } else {
+        "no new terms were wanted (--limit 0), so only the open words and the entries to check went, not the docs' texts"
+    };
+    let mut went = format!(
+        " How it went: {} asked {} time{}, streamed, reasoning {reasoning}; {texts}; {:.0} s.",
+        cfg.model,
+        how.requests,
+        if how.requests == 1 { "" } else { "s" },
+        seconds
+    );
+    if how.short > 0 {
+        went.push_str(&format!(
+            " The model used up max_tokens before it answered {} time{}, and got the short version (the texts' summaries only) instead.",
+            how.short,
+            if how.short == 1 { "" } else { "s" }
+        ));
+    }
+    answer.push_str(&went);
     Ok(Reply {
         answer,
         walkthrough: None,
@@ -762,38 +884,50 @@ mod tests {
 
     /// A model that answers one request with `content`; the request's body comes back through the channel.
     fn stub(content: &str) -> (AiConfig, std::sync::mpsc::Receiver<String>) {
+        stub_all(&[content])
+    }
+
+    /// A model that answers one request after another with these contents.
+    fn stub_all(contents: &[&str]) -> (AiConfig, std::sync::mpsc::Receiver<String>) {
         use std::io::{BufRead, BufReader, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
-        let body = json!({
-            "choices": [{ "message": { "content": content }, "finish_reason": "stop" }],
-            "usage": { "prompt_tokens": 10, "completion_tokens": 5 },
-        })
-        .to_string();
+        let bodies: Vec<String> = contents
+            .iter()
+            .map(|content| {
+                json!({
+                    "choices": [{ "message": { "content": content }, "finish_reason": "stop" }],
+                    "usage": { "prompt_tokens": 10, "completion_tokens": 5 },
+                })
+                .to_string()
+            })
+            .collect();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let (mut sock, _) = listener.accept().expect("accept");
-            let mut reader = BufReader::new(sock.try_clone().expect("clone"));
-            let mut len = 0;
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).expect("header");
-                if line == "\r\n" || line.is_empty() {
-                    break;
+            for body in bodies {
+                let (mut sock, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(sock.try_clone().expect("clone"));
+                let mut len = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("header");
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
                 }
-                if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
-                    len = v.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut req = vec![0; len];
-            reader.read_exact(&mut req).expect("body");
-            tx.send(String::from_utf8_lossy(&req).to_string()).ok();
-            write!(
+                let mut req = vec![0; len];
+                reader.read_exact(&mut req).expect("body");
+                tx.send(String::from_utf8_lossy(&req).to_string()).ok();
+                write!(
                 sock,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             )
             .expect("reply");
+            }
         });
         let cfg = AiConfig {
             endpoint: format!("http://{addr}/v1"),
@@ -839,6 +973,46 @@ mod tests {
     }
 
     #[test]
+    fn a_word_written_as_code_gets_the_part_it_names_asked_apart() {
+        let mut g = graph();
+        // `audit()` in a text, and a function named audit beside the module.
+        g.nodes[3].summary = "Record a payment in the ledger, then `audit()` it.".into();
+        let mut f = g.nodes[3].clone();
+        f.id = "books.check.audit".into();
+        f.name = "audit".into();
+        f.summary = "Audit one payment.".into();
+        g.nodes.push(f);
+        let long = json!({ "terms": [], "decisions": [{ "word": "audit", "term": false, "why": "the verb" }], "checks": [] }).to_string();
+        let short =
+            json!({ "code": [{ "word": "audit", "part": "books.check.audit" }] }).to_string();
+        let (cfg, sent) = stub_all(&[&long, &short]);
+        let reply = explain(&cfg, &g, 0, "low").expect("explain");
+        let _first = sent.recv().expect("the long request");
+        let second = sent.recv().expect("the question about code");
+        assert!(
+            second.contains("written as code") && second.contains("audit()"),
+            "{second}"
+        );
+        let toml = reply
+            .changes
+            .iter()
+            .find_map(|c| c.summary.clone().filter(|s| s.contains("[audit]")))
+            .expect("the decisions file");
+        assert!(
+            toml.contains("term = false") && toml.contains(r#"code = "books.check.audit""#),
+            "{toml} {:?} {}",
+            reply.problems,
+            reply.answer
+        );
+        assert!(
+            reply.answer.contains("asked 2 times"),
+            "{} {:?}",
+            reply.answer,
+            reply.problems
+        );
+    }
+
+    #[test]
     fn explain_settles_open_words_and_checks_the_glossary_against_the_code() {
         let answer = json!({
             "terms": [],
@@ -852,8 +1026,17 @@ mod tests {
         .to_string();
         let (cfg, sent) = stub(&answer);
         let g = graph();
-        let reply = explain(&cfg, &g, 5).expect("explain");
+        let reply = explain(&cfg, &g, 5, "medium").expect("explain");
         let request = sent.recv().expect("request");
+        assert!(
+            request.contains(r#""reasoning_effort": "medium""#),
+            "the reasoning asked for goes along: {request}"
+        );
+        assert!(
+            reply.answer.contains("How it went:") && reply.answer.contains("reasoning medium"),
+            "the reply says how it went (docair-8l6.89): {}",
+            reply.answer
+        );
         assert!(request.contains("Open words:"), "{request}");
         assert!(request.contains("Entries to check:"), "{request}");
         assert!(request.contains("The book of every payment, kept on paper."));

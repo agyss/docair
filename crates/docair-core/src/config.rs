@@ -221,6 +221,9 @@ pub struct AiSettings {
     pub api_key_env: Option<String>,
     /// Upper bound for the answer, reasoning included.
     pub max_tokens: Option<u32>,
+    /// How much the model reasons before it explains the words (`docair glossary`, *Explain the
+    /// terms*): `low`, `medium` or `high`; default `low` (docair-8l6.89).
+    pub glossary_reasoning: Option<String>,
 }
 
 /// Where recorded walkthroughs live when `docair.toml` does not say.

@@ -1045,3 +1045,58 @@ fn uses_are_drawn_where_they_bring_something() {
         section.lines
     );
 }
+
+#[test]
+fn tools_graph_is_unchanged() {
+    golden("tools");
+}
+
+/// The files the infrastructure tools pull in (docair-4wk.46): a template Terraform reads, a local
+/// module, a Helm named template and a subchart each have their place and their lines.
+#[test]
+fn the_files_the_tools_pull_in_have_their_parts() {
+    let g = graph("tools");
+    let node = |id: &str| {
+        g.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| {
+            panic!(
+                "{id}: {:?}",
+                g.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+            )
+        })
+    };
+    let edge = |from: &str, to: &str| g.edges.iter().any(|e| e.from == from && e.to == to);
+    let template = node("tf.file.terraform-values-yaml-tftpl");
+    assert!(
+        template.summary.contains("how many replicas"),
+        "its doc block: {template:?}"
+    );
+    assert!(
+        edge("tf.file.terraform-values-yaml-tftpl", "tf.helm_release.app"),
+        "the release reads its template"
+    );
+    assert!(
+        edge("tf.module.net", "net"),
+        "the module block calls the module"
+    );
+    assert_eq!(
+        node("net").part_of.as_deref(),
+        Some("terraform"),
+        "a called module sits in its caller"
+    );
+    assert_eq!(node("k8s.tpl.app-labels").kind, "function");
+    assert!(
+        edge("k8s.deploy.app", "k8s.tpl-app-labels")
+            || edge("k8s.deploy.app", "k8s.tpl.app-labels"),
+        "the template includes its helper"
+    );
+    assert_eq!(
+        node("k8s.deploy.cache").part_of.as_deref(),
+        Some("k8s.release.app"),
+        "a subchart is its parent's release"
+    );
+    assert!(
+        g.nodes.iter().all(|n| n.id != "k8s.release.cache"),
+        "a subchart is no release of its own"
+    );
+    assert!(g.diagnostics.is_empty(), "{:?}", g.diagnostics);
+}

@@ -518,6 +518,17 @@ struct Index {
     builds: HashMap<String, String>,
     /// Rust crate name → the id of its `main`, when the crate has a `src/main.rs`.
     mains: HashMap<String, String>,
+    /// Files Terraform reads (`templatefile(…)`, `file(…)`) that are in the project: resource
+    /// address → the files' paths (docair-4wk.46).
+    tf_reads: BTreeMap<String, Vec<String>>,
+    /// Local modules: `module "x" { source = "./modules/x" }` → (the block, the module's directory).
+    modules: Vec<(TfBlock, String)>,
+    /// Helm's named templates: `{{- define "app.labels" -}}` → (file, line, name) (docair-4wk.46).
+    defines: Vec<(String, usize, String)>,
+    /// Where templates include them: `{{ include "app.labels" . }}` → (file, line, name).
+    includes: Vec<(String, usize, String)>,
+    /// A file's first line of its own after the comments at its top: where a doc block above it attaches.
+    first_line: HashMap<String, usize>,
 }
 
 /// A block inside a Terraform resource, with its own attributes.
@@ -671,9 +682,53 @@ impl Index {
             system: system.to_string(),
             ..Index::default()
         };
+        let known: BTreeSet<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        for f in files {
+            let first = f
+                .text
+                .lines()
+                .position(|l| {
+                    let t = l.trim();
+                    !t.is_empty()
+                        && !t.starts_with('#')
+                        && !t.starts_with("{{/*")
+                        && !t.starts_with('*')
+                })
+                .map_or(1, |i| i + 1);
+            a.first_line.insert(f.rel.clone(), first);
+        }
         for (f, bs) in files.iter().zip(blocks) {
+            if f.lang.name == "helm" || f.lang.name == "yaml" {
+                for (i, l) in f.text.lines().enumerate() {
+                    if let Some(name) = define_of(l).filter(|_| f.lang.name == "helm") {
+                        a.defines.push((f.rel.clone(), i + 1, name));
+                    }
+                    for name in included(l) {
+                        a.includes.push((f.rel.clone(), i + 1, name));
+                    }
+                }
+            }
             if f.lang.name == "terraform" {
                 for b in tf_blocks(&f.rel, &f.text) {
+                    // The project's files it reads: `templatefile("${path.module}/values.tftpl", …)`.
+                    let read: Vec<String> = b
+                        .body
+                        .iter()
+                        .flat_map(|l| read_paths(l, dir_of(&f.rel)))
+                        .filter(|p| known.contains(p.as_str()))
+                        .collect();
+                    if !read.is_empty() && b.labels.len() == 2 {
+                        a.tf_reads.entry(b.address()).or_default().extend(read);
+                    }
+                    if b.kind == "module"
+                        && let Some(source) = b.attr("source").filter(|s| s.starts_with('.'))
+                        && let Some(dir) = docair_core::glossary::normalize(
+                            &std::path::Path::new(dir_of(&f.rel))
+                                .join(source.trim_start_matches("${path.module}/")),
+                        )
+                    {
+                        a.modules.push((b.clone(), dir));
+                    }
                     match b.kind.as_str() {
                         "resource" | "data" if b.labels.len() == 2 => {
                             if let Some(auth) = block_at(bs, b.line) {
@@ -948,11 +1003,20 @@ impl Index {
                     .iter()
                     .any(|n| l.contains(&format!("local.{n}")))
         });
-        let file_read = reads.map(|l| {
+        // A file of the project it reads is a part of its own (docair-4wk.46); else the block names the store.
+        let in_project = self.tf_reads.get(&r.address());
+        let file_read = reads.filter(|_| in_project.is_none()).map(|l| {
             Relation::new(
                 Verb::Reads,
                 Target::Ref("file:".into()),
                 Evidence::new(line, format!("terraform: {}", l.trim())),
+            )
+        });
+        let template_reads = in_project.into_iter().flatten().map(|p| {
+            Relation::new(
+                Verb::Reads,
+                Target::Ref(tf_file_id(p)),
+                Evidence::new(line, format!("terraform: reads {p}")),
             )
         });
         let mut tags: Vec<Relation> = uses
@@ -968,6 +1032,7 @@ impl Index {
             })
             .collect();
         tags.extend(file_read);
+        tags.extend(template_reads);
         let states_creates = authored.is_some_and(|b| authored_creates(b).is_some());
         if !states_creates && let Some(target) = self.created_id(r) {
             let how = if ty == "helm_release" {
@@ -1220,6 +1285,25 @@ impl Index {
 
     fn object_relations(&self, o: &K8sObject) -> Vec<Relation> {
         let mut tags = Vec::new();
+        // The named templates it includes: `{{ include "app.labels" . }}` (docair-4wk.46).
+        for (file, line, name) in &self.includes {
+            if *file == o.file
+                && (o.line..=o.end).contains(line)
+                && self.defines.iter().any(|(_, _, d)| d == name)
+                && !tags
+                    .iter()
+                    .any(|t: &Relation| t.to == Target::Ref(tpl_id(name)))
+            {
+                tags.push(
+                    Relation::new(
+                        Verb::Calls,
+                        Target::Ref(tpl_id(name)),
+                        Evidence::new(*line, format!("helm: include \"{name}\"")),
+                    )
+                    .payload(Some("include".into())),
+                );
+            }
+        }
         let same_place = |other: &K8sObject| {
             dir_of(&other.file) == dir_of(&o.file) || chart_of(&other.file) == chart_of(&o.file)
         };
@@ -1468,6 +1552,88 @@ fn dir_prefix(rel: &str) -> String {
         .map_or(String::new(), |(d, _)| format!("{d}/"))
 }
 
+/// The paths a line of Terraform reads, relative to the project: `templatefile("${path.module}/v.tftpl", …)`
+/// in `infra/` → `infra/v.tftpl` (docair-4wk.46).
+fn read_paths(line: &str, dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for call in ["templatefile(", "file(", "filesha1(", "filebase64("] {
+        let mut rest = line;
+        while let Some(i) = rest.find(call) {
+            let before = rest[..i].chars().next_back();
+            rest = &rest[i + call.len()..];
+            if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            let Some(arg) = rest.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let Some(end) = arg.find('"') else {
+                continue;
+            };
+            let path = arg[..end]
+                .trim_start_matches("${path.module}/")
+                .trim_start_matches("${path.root}/");
+            if path.contains("${") {
+                continue;
+            }
+            if let Some(p) = docair_core::glossary::normalize(&std::path::Path::new(dir).join(path))
+            {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// The node of a Terraform directory: its name, or `terraform` at the root.
+fn group_of(dir: &str) -> String {
+    let group = slug(dir.rsplit('/').next().unwrap_or("terraform"));
+    if group.is_empty() {
+        "terraform".to_string()
+    } else {
+        group
+    }
+}
+
+/// The id of a file Terraform reads: `tf.file.terraform-values-yaml-tftpl`.
+fn tf_file_id(path: &str) -> String {
+    format!("tf.file.{}", slug(path))
+}
+
+/// The id of a Helm named template: `k8s.tpl.app-labels`.
+fn tpl_id(name: &str) -> String {
+    format!("k8s.tpl.{}", slug(name))
+}
+
+/// The named templates a line includes: `{{ include "app.labels" . }}`, `{{ template "x" }}`.
+fn included(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for word in ["include", "template"] {
+        let mut rest = line;
+        while let Some(i) = rest.find(word) {
+            rest = &rest[i + word.len()..];
+            if let Some(q) = rest.trim_start().strip_prefix('"')
+                && let Some(end) = q.find('"')
+                && rest.starts_with(' ')
+            {
+                out.push(q[..end].to_string());
+            }
+        }
+    }
+    out
+}
+
+/// A Helm named template's name: `{{- define "app.labels" -}}` → `app.labels`.
+fn define_of(line: &str) -> Option<String> {
+    let t = line
+        .trim()
+        .strip_prefix("{{")?
+        .trim_start_matches('-')
+        .trim_start();
+    let rest = t.strip_prefix("define")?.trim_start().strip_prefix('"')?;
+    Some(rest[..rest.find('"')?].to_string())
+}
+
 /// Whether a line of Terraform reads a file: `file(…)`, `filesha1(…)`, `templatefile(…)`, `fileset(…)`.
 fn reads_file(line: &str) -> bool {
     const READS: &[&str] = &[
@@ -1556,6 +1722,8 @@ fn discovered(
 struct Out {
     facts: Facts,
     prefix: &'static str,
+    /// Ids already made: a file several resources read is one part.
+    made: BTreeSet<String>,
 }
 
 impl Out {
@@ -1629,18 +1797,49 @@ impl Index {
         }
     }
 
+    /// The outermost chart a chart is part of: `charts/app` for its subchart `charts/app/charts/cache`.
+    fn root_chart<'a>(&self, chart: &'a str) -> &'a str {
+        let mut c = chart;
+        while let Some((parent, _)) = c.rsplit_once("/charts/") {
+            if !self.charts.contains_key(parent) {
+                break;
+            }
+            c = parent;
+        }
+        c
+    }
+
+    /// The releases a chart's file goes into: the ones Terraform installs it as, else the chart's own;
+    /// a subchart's are its parent's (docair-4wk.46).
+    fn releases_of(&self, file: &str) -> Vec<String> {
+        let chart = chart_of(file)
+            .or_else(|| self.charts.contains_key(dir_of(file)).then(|| dir_of(file)))
+            .map(|c| self.root_chart(c));
+        chart
+            .and_then(|c| self.chart_releases.get(c).cloned())
+            .unwrap_or_else(|| {
+                chart
+                    .and_then(|c| self.charts.get(c))
+                    .map(|n| vec![format!("k8s.release.{}", slug(n))])
+                    .unwrap_or_default()
+            })
+    }
+
     /***
      * Nodes from infrastructure code that has no block: Terraform resources and what they create, Kubernetes objects.
      ***/
     fn discover(&self, file: &SourceFile, out: &mut Out) {
         if file.lang.name == "terraform" {
             let dir = dir_of(&file.rel);
-            let group = slug(dir.rsplit('/').next().unwrap_or("terraform"));
-            let group = if group.is_empty() {
-                "terraform".to_string()
-            } else {
-                group
-            };
+            let group = group_of(dir);
+            // A local module sits in the module that calls it (docair-4wk.46).
+            let caller: Vec<String> = self
+                .modules
+                .iter()
+                .filter(|(_, d)| d == dir)
+                .map(|(b, _)| group_of(dir_of(&b.file)))
+                .take(1)
+                .collect();
             let first_in_dir = !self
                 .resources
                 .iter()
@@ -1652,10 +1851,69 @@ impl Index {
                     &group,
                     "job",
                     &group,
-                    &format!("The Terraform root module in {dir}: `terraform apply` there creates what its resources describe."),
-                    vec![],
+                    &if caller.is_empty() {
+                        format!("The Terraform root module in {dir}: `terraform apply` there creates what its resources describe.")
+                    } else {
+                        format!("The Terraform module in {dir}, which another module calls: what its resources describe is created with the caller's.")
+                    },
+                    caller.clone(),
                     "terraform directory",
                 ), vec![]);
+            }
+            // A local module this file calls: a part, calling the module's directory (docair-4wk.46).
+            for (b, child) in self.modules.iter().filter(|(b, _)| b.file == file.rel) {
+                let name = b.labels.first().cloned().unwrap_or_default();
+                let mut s = discovered(
+                    &b.file,
+                    b.line,
+                    &format!("tf.module.{}", slug(&name)),
+                    "job",
+                    &format!("module.{name}"),
+                    &format!("Terraform module `{name}`: the module in {child}, called from here."),
+                    vec!["terraform".into(), group.clone()],
+                    "terraform module",
+                );
+                s.end = Some(b.end);
+                out.add(
+                    s,
+                    vec![
+                        Relation::new(
+                            Verb::Calls,
+                            Target::Ref(group_of(child)),
+                            Evidence::new(b.line, format!("terraform: module \"{name}\" source")),
+                        )
+                        .payload(Some("module".into())),
+                    ],
+                );
+            }
+            // The project's files its resources read: parts of their own, so their doc blocks have a place.
+            for r in self.resources.iter().filter(|r| r.file == file.rel) {
+                for p in self.tf_reads.get(&r.address()).into_iter().flatten() {
+                    if out.made.insert(tf_file_id(p)) {
+                        let line = self.first_line.get(p).copied().unwrap_or(1);
+                        out.add(
+                            // A doc block at the file's top documents it.
+                            Symbol {
+                                attach_from: 1,
+                                draw: Draw::Always,
+                                ..discovered(
+                                    p,
+                                    line,
+                                    &tf_file_id(p),
+                                    "config",
+                                    p.rsplit('/').next().unwrap_or(p),
+                                    &format!(
+                                        "A file Terraform reads: `{}` fills it in or reads it.",
+                                        r.address()
+                                    ),
+                                    vec!["terraform".into(), group.clone()],
+                                    "terraform templatefile/file",
+                                )
+                            },
+                            vec![],
+                        );
+                    }
+                }
             }
             for r in self.resources.iter().filter(|r| r.file == file.rel) {
                 let authored = self.authored.contains_key(&r.address());
@@ -1681,16 +1939,27 @@ impl Index {
                 }
             }
         }
+        // Helm's named templates: parts of the chart's release that the templates including them call.
+        if file.lang.name == "helm" {
+            let releases = self.releases_of(&file.rel);
+            for (_, line, name) in self.defines.iter().filter(|(f, ..)| *f == file.rel) {
+                out.add(
+                    discovered(
+                        &file.rel,
+                        *line,
+                        &tpl_id(name),
+                        "function",
+                        name,
+                        &format!("Helm named template `{name}`: what `include \"{name}\"` writes into a template."),
+                        releases.clone(),
+                        "helm define",
+                    ),
+                    vec![],
+                );
+            }
+        }
         if file.lang.name == "yaml" {
-            let chart = chart_of(&file.rel);
-            let releases: Vec<String> = chart
-                .and_then(|c| self.chart_releases.get(c).cloned())
-                .unwrap_or_else(|| {
-                    chart
-                        .and_then(|c| self.charts.get(c))
-                        .map(|n| vec![format!("k8s.release.{}", slug(n))])
-                        .unwrap_or_default()
-                });
+            let releases = self.releases_of(&file.rel);
             for o in self.objects.iter().filter(|o| o.file == file.rel) {
                 if self.authored_objects.contains(&o.symbol()) {
                     continue;
@@ -1716,10 +1985,11 @@ impl Index {
                 let key = out.add(s, self.object_relations(o));
                 out.sets(&key, self.env_set_by(o));
             }
-            // A chart that no Terraform installs is its own release.
+            // A chart that no Terraform installs is its own release; a subchart is its parent's.
             if file.rel.ends_with("Chart.yaml")
                 && let Some(name) = self.charts.get(dir_of(&file.rel))
                 && !self.chart_releases.contains_key(dir_of(&file.rel))
+                && self.root_chart(dir_of(&file.rel)) == dir_of(&file.rel)
             {
                 out.add(
                     discovered(
@@ -1751,7 +2021,8 @@ pub enum InfraTool {
 /// its `templates/`) is Helm; other YAML is Kubernetes.
 pub fn tool_of(file: &SourceFile, charts: &BTreeSet<String>) -> Option<InfraTool> {
     match file.lang.name {
-        "terraform" => Some(InfraTool::Terraform),
+        "terraform" | "tftpl" | "tfvars" => Some(InfraTool::Terraform),
+        "helm" => Some(InfraTool::Helm),
         "yaml" => {
             let dir = dir_of(&file.rel);
             let in_chart =

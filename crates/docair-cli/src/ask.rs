@@ -157,16 +157,25 @@ pub fn cmd_glossary(
     lenient: bool,
     limit: usize,
     apply: bool,
+    reasoning: Option<&str>,
 ) -> Result<ExitCode> {
     let Some(mut s) = ProjectSession::open(root, out, lenient, false)? else {
         return Ok(ExitCode::from(2));
     };
+    // The flag, else docair.toml's [ai] glossary_reasoning, else low (docair-8l6.89).
+    let reasoning = docair_ai::glossary::reasoning_of(
+        reasoning.or(s
+            .config
+            .ai
+            .as_ref()
+            .and_then(|a| a.glossary_reasoning.as_deref())),
+    )?;
     eprintln!(
-        "docair: {} terms explained so far; asking {} for up to {limit} more …",
+        "docair: {} terms explained so far; asking {} for up to {limit} more, reasoning {reasoning} …",
         s.graph.glossary.len(),
         s.ai.model
     );
-    let reply = docair_ai::glossary::explain(&s.ai, &s.graph, limit)?;
+    let reply = docair_ai::glossary::explain(&s.ai, &s.graph, limit, reasoning)?;
     println!();
     for t in &reply.glossary {
         println!("{}", t.term);

@@ -1,0 +1,503 @@
+{
+  "schema": "docair.graph/0",
+  "system": "tools",
+  "generator": "docair 0.1.0",
+  "nodes": [
+    {
+      "id": "tf.file.terraform-values-yaml-tftpl",
+      "kind": "config",
+      "name": "values.yaml.tftpl",
+      "summary": "The values Terraform fills in for the app's release: how many replicas run.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/values.yaml.tftpl",
+        "line": 1,
+        "end": 3
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 4,
+          "origin": "inferred",
+          "reason": "terraform templatefile/file"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 4,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "k8s.deploy.cache",
+      "kind": "workload",
+      "name": "Deployment cache",
+      "summary": "Kubernetes Deployment `cache`.",
+      "description": "",
+      "part_of": "k8s.release.app",
+      "source": {
+        "file": "charts/app/charts/cache/templates/deployment.yaml",
+        "line": 1,
+        "end": 10
+      },
+      "symbol": "Deployment cache",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "workload",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Deployment`"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.app",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.tpl.app-labels",
+      "kind": "function",
+      "name": "app.labels",
+      "summary": "Helm named template `app.labels`: what `include \"app.labels\"` writes into a template.",
+      "description": "",
+      "part_of": "k8s.release.app",
+      "source": {
+        "file": "charts/app/templates/_helpers.tpl",
+        "line": 1,
+        "end": 1
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "helm define"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.app",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.deploy.app",
+      "kind": "workload",
+      "name": "Deployment app",
+      "summary": "Kubernetes Deployment `app`.",
+      "description": "",
+      "part_of": "k8s.release.app",
+      "source": {
+        "file": "charts/app/templates/deployment.yaml",
+        "line": 1,
+        "end": 12
+      },
+      "symbol": "Deployment app",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "workload",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "Kubernetes kind `Deployment`"
+        },
+        {
+          "name": "calls",
+          "value": "k8s.tpl.app-labels (include)",
+          "line": 6,
+          "origin": "inferred",
+          "reason": "helm: include \"app.labels\""
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.release.app",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "terraform",
+      "kind": "job",
+      "name": "terraform",
+      "summary": "The Terraform root module in terraform: `terraform apply` there creates what its resources describe.",
+      "description": "",
+      "part_of": "tools",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 1,
+        "end": 1
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "job",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "terraform directory"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tf.module.net",
+      "kind": "job",
+      "name": "module.net",
+      "summary": "Terraform module `net`: the module in terraform/modules/net, called from here.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 14,
+        "end": 16
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "job",
+          "line": 14,
+          "origin": "inferred",
+          "reason": "terraform module"
+        },
+        {
+          "name": "calls",
+          "value": "net (module)",
+          "line": 14,
+          "origin": "inferred",
+          "reason": "terraform: module \"net\" source"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 14,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tf.helm_release.app",
+      "kind": "config",
+      "name": "helm_release.app",
+      "summary": "Terraform resource `helm_release.app`.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 7,
+        "end": 12
+      },
+      "symbol": "resource helm_release.app",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "terraform resource"
+        },
+        {
+          "name": "reads",
+          "value": "tf.file.terraform-values-yaml-tftpl",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "terraform: reads terraform/values.yaml.tftpl"
+        },
+        {
+          "name": "creates",
+          "value": "k8s.release.app (helm install: chart app)",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "terraform resource type"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.release.app",
+      "kind": "release",
+      "name": "app",
+      "summary": "The Helm release app: what `helm install` made of the chart app, in the namespace app.",
+      "description": "",
+      "part_of": "k8s.ns.app",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 7,
+        "end": 7
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "release",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "created by helm_release.app"
+        },
+        {
+          "name": "part-of",
+          "value": "k8s.ns.app",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.ns.app",
+      "kind": "namespace",
+      "name": "app",
+      "summary": "The namespace app in the cluster.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 7,
+        "end": 7
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "namespace",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "created by helm_release.app"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 7,
+          "origin": "inferred",
+          "reason": "directory name"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "net",
+      "kind": "job",
+      "name": "net",
+      "summary": "The Terraform module in terraform/modules/net, which another module calls: what its resources describe is created with the caller's.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/modules/net/main.tf",
+        "line": 1,
+        "end": 1
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "job",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "terraform directory"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tf.kubernetes_namespace.net",
+      "kind": "config",
+      "name": "kubernetes_namespace.net",
+      "summary": "Terraform resource `kubernetes_namespace.net`.",
+      "description": "",
+      "part_of": "terraform",
+      "source": {
+        "file": "terraform/modules/net/main.tf",
+        "line": 1,
+        "end": 5
+      },
+      "symbol": "resource kubernetes_namespace.net",
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "terraform resource"
+        },
+        {
+          "name": "creates",
+          "value": "k8s.ns.net (creates it)",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "terraform resource type"
+        },
+        {
+          "name": "part-of",
+          "value": "terraform",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "module path"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "k8s.ns.net",
+      "kind": "namespace",
+      "name": "net",
+      "summary": "The namespace net in the cluster.",
+      "description": "",
+      "part_of": "net",
+      "source": {
+        "file": "terraform/modules/net/main.tf",
+        "line": 1,
+        "end": 1
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "kind",
+          "value": "namespace",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "created by kubernetes_namespace.net"
+        },
+        {
+          "name": "part-of",
+          "value": "net",
+          "line": 1,
+          "origin": "inferred",
+          "reason": "directory name"
+        }
+      ],
+      "origin": "discovered"
+    },
+    {
+      "id": "tools",
+      "kind": "system",
+      "name": "tools",
+      "summary": "",
+      "description": "",
+      "docs": [
+        {
+          "file": "README.md",
+          "markdown": "# Tools\n\nThe files infrastructure tools pull in: a template and a local module Terraform uses, a Helm chart with a named template and a subchart (docair-4wk.46)."
+        }
+      ],
+      "tags": [],
+      "origin": "inferred"
+    }
+  ],
+  "edges": [
+    {
+      "id": "k8s.deploy.app -call-> k8s.tpl.app-labels",
+      "from": "k8s.deploy.app",
+      "to": "k8s.tpl.app-labels",
+      "kind": "call",
+      "label": "(include)",
+      "payload": "include",
+      "tag": "@calls k8s.tpl.app-labels (include)",
+      "source": {
+        "file": "charts/app/templates/deployment.yaml",
+        "line": 6
+      },
+      "origin": "inferred"
+    },
+    {
+      "id": "tf.module.net -call-> net",
+      "from": "tf.module.net",
+      "to": "net",
+      "kind": "call",
+      "label": "(module)",
+      "payload": "module",
+      "tag": "@calls net (module)",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 14
+      },
+      "origin": "inferred"
+    },
+    {
+      "id": "tf.file.terraform-values-yaml-tftpl -read-> tf.helm_release.app",
+      "from": "tf.file.terraform-values-yaml-tftpl",
+      "to": "tf.helm_release.app",
+      "kind": "read",
+      "tag": "@reads tf.file.terraform-values-yaml-tftpl",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 7
+      },
+      "origin": "inferred"
+    },
+    {
+      "id": "tf.helm_release.app -create-> k8s.release.app",
+      "from": "tf.helm_release.app",
+      "to": "k8s.release.app",
+      "kind": "create",
+      "label": "helm install: chart app",
+      "payload": "helm install: chart app",
+      "tag": "@creates k8s.release.app (helm install: chart app)",
+      "source": {
+        "file": "terraform/main.tf",
+        "line": 7
+      },
+      "origin": "inferred"
+    },
+    {
+      "id": "tf.kubernetes_namespace.net -create-> k8s.ns.net",
+      "from": "tf.kubernetes_namespace.net",
+      "to": "k8s.ns.net",
+      "kind": "create",
+      "label": "creates it",
+      "payload": "creates it",
+      "tag": "@creates k8s.ns.net (creates it)",
+      "source": {
+        "file": "terraform/modules/net/main.tf",
+        "line": 1
+      },
+      "origin": "inferred"
+    }
+  ],
+  "flows": [],
+  "walkthroughs": [],
+  "view": {
+    "hide": [],
+    "tests": true
+  },
+  "diagnostics": []
+}

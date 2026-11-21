@@ -37,7 +37,7 @@ impl Adapter for HelmAdapter {
     }
 
     fn handles(&self, file: &SourceFile) -> bool {
-        file.lang.name == "yaml"
+        matches!(file.lang.name, "yaml" | "helm")
     }
 
     /***

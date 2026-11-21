@@ -749,6 +749,9 @@ pub struct GlossaryRequest {
     pub graph: Option<Graph>,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// How much the model reasons first, as the reader chose: low, medium or high (docair-8l6.89).
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 /***
@@ -775,21 +778,24 @@ async fn glossary(
         ));
     };
     let limit = req.limit.unwrap_or(15).clamp(1, 40);
+    let reasoning = docair_ai::glossary::reasoning_of(req.reasoning.as_deref())
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
     let Some(graph) = req.graph else {
         let project = served(&config)?;
         let graph = project.lock().graph.clone();
         let answer = tokio::task::spawn_blocking(move || {
-            let reply = docair_ai::glossary::explain(&ai, &graph, limit)
+            let reply = docair_ai::glossary::explain(&ai, &graph, limit, reasoning)
                 .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
             project::answered(&project, reply, true)
         })
         .await??;
         return Ok(Json(answer).into_response());
     };
-    let reply =
-        tokio::task::spawn_blocking(move || docair_ai::glossary::explain(&ai, &graph, limit))
-            .await?
-            .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    let reply = tokio::task::spawn_blocking(move || {
+        docair_ai::glossary::explain(&ai, &graph, limit, reasoning)
+    })
+    .await?
+    .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     Ok(Json(reply).into_response())
 }
 

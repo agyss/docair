@@ -160,7 +160,7 @@ path, `..` out of it or a link out of it (W110, W111, W113).
 | `docair mermaid` | 1–5, 7      | prints a Mermaid diagram to stdout |
 | `docair ask "<question>" [--follow-up] [--apply]` | 1–7 + AI | asks the configured model and prints the reply: answer, walkthrough (recorded in `walkthroughs/`), view changes, proposed edits (written to `.docair/docair.patch`). `--follow-up` continues the last conversation; `--apply` writes the edits into the files and the view changes into `docair.toml` (§10) |
 | `docair word [--scope id] [--all] [--apply]` | 1–7 + AI | the model writes a few words for each line that says nothing yet (§10.8); `--all` also for lines that show only a type; they become edits of the tags, `--apply` writes them |
-| `docair glossary [--limit n] [--apply]` | 1–7 + AI | the model finds words of the docs that the glossary does not explain yet and writes entries for them (§13.4) |
+| `docair glossary [--limit n] [--apply] [--reasoning low\|medium\|high]` | 1–7 + AI | the model finds words of the docs that the glossary does not explain yet and writes entries for them (§13.4); its reasoning is `--reasoning`, else `[ai] glossary_reasoning`, else `low`, and the reply says how it went (docair-8l6.89) |
 | `docair chat` | 1–7 + AI | the same as a conversation in the terminal: one question per line, each edit offered for applying (§10.6) |
 | `docair apply [patch]` | none | applies `.docair/docair.patch` (or the given patch) to the files (§10.6) |
 | `docair ai [--check]` | none   | prints the AI settings and where the key comes from; `--check` sends one short request (§10.1) |
@@ -1404,6 +1404,10 @@ cross files (docs/ADAPTERS.md §5.3, docair-4wk.42):
 | Code | Becomes |
 |------|---------|
 | `resource "T" "N" { … }` | a node `tf.T.N` (kind `config`) in the Terraform module of its directory (a `job` node) |
+| `templatefile("${path.module}/values.yaml.tftpl", …)`, `file(…)` of a project file | a node `tf.file.<path>` (kind `config`) the resource `@reads`, documented by the file's own block (docair-4wk.46) |
+| `module "net" { source = "./modules/net" }` | a node `tf.module.net` (kind `job`) that `@calls` the module's directory node, which sits in its caller's |
+| `{{- define "app.labels" -}}` in a chart's `.tpl` | a node `k8s.tpl.app-labels` (kind `function`) in the chart's release; an object whose template `include`s it `@calls` it |
+| a chart in another chart's `charts/` | its objects in the parent chart's release, no release of its own |
 | a reference `T.N.attr` in a resource, `depends_on = [T.N]` | `@in attr from tf:T.N`, `@in runs after from tf:T.N`: what has to exist first |
 | a `helm` or `kubernetes` provider that points at a cluster resource | `@in cluster access from tf:<cluster>` on every Helm and Kubernetes resource |
 | `helm_release` | `@creates k8s.release.<name> (helm install: chart <chart> <version>)`, the release node in `k8s.ns.<namespace>` |
@@ -1947,7 +1951,7 @@ question; the key stays with the server.
 | `GET /api/ai` | → `{ enabled, model }`. Never the key, never the endpoint |
 | `POST /api/ask` | `{ question, history?, context? }` → `{ reply, html, regenerated, version, patch, pending }`; `context` is what the question points at, one part's id or typed refs (`part:<id>`, `data:<id>`, `term:<word>`, `line:<k>@<address>`, `edges:<i>,<j>`), each given to the model in words, and one that names nothing named in `problems`: the reply (§10.7), written as HTML for the page too; a walkthrough in it is recorded and the documentation written again (`regenerated`); its edits wait (`patch`, `pending`). 400 for an empty question or one over 500 characters, 503 when AI is off, 429 when two questions are already with the model, 502 when the endpoint fails |
 | `POST /api/word` | `{ scope?, limit?, all? }` → the same, with `wording` (§10.8) |
-| `POST /api/glossary` | `{ limit? }` → the same, with the terms explained (§13.4) |
+| `POST /api/glossary` | `{ limit?, reasoning? }` → the same, with the terms explained (§13.4); `reasoning` is what the reader chose beside *✦ Explain the terms*, default `low` |
 | `POST /api/apply` | → `{ edited, regenerated, version }`: the waiting edits written into the project's files, the view change into `docair.toml`, the documentation written again; 409 when nothing waits |
 | `GET /api/tidy` | → `{ tags, patch }`: the tags the code repeats (`node`, `tag`, `line`, `code_says`, `code_file`, `code_line`, `reason`) and the diff that removes them all |
 | `POST /api/tidy` | `{ tags?: [{ node, tag }] }` → `{ edited, regenerated, version }`: the picked tags removed (all when none are named), the documentation written again; 409 when no tag repeats |
@@ -2295,6 +2299,14 @@ technology: what it is in general and how this project uses it, with a link
 to its official docs), and names the nodes to see. A term that does not occur
 in the texts is dropped.
 
+How much the model reasons first is the user's choice (docair-8l6.89): beside
+*✦ Explain the terms* in the page (low, medium, high), `--reasoning` on the
+command line, and `[ai] glossary_reasoning` in docair.toml for runs without
+anyone there (CI); default `low`. The request is streamed. The reply says how
+it went: the model, how many requests, the reasoning, whether the docs' texts
+went along (not with `--limit 0`), whether the model used up `max_tokens` and
+got the short version, and how long it took.
+
 The entries are shown at once, marked ✦, and become one edit that appends
 them to the glossary (`docs/GLOSSARY.md` when there is none yet): review
 the diff, apply it, or download the patch (§10.6).
@@ -2353,7 +2365,11 @@ backticks, `merged`, `change_steps::merged`, or called, `merged()`), which
 then link to that part like a code span that names one. `docair glossary`
 shows the model both kinds of use ("used", "as code") and every part of that
 name, a function too, and asks it to judge each; it is streamed and reasons
-little, and with `--limit 0` it sends only the open words, not the texts.
+little, and with `--limit 0` it sends only the open words, not the texts. A
+word settled without `code` though the docs write it as code gets one short
+follow-up question about those uses alone (docair-8l6.90); `from` and `code`
+may name any part of the word's name, a constant too (`DESCRIBED` says what
+the `described` tag is).
 
 `docair glossary` writes it (§13.4); people review and edit it like code. A
 decision is opened again when `from` names no node or `checked` no longer

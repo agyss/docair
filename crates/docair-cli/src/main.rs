@@ -161,6 +161,9 @@ enum Command {
         /// Write the entries into the glossary.
         #[arg(long)]
         apply: bool,
+        /// How much the model reasons first: low, medium or high [default: `[ai] glossary_reasoning`, else low].
+        #[arg(long)]
+        reasoning: Option<String>,
     },
     /// Write the edits and view change of the last reply into the files.
     Apply {
@@ -347,7 +350,8 @@ fn main() -> ExitCode {
             lenient,
             limit,
             apply,
-        } => ask::cmd_glossary(&root, out, lenient, limit, apply),
+            reasoning,
+        } => ask::cmd_glossary(&root, out, lenient, limit, apply, reasoning.as_deref()),
         Command::Word {
             root,
             out,

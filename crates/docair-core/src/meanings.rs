@@ -232,6 +232,9 @@ pub fn to_toml(words: &BTreeMap<String, Decision>) -> String {
         if let Some(f) = &d.from {
             out.push_str(&format!("from = {}\n", quote(f)));
         }
+        if let Some(c) = &d.code {
+            out.push_str(&format!("code = {}\n", quote(c)));
+        }
         if let Some(c) = &d.checked {
             out.push_str(&format!("checked = {}\n", quote(c)));
         }

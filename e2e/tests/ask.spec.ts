@@ -170,9 +170,15 @@ test.describe('clarify with AI', () => {
    ***/
   test('Explain the terms lists the entries and writes the glossary', async ({ page }) => {
     await select(page, 'orders-db');
+    // The reader chooses how much the model reasons; the reply says how it went (docair-8l6.89).
+    await page.getByTestId('glossary-reasoning').selectOption('medium');
     await page.getByTestId('explain-terms').click();
     const reply = page.getByTestId('msg-ai').last();
     await expect(reply.getByTestId('glossary-terms')).toContainText('2 terms explained');
+    await expect(reply).toContainText('reasoning medium');
+    // Tests share the fake model: some glossary request of this run asked for medium.
+    const asked = (await (await page.request.get(`${fakeAi}/requests`)).json()).filter((r: any) => (r.messages[0]?.content || '').startsWith('You write the glossary'));
+    expect(asked.some((r: any) => r.reasoning_effort === 'medium')).toBe(true);
     await expect(reply).toContainText('orders table');
     await expect(reply).toContainText('1 parts left out');
     await reply.getByTestId('review').click();

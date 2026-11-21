@@ -357,7 +357,7 @@ function wireChat() {
   question.addEventListener('keydown', (ev) => ev.key === 'Enter' && !ev.shiftKey && (ev.preventDefault(), send()));
   for (const b of chat.querySelectorAll('.suggest')) b.addEventListener('click', () => ((question.value = b.textContent), send()));
   chat.querySelector('[data-test="word-lines"]').addEventListener('click', () => ask('/api/word', S.selected ? { scope: S.selected } : {}, null));
-  chat.querySelector('[data-test="explain-terms"]').addEventListener('click', () => ask('/api/glossary', {}, null));
+  chat.querySelector('[data-test="explain-terms"]').addEventListener('click', () => ask('/api/glossary', { reasoning: chat.querySelector('[data-test="glossary-reasoning"]')?.value }, null));
   log.addEventListener('click', async (ev) => {
     const m = ev.target.closest('.msg');
     const review = ev.target.closest('[data-test="review"]');
