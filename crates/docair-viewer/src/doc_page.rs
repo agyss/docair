@@ -8,16 +8,15 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use base64::Engine as _;
-use docair_core::layer_view::{
-    LayerInfo, LayerKey, LayerPicture, layers, picture, section_picture, slice_picture,
-};
+use docair_core::layer_view::{LayerInfo, LayerKey, LayerPicture, layers, picture};
 use docair_core::model::Graph;
 use docair_core::slice::{SeedKind, SliceSeed};
+use docair_core::timing::Sum;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    escape_text, fill, layout_input, layout_store, page_changes, page_panels, page_walks,
-    script_js, script_json, svg,
+    escape_text, fill, layout_input, layout_store, page_changes, page_panels, page_state,
+    page_walks, script_js, script_json, svg,
 };
 
 const TEMPLATE: &str = include_str!("../assets/page.html");
@@ -74,6 +73,11 @@ struct Spots {
     pictures: Vec<LayerPicture>,
     /// For each picture, the walk it plays: its seed and slice.
     walks: Vec<Option<(SliceSeed, docair_core::slice::Slice)>>,
+    /// For each picture, what it is across saves (docs/REGENERATE.md §2): its address, with `|other`
+    /// for the address's second picture.
+    idents: Vec<String>,
+    /// For each picture, whether it was taken over from the last page unchanged.
+    taken: Vec<bool>,
 }
 
 impl Spots {
@@ -86,11 +90,28 @@ impl Spots {
         on: LayerPicture,
         off: Option<LayerPicture>,
     ) {
+        self.add_taken(addr, title, layer, crumbs, (on, off), false);
+    }
+
+    /// As `add`, the pictures taken over from the last page when `taken`.
+    fn add_taken(
+        &mut self,
+        addr: String,
+        title: String,
+        layer: Option<LayerKey>,
+        crumbs: Vec<(String, String)>,
+        (on, off): (LayerPicture, Option<LayerPicture>),
+        taken: bool,
+    ) {
         let first = self.pictures.len();
         self.walks.resize_with(first, || None);
+        self.idents.push(addr.clone());
+        self.taken.push(taken);
         self.pictures.push(on);
         let shown = match off {
             Some(off) if off != self.pictures[first] => {
+                self.idents.push(format!("{addr}|other"));
+                self.taken.push(taken);
                 self.pictures.push(off);
                 SpotPictures::Two {
                     on: first,
@@ -134,11 +155,32 @@ fn slice_addr(seed: &SliceSeed) -> String {
  * @calls docair-core.slice.slice "works out each slice"
  * @calls docair-core.layer_view.slice_picture "makes each slice a picture"
  ***/
-fn spots(graph: &Graph) -> Spots {
+fn spots(graph: &Graph, prev: Option<&Prev>) -> Spots {
     let mut out = Spots {
         spots: Vec::new(),
         pictures: Vec::new(),
         walks: Vec::new(),
+        idents: Vec::new(),
+        taken: Vec::new(),
+    };
+    // A section's or a slice's pictures from the last page, when none of their parts was touched
+    // (docs/REGENERATE.md §2.3).
+    let take = |addr: &str, id: &str| -> Option<(LayerPicture, Option<LayerPicture>)> {
+        let p = prev?;
+        if p.touched.parts.contains(id) {
+            return None;
+        }
+        let from = |k: &page_state::PictureEntry| {
+            page_state::untouched(&k.pic, p.touched)
+                .then(|| page_state::taken_over(&k.pic, p.graph, graph))
+                .flatten()
+        };
+        let on = from(p.kept.get(addr)?)?;
+        let off = match p.kept.get(&format!("{addr}|other")) {
+            Some(k) => Some(from(k)?),
+            None => None,
+        };
+        Some((on, off))
     };
     let infos = layers(graph);
     let both = |f: &dyn Fn(Option<bool>) -> Option<LayerPicture>| -> Option<(LayerPicture, Option<LayerPicture>)> {
@@ -146,6 +188,7 @@ fn spots(graph: &Graph) -> Spots {
         let other = f(Some(!graph.view.tests));
         Some((shown, other))
     };
+    let t_layers = docair_core::timing::stopwatch("page: layers worked out");
     for l in &infos {
         let Some((on, off)) = both(&|t| picture(graph, l.key, &[], t)) else {
             continue;
@@ -174,13 +217,28 @@ fn spots(graph: &Graph) -> Spots {
         .iter()
         .filter(|n| n.id != graph.system && holds.contains(n.id.as_str()))
         .collect();
+    drop(t_layers);
+    // The graph looked up once for all of them (docs/REGENERATE.md §3).
+    let made = docair_core::layer_view::PictureSet::new(graph);
+    let slicer = docair_core::slice::Slicer::new(graph);
+    let t_sections = docair_core::timing::stopwatch("page: sections worked out");
     let sections = side_by_side(&boxes, |n| {
-        let (key, on) = section_picture(graph, &n.id, None)?;
-        let off = section_picture(graph, &n.id, Some(!graph.view.tests)).map(|(_, p)| p);
-        Some((key, on, off))
+        if let Some((on, off)) = take(&format!("box/{}", n.id), &n.id)
+            && let Some(key) = on.layer
+        {
+            return Some((key, on, off, true));
+        }
+        let (key, on) = made.section_picture(&n.id, None)?;
+        let off = made
+            .section_picture(&n.id, Some(!graph.view.tests))
+            .map(|(_, p)| p);
+        Some((key, on, off, false))
     });
+    drop(t_sections);
+    docair_core::layer_view::T_SETS.report("page: sections' sets (all threads)");
+    docair_core::layer_view::T_DRAW.report("page: sections' draw (all threads)");
     for (n, found) in boxes.iter().zip(sections) {
-        let Some((key, on, off)) = found else {
+        let Some((key, on, off, taken)) = found else {
             continue;
         };
         // The way up: the layer, then each box around this one.
@@ -194,34 +252,45 @@ fn spots(graph: &Graph) -> Spots {
         let mut crumbs = vec![layer_crumb(&infos, key)];
         crumbs.extend(up);
         crumbs.push((n.name.clone(), format!("box/{}", n.id)));
-        out.add(
+        out.add_taken(
             format!("box/{}", n.id),
             n.name.clone(),
             Some(key),
             crumbs,
-            on,
-            off,
+            (on, off),
+            taken,
         );
     }
     let seeds = docair_core::slice::seeds(graph);
+    let t_slices = docair_core::timing::stopwatch("page: slices worked out");
+    let (t_slice, t_pic) = (Sum::default(), Sum::default());
     let slices = side_by_side(&seeds, |seed| {
-        let s = docair_core::slice::slice(graph, seed)?;
-        let pic = slice_picture(graph, &s);
-        Some((pic, page_walks::is_walk(seed).then_some(s)))
+        // A walk is worked out each time: its steps need its slice.
+        if !page_walks::is_walk(seed)
+            && let Some((pic, _)) = take(&slice_addr(seed), &seed.id)
+        {
+            return Some((pic, None, true));
+        }
+        let s = t_slice.time(|| slicer.slice(seed))?;
+        let pic = t_pic.time(|| made.slice_picture(&s));
+        Some((pic, page_walks::is_walk(seed).then_some(s), false))
     });
+    drop(t_slices);
+    t_slice.report("page: slices (all threads)");
+    t_pic.report("page: slices as pictures (all threads)");
     for (seed, found) in seeds.iter().zip(slices) {
-        let Some((pic, walk)) = found else {
+        let Some((pic, walk, taken)) = found else {
             continue;
         };
         let title = slice_title(seed, &name);
         let addr = slice_addr(seed);
-        out.add(
+        out.add_taken(
             addr.clone(),
             title.clone(),
             None,
             vec![(title, addr)],
-            pic,
-            None,
+            (pic, None),
+            taken,
         );
         if seed.kind == SeedKind::Data
             && let Some(s) = out.spots.last_mut()
@@ -252,11 +321,25 @@ fn workers() -> usize {
         })
 }
 
+/// How many sections and slices are worked out at once: `DOCAIR_JOBS`, else every core, at most 16.
+/// Unlike laying out, working a picture out needs little memory of its own (docs/REGENERATE.md §1).
+fn workers_for_pictures() -> usize {
+    std::env::var("DOCAIR_JOBS")
+        .ok()
+        .and_then(|j| j.parse::<usize>().ok())
+        .filter(|&j| j > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map_or(4, |n| n.get())
+                .min(16)
+        })
+}
+
 /// `f` of each item, worked out side by side; the results in the items' order.
 fn side_by_side<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let next = AtomicUsize::new(0);
     let out: Vec<Mutex<Option<R>>> = items.iter().map(|_| Mutex::new(None)).collect();
-    let workers = workers().min(items.len().max(1));
+    let workers = workers_for_pictures().min(items.len().max(1));
     std::thread::scope(|s| {
         for _ in 0..workers {
             s.spawn(|| {
@@ -286,22 +369,54 @@ struct DrawnPictures {
     walks: Vec<Option<Value>>,
     /// For each picture, what moving a part needs (docair-9qv): its layout input and its layout, packed.
     moves: Vec<String>,
+    /// For each picture, what the next page keeps of it (docs/REGENERATE.md §2).
+    kept: Vec<page_state::PictureEntry>,
+    counts: page_state::Counts,
 }
 
+/// The last page, for the pictures a change did not touch (docs/REGENERATE.md §2.3).
+struct Prev<'a> {
+    graph: &'a Graph,
+    kept: &'a std::collections::HashMap<String, page_state::PictureEntry>,
+    touched: &'a page_state::ChangeReach,
+}
+
+/***
+ * Lay out, draw and pack each picture (docs/REGENERATE.md §2.4, §2.5): one taken over from the last page as it was; else its layout kept for the same key, updated from the last page's for another key, or from the layouts kept under their keys, laid out when none is kept.
+ *
+ * @calls docair-layout.incremental.update_layout "updates a picture's last layout"
+ * @calls docair-viewer.layout_store.kept_or_made "takes a kept layout, or lays one out"
+ * @calls docair-viewer.svg.draw "draws each picture"
+ ***/
 fn draw_all(
     graph: &Graph,
-    pictures: &[LayerPicture],
-    walks: &[Option<(SliceSeed, docair_core::slice::Slice)>],
+    all: &Spots,
     keep: Option<&Path>,
+    last: Option<&std::collections::HashMap<String, page_state::PictureEntry>>,
 ) -> DrawnPictures {
+    let (pictures, walks) = (&all.pictures, &all.walks);
     let linker = crate::page_glossary::Linker::new(graph);
     let steps: Vec<Mutex<Option<Value>>> = pictures.iter().map(|_| Mutex::new(None)).collect();
-    let moves: Vec<Mutex<String>> = pictures.iter().map(|_| Mutex::new(String::new())).collect();
+    let kept: Vec<Mutex<Option<page_state::PictureEntry>>> =
+        pictures.iter().map(|_| Mutex::new(None)).collect();
     let mut order: Vec<usize> = (0..pictures.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(pictures[i].lines.len() + pictures[i].parts.len()));
     let next = AtomicUsize::new(0);
-    let packed: Vec<Mutex<String>> = pictures.iter().map(|_| Mutex::new(String::new())).collect();
     let workers = workers().min(pictures.len().max(1));
+    let _t = docair_core::timing::stopwatch("page: pictures laid out, drawn, packed");
+    let (t_lay, t_draw, t_pack, t_moves, t_walks) = (
+        Sum::default(),
+        Sum::default(),
+        Sum::default(),
+        Sum::default(),
+        Sum::default(),
+    );
+    let (n_taken, n_kept, n_updated, n_laid) = (
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    );
     std::thread::scope(|s| {
         for _ in 0..workers {
             s.spawn(|| {
@@ -311,49 +426,128 @@ fn draw_all(
                         break;
                     };
                     let pic = &pictures[i];
+                    let old = last.and_then(|m| m.get(&all.idents[i]));
+                    // Taken over: its layout, its drawing and its move data as they were.
+                    if all.taken[i]
+                        && let Some(o) = old
+                    {
+                        n_taken.fetch_add(1, Ordering::Relaxed);
+                        *kept[i].lock().expect("no worker panics") =
+                            Some(page_state::PictureEntry {
+                                pic: pic.clone(),
+                                ..o.clone()
+                            });
+                        continue;
+                    }
                     let walk = walks.get(i).and_then(Option::as_ref);
                     // A walk's lines point ahead in its layout.
                     let ahead = walk
                         .map(|(_, s)| page_walks::walked(graph, pic, s))
                         .unwrap_or_default();
-                    let laid = keep
-                        .and_then(|dir| {
-                            layout_store::lay_out_kept_with(graph, pic, &ahead, dir)
-                                .ok()
-                                .map(|(l, _)| l)
-                        })
-                        .unwrap_or_else(|| layout_input::lay_out_with(graph, pic, &ahead));
-                    *packed[i].lock().expect("no worker panics") =
-                        pack(&svg::draw(graph, pic, &laid));
                     let input = layout_input::input_with(
                         graph,
                         pic,
                         &docair_layout::Monospace::default(),
                         &ahead,
                     );
-                    *moves[i].lock().expect("no worker panics") =
-                        pack(&json!({ "input": input, "layout": laid }).to_string());
+                    let options = layout_input::options_for(pic);
+                    let key = docair_layout::key(&input, &options);
+                    let laid = t_lay.time(|| {
+                        if let Some(o) = old {
+                            if o.key == key {
+                                n_kept.fetch_add(1, Ordering::Relaxed);
+                                return o.layout.clone();
+                            }
+                            match docair_layout::try_update_layout(
+                                &o.input, &o.layout, &input, &options,
+                            ) {
+                                Ok(l) => {
+                                    n_updated.fetch_add(1, Ordering::Relaxed);
+                                    return l;
+                                }
+                                Err(why) if docair_core::timing::on() => eprintln!(
+                                    "docair timing: not updated: {}: {why}",
+                                    all.idents[i]
+                                ),
+                                Err(_) => {}
+                            }
+                        }
+                        let (l, was_kept) = match keep {
+                            Some(dir) => layout_store::kept_or_made(&input, &options, &key, dir)
+                                .unwrap_or_else(|_| {
+                                    (docair_layout::lay_out(&input, &options), false)
+                                }),
+                            None => (docair_layout::lay_out(&input, &options), false),
+                        };
+                        if was_kept {
+                            n_kept.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            n_laid.fetch_add(1, Ordering::Relaxed);
+                            if docair_core::timing::on() {
+                                eprintln!(
+                                    "docair timing: laid out anew: {}, {} parts",
+                                    all.idents[i],
+                                    pic.parts.len()
+                                );
+                            }
+                        }
+                        l
+                    });
+                    let drawn = t_draw.time(|| svg::draw(graph, pic, &laid));
+                    let packed = t_pack.time(|| pack(&drawn));
+                    let moves = t_moves
+                        .time(|| pack(&json!({ "input": input, "layout": laid }).to_string()));
                     if let Some((seed, slice)) = walk {
-                        *steps[i].lock().expect("no worker panics") =
-                            Some(page_walks::steps(graph, pic, &laid, seed, slice, &linker));
+                        *steps[i].lock().expect("no worker panics") = t_walks.time(|| {
+                            Some(page_walks::steps(graph, pic, &laid, seed, slice, &linker))
+                        });
                     }
+                    // The same key and layout: the same file on disk as before.
+                    let file = old
+                        .filter(|o| o.key == key && o.layout == laid)
+                        .and_then(|o| o.file.clone());
+                    *kept[i].lock().expect("no worker panics") = Some(page_state::PictureEntry {
+                        pic: pic.clone(),
+                        input,
+                        key,
+                        layout: laid,
+                        packed,
+                        moves,
+                        file,
+                    });
                 }
             });
         }
     });
+    t_lay.report("page: layouts kept, updated or made (all threads)");
+    t_draw.report("page: drawn (all threads)");
+    t_pack.report("page: drawings packed (all threads)");
+    t_moves.report("page: move data packed (all threads)");
+    t_walks.report("page: walk steps (all threads)");
+    let kept: Vec<page_state::PictureEntry> = kept
+        .into_iter()
+        .map(|m| {
+            m.into_inner()
+                .expect("no worker panics")
+                .expect("every picture is drawn")
+        })
+        .collect();
+    let taken = n_taken.into_inner();
     DrawnPictures {
-        packed: packed
-            .into_iter()
-            .map(|m| m.into_inner().expect("no worker panics"))
-            .collect(),
+        packed: kept.iter().map(|k| k.packed.clone()).collect(),
         walks: steps
             .into_iter()
             .map(|m| m.into_inner().expect("no worker panics"))
             .collect(),
-        moves: moves
-            .into_iter()
-            .map(|m| m.into_inner().expect("no worker panics"))
-            .collect(),
+        moves: kept.iter().map(|k| k.moves.clone()).collect(),
+        counts: page_state::Counts {
+            worked_out: pictures.len() - taken,
+            taken_over: taken,
+            kept: n_kept.into_inner(),
+            updated: n_updated.into_inner(),
+            laid_out: n_laid.into_inner(),
+        },
+        kept,
     }
 }
 
@@ -415,7 +609,12 @@ fn homes(graph: &Graph, spots: &Spots) -> Map<String, Value> {
  * @calls docair-viewer.svg.draw "draws each picture"
  ***/
 pub fn render_page(graph: &Graph) -> String {
-    render_page_keeping(graph, Some(&cache_dir().join("layouts")))
+    render_page_keeping(graph, Some(&layouts_dir()))
+}
+
+/// Where layouts are kept under their keys: `layouts` in docair's cache folder.
+pub fn layouts_dir() -> PathBuf {
+    cache_dir().join("layouts")
 }
 
 /// A slice's title, as the crumbs and the walks say it: `Scenario checkout`, `Datum order`.
@@ -490,8 +689,61 @@ impl CodeLinks {
 /// As `render_page_keeping`, with the changes section when `changed` is given (`docair build
 /// --changes <A>`): the changed flows' list, and each flow's slice before and after (docair-zrr.7).
 pub fn render_page_with(graph: &Graph, keep: Option<&Path>, changed: Option<&Changed>) -> String {
-    let all = spots(graph);
-    let drawn = draw_all(graph, &all.pictures, &all.walks, keep);
+    render(graph, keep, changed, None)
+}
+
+/***
+ * As `render_page_with`, keeping the pictures in `state` for the next page (docs/REGENERATE.md §2): `docair serve` after each save. A picture none of whose parts the change touched is taken over; another is laid out from its last layout.
+ *
+ * @calls docair-viewer.page_state.touched "what the change touched"
+ ***/
+pub fn render_page_kept(
+    graph: &Graph,
+    keep: Option<&Path>,
+    changed: Option<&Changed>,
+    state: &mut crate::page_state::PageState,
+) -> String {
+    render(graph, keep, changed, Some(state))
+}
+
+fn render(
+    graph: &Graph,
+    keep: Option<&Path>,
+    changed: Option<&Changed>,
+    state: Option<&mut crate::page_state::PageState>,
+) -> String {
+    let _t = docair_core::timing::stopwatch("page");
+    let last = state.as_deref();
+    let touched = last
+        .and_then(|s| s.graph.as_ref())
+        .and_then(|g| page_state::touched(g, graph));
+    let all = {
+        let _t = docair_core::timing::stopwatch("page: pictures worked out");
+        let prev = match (last, &touched) {
+            (Some(s), Some(t)) => s.graph.as_ref().map(|g| Prev {
+                graph: g,
+                kept: &s.pictures,
+                touched: t,
+            }),
+            _ => None,
+        };
+        spots(graph, prev.as_ref())
+    };
+    let mut drawn = draw_all(graph, &all, keep, last.map(|s| &s.pictures));
+    if docair_core::timing::on() {
+        eprintln!("docair timing: page: {:?}", drawn.counts);
+    }
+    if let Some(s) = state {
+        s.pictures = all
+            .idents
+            .iter()
+            .cloned()
+            .zip(std::mem::take(&mut drawn.kept))
+            .collect();
+        s.graph = Some(graph.clone());
+        s.counts = drawn.counts;
+    }
+    let _rest = docair_core::timing::stopwatch("page: panels, index and the file");
     let mut packed = drawn.packed;
     // The changes section: each changed flow's picture, before and after, packed after the others.
     let view = changed.map(|c| page_changes::change_view(graph, c, keep));

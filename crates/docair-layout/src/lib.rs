@@ -11,12 +11,14 @@ pub mod draw;
 pub mod text;
 
 mod hand_move;
+mod incremental;
 mod layered;
 mod router;
 mod topdown;
 mod word_spots;
 
 pub use hand_move::{MoveOutcome, PartMove, ReroutedLine, ShiftedPart, move_part};
+pub use incremental::{try_update_layout, update_layout};
 pub use layered::Direction;
 pub use router::Routes;
 pub use text::Monospace;
@@ -155,6 +157,7 @@ const SOURCES: &[&str] = &[
     include_str!("text.rs"),
     include_str!("draw.rs"),
     include_str!("hand_move.rs"),
+    include_str!("incremental.rs"),
 ];
 
 fn fnv(h: &mut u64, bytes: &[u8]) {

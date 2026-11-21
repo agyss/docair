@@ -101,6 +101,9 @@ pub struct ProjectSession {
     /// `docair serve --changes <A> [--to <B>]`: the page also shows what B (the working tree without
     /// one) changes since commit A.
     pub changes: Option<ComparedSides>,
+    /// The page kept between writes, so the next one redoes only what a change touched
+    /// (docs/REGENERATE.md §2).
+    pub page: Mutex<docair_viewer::page_state::PageState>,
 }
 
 /// What writing a page with a changes section came to: the commit compared from when it is not the
@@ -169,7 +172,15 @@ impl ProjectSession {
             save,
             untrusted,
             changes: None,
+            page: Mutex::default(),
         })
+    }
+
+    /***
+     * Scan again after the given paths changed (docs/REGENERATE.md §2.1). The scan from the changed paths (§4, step A, the scan session's) goes here; until it is there, the whole project is scanned.
+     ***/
+    pub fn rescan_changed(&mut self, _changed: &[PathBuf]) -> Result<()> {
+        self.rescan()
     }
 
     pub fn rescan(&mut self) -> Result<()> {
@@ -215,7 +226,11 @@ impl ProjectSession {
             };
             match pair {
                 Ok(pair) => {
-                    std::fs::write(&html, crate::commits::changes_page(&pair))?;
+                    let mut page = self.page.lock().unwrap_or_else(|e| e.into_inner());
+                    std::fs::write(
+                        &html,
+                        crate::commits::changes_page_with(&pair, Some(&mut page)),
+                    )?;
                     std::fs::write(
                         self.out.join("changes.json"),
                         serde_json::to_string_pretty(&pair.changes)? + "\n",
@@ -229,7 +244,8 @@ impl ProjectSession {
                 }
             }
         }
-        docair_viewer::write_html(&self.graph, &html)?;
+        let mut page = self.page.lock().unwrap_or_else(|e| e.into_inner());
+        docair_viewer::write_html_kept(&self.graph, &html, &mut page)?;
         Ok((html, compared))
     }
 
@@ -458,6 +474,8 @@ pub struct ServedProject {
     comparing: std::sync::atomic::AtomicBool,
     /// What the last page written with a changes section came to.
     compared: Mutex<CompareOutcome>,
+    /// What wakes the watcher for a rebuild without a file event (`wake`).
+    wake: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl std::fmt::Debug for ServedProject {
@@ -501,6 +519,7 @@ impl ServedProject {
             seen: Mutex::new(seen),
             comparing: Default::default(),
             compared: Mutex::new(compared),
+            wake: Mutex::new(None),
         })
     }
 
@@ -518,6 +537,7 @@ impl ServedProject {
             seen: Mutex::new(seen),
             comparing: Default::default(),
             compared: Default::default(),
+            wake: Mutex::new(None),
         })
     }
 
@@ -540,6 +560,20 @@ impl ServedProject {
     /// The documentation written again; the new version.
     fn written(&self, session: &ProjectSession) -> Result<u64> {
         let (_, compared) = session.write_outputs_comparing()?;
+        // The layouts kept for `docair build --from-serve` (docs/REGENERATE.md §8).
+        let saved = {
+            let _t = docair_core::timing::stopwatch("serve: layouts kept on disk");
+            session
+                .page
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .save(&session.out.join("serve"))
+        };
+        if let Err(e) = saved {
+            eprintln!(
+                "docair serve: the layouts are not kept for docair build --from-serve: {e:#}"
+            );
+        }
         *self.compared.lock().unwrap_or_else(|e| e.into_inner()) = compared;
         *self.seen.lock().unwrap_or_else(|e| e.into_inner()) =
             files_seen(&session.root, &session.out);
@@ -550,18 +584,53 @@ impl ServedProject {
      * Scan the project again and write its documentation again when its files changed since they were last scanned.
      ***/
     pub fn refresh(&self) -> Result<bool> {
+        self.refresh_changed(&[], false)
+    }
+
+    /***
+     * As `refresh`, given the paths that changed (docs/REGENERATE.md §2.1); with `force`, even when the files look the same, as when a code index made in the background landed (§4). The files are fingerprinted before the scan, so a file changed during it is seen as changed the next time.
+     *
+     * @calls docair-server.project.project-session.rescan_changed "scans again, from the changed paths"
+     ***/
+    pub fn refresh_changed(&self, changed: &[PathBuf], force: bool) -> Result<bool> {
         let (root, out) = {
             let s = self.lock();
             (s.root.clone(), s.out.clone())
         };
         let now = files_seen(&root, &out);
-        if *self.seen.lock().unwrap_or_else(|e| e.into_inner()) == now {
+        if !force && *self.seen.lock().unwrap_or_else(|e| e.into_inner()) == now {
             return Ok(false);
         }
         let mut s = self.lock();
-        s.rescan()?;
+        s.rescan_changed(changed)?;
         self.written(&s)?;
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = now;
         Ok(true)
+    }
+
+    /// What wakes the watcher for a rebuild without a file event, set by the watcher.
+    pub fn set_wake(&self, wake: Box<dyn Fn() + Send + Sync>) {
+        *self.wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
+    }
+
+    /***
+     * Ask the watcher to write the documentation again though no file changed: a code index made in the background landed (docs/REGENERATE.md §4, step B).
+     ***/
+    pub fn wake(&self) {
+        if let Some(w) = self.wake.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            w();
+        }
+    }
+
+    /// The page kept between writes: forget the layouts of one picture, or of all, and write the
+    /// page again (docs/REGENERATE.md §7); the new version.
+    pub fn lay_out_again(&self, addr: Option<&str>) -> Result<u64> {
+        let s = self.lock();
+        s.page
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .forget(addr);
+        self.written(&s)
     }
 }
 
@@ -676,19 +745,41 @@ pub(crate) async fn page(State(config): State<crate::Config>) -> Response {
     }
 }
 
-/// `GET /api/version`: grows each time the documentation is written again; the page polls it.
+/// `GET /api/version`: grows each time the documentation is written again; the page waits on it.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServeVersion {
     pub version: u64,
 }
 
-pub(crate) async fn version(State(config): State<crate::Config>) -> Json<ServeVersion> {
-    Json(ServeVersion {
-        version: config
+/// `GET /api/version?after=n`: answer once the version is newer than `n`.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct VersionAfter {
+    after: Option<u64>,
+}
+
+/// How long `/api/version?after=n` waits for a newer version before it answers with the same.
+const VERSION_WAIT: std::time::Duration = std::time::Duration::from_secs(25);
+
+/***
+ * The documentation's version; with `after`, answered as soon as it is newer than that, or after 25 s with the same (docs/REGENERATE.md §6), so the page learns of a new page at once instead of asking every 5 s.
+ ***/
+pub(crate) async fn version(
+    State(config): State<crate::Config>,
+    axum::extract::Query(q): axum::extract::Query<VersionAfter>,
+) -> Json<ServeVersion> {
+    let now = || {
+        config
             .project
             .as_ref()
-            .map_or(0, |s| s.version.load(Ordering::SeqCst)),
-    })
+            .map_or(0, |s| s.version.load(Ordering::SeqCst))
+    };
+    if let Some(after) = q.after {
+        let until = tokio::time::Instant::now() + VERSION_WAIT;
+        while now() <= after && tokio::time::Instant::now() < until {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    Json(ServeVersion { version: now() })
 }
 
 /// The answer to `/api/ask`, `/api/word` and `/api/glossary`.
@@ -806,6 +897,44 @@ pub(crate) async fn apply(
     })
     .await??;
     Ok(Json(done))
+}
+
+/// Which picture to lay out again (`POST /api/relayout`): its address, none for every picture.
+#[derive(Debug, Default, Deserialize)]
+pub struct RelayoutChoice {
+    #[serde(default)]
+    pub addr: Option<String>,
+}
+
+/// What laying out again came to: the page is written again.
+#[derive(Debug, Serialize)]
+pub struct ServeRelaid {
+    pub regenerated: bool,
+    pub version: u64,
+}
+
+/***
+ * `POST /api/relayout`: forget the kept layouts of a picture, or of all, and write the page again, those pictures laid out from the layouts kept under their keys or from scratch (docs/REGENERATE.md §7): a picture updated after many saves drifts from what a new layout gives, and is never laid out again by itself.
+ *
+ * @calls docair-server.project.served-project.lay_out_again "forgets the kept layouts and writes the page"
+ ***/
+pub(crate) async fn relayout(
+    State(config): State<crate::Config>,
+    body: Option<Json<RelayoutChoice>>,
+) -> Result<Json<ServeRelaid>, ApiError> {
+    let Some(shared) = config.project.clone() else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "this server serves no project".into(),
+        ));
+    };
+    let addr = body.and_then(|Json(c)| c.addr);
+    let version =
+        tokio::task::spawn_blocking(move || shared.lay_out_again(addr.as_deref())).await??;
+    Ok(Json(ServeRelaid {
+        regenerated: true,
+        version,
+    }))
 }
 
 /// The tags the code repeats in the served project, and the patch that removes them (`GET /api/tidy`).
@@ -1648,6 +1777,87 @@ mod tests {
             ..Default::default()
         };
         (project, crate::router(config))
+    }
+
+    /// docs/REGENERATE.md §2.1: no change, no page; a wake (a code index landed) writes it anyway; a
+    /// changed file does, and the page keeps its layouts in `.docair/serve` for `docair build --from-serve`.
+    #[test]
+    fn a_page_is_written_again_on_a_change_or_a_wake() {
+        let dir = tiny();
+        let (project, _) = served(dir.path());
+        let v = project.version.load(Ordering::SeqCst);
+        assert!(
+            !project.refresh_changed(&[], false).unwrap(),
+            "nothing changed"
+        );
+        assert!(project.refresh_changed(&[], true).unwrap(), "woken");
+        assert_eq!(project.version.load(Ordering::SeqCst), v + 1);
+        std::fs::write(
+            dir.path().join("NOTES.md"),
+            "# notes\n\n```docair\nThe notes.\n\n@id      notes\n@kind    module\n@part-of tiny\n```\n",
+        )
+        .unwrap();
+        let readme = dir.path().join("README.md");
+        assert!(project.refresh_changed(&[readme], false).unwrap());
+        assert_eq!(project.version.load(Ordering::SeqCst), v + 2);
+        assert!(dir.path().join(".docair/serve/state.json").is_file());
+    }
+
+    /// docs/REGENERATE.md §6: `/api/version?after=n` answers as soon as the version is newer than n;
+    /// without `after` at once.
+    #[tokio::test]
+    async fn the_version_waits_for_a_newer_page() {
+        let dir = tiny();
+        let (project, router) = served(dir.path());
+        let v = project.version.load(Ordering::SeqCst);
+        let get = |q: String| {
+            axum::http::Request::get(format!("/api/version{q}"))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let (status, body) = call(router.clone(), get(String::new())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(&format!("\"version\":{v}")), "{body}");
+        let writer = project.clone();
+        let later = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            tokio::task::spawn_blocking(move || writer.rewrite().unwrap())
+                .await
+                .unwrap()
+        });
+        let started = std::time::Instant::now();
+        let (_, body) = call(router, get(format!("?after={v}"))).await;
+        let took = started.elapsed();
+        assert!(body.contains(&format!("\"version\":{}", v + 1)), "{body}");
+        assert!(
+            took >= std::time::Duration::from_millis(250),
+            "it waited: {took:?}"
+        );
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        later.await.unwrap();
+    }
+
+    /// docs/REGENERATE.md §7: laying a picture out again writes the page again.
+    #[tokio::test]
+    async fn lay_out_again_writes_the_page_again() {
+        let dir = tiny();
+        let (project, router) = served(dir.path());
+        let v = project.version.load(Ordering::SeqCst);
+        let req = axum::http::Request::post("/api/relayout")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"addr":"layer/apps"}"#))
+            .unwrap();
+        let (status, body) = call(router.clone(), req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("\"regenerated\":true"), "{body}");
+        assert_eq!(project.version.load(Ordering::SeqCst), v + 1);
+        let all = axum::http::Request::post("/api/relayout")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let (status, _) = call(router, all).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(project.version.load(Ordering::SeqCst), v + 2);
     }
 
     /// A change counts when it is in the project, outside the outputs and outside what a scan skips.

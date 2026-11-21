@@ -91,8 +91,12 @@ impl Adapter for RustAdapter {
             .map(|f| read_file(f, rules()))
             .collect();
         let mut diags = Vec::new();
-        let index = index_of(project, &mut diags);
+        let index = {
+            let _t = docair_core::timing::stopwatch("rust: code index");
+            index_of(project, &mut diags)
+        };
         let guesses = CandidateLimit::of(project.config.code.as_ref());
+        let _t = docair_core::timing::stopwatch("rust: calls linked");
         let mut facts = link_with(read, index.as_ref(), guesses);
         facts.diagnostics.extend(diags);
         facts

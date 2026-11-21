@@ -1118,11 +1118,22 @@ pub(crate) fn grid_lines_around(
     let mut pitch = p.pitch;
     let mut x = tracks(&hard_x, &soft_x, min_x, max_x, pitch, p.merge);
     let mut y = tracks(&hard_y, &soft_y, min_y, max_y, pitch, p.merge);
-    // A picture too big for 8 px tracks gets wider ones.
+    // A picture too big for 8 px tracks gets wider ones. Once they are wider than the picture, the
+    // soft tracks (the staying lines' among them) are merged further apart too: around a big
+    // picture's every line, they alone can be more than the grid may hold, and the wider lattice
+    // alone never got below it (docs/REGENERATE.md §5). Pictures that fit before fit as before.
+    let span = (max_x - min_x).max(max_y - min_y).max(1.0);
+    let mut merge = p.merge;
     while x.len() * y.len() > p.most {
-        pitch *= 1.5;
-        x = tracks(&hard_x, &soft_x, min_x, max_x, pitch, p.merge);
-        y = tracks(&hard_y, &soft_y, min_y, max_y, pitch, p.merge);
+        if pitch <= span {
+            pitch *= 1.5;
+        } else if merge <= span {
+            merge *= 1.5;
+        } else {
+            break;
+        }
+        x = tracks(&hard_x, &soft_x, min_x, max_x, pitch, merge);
+        y = tracks(&hard_y, &soft_y, min_y, max_y, pitch, merge);
     }
     let (nx, ny) = (x.len(), y.len());
     let n = nx * ny;

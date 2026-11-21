@@ -1,168 +1,218 @@
-# Regenerate only what changed
+# The page follows each save
 
-Design for docair-cof: when a page is made again or opened again, only
-what changed is done again.
+Design for epic docair-live: with `docair serve` running, the page shows a
+saved change within seconds. Only what the change touches is worked out,
+laid out, drawn and packed again; the rest is kept from the last time.
 
-**Superseded (2026-11-18), not built.** Layout and drawing move to Rust
-(decision docair-7lz, epic docair-702, docs/SLICES.md): the browser lays out
-nothing, and the web app only uploads and shows the HTML. So §3 and §4 are
-not built. What carries over to the Rust layout: where the time goes (§1),
-and what a layout key needs (§2): only what the layout reads, and the
-layout code's version. Kept by such a key, a scan after an edit lays out
-only the pictures that changed.
+This replaces the earlier design of the same name (docair-cof, 2026-11-18:
+layouts kept in the browser), which the move of layout and drawing to Rust
+superseded. What carries over: a layout is kept by a key made of what the
+layout reads and the layout code's version (`docair_layout::key`), and an
+open page takes the new state without starting from nothing.
+
+Decided with the user (2026-11-21):
+
+* The cold start does not matter; a save does, within seconds.
+* Pictures in `serve` may depend on the edits made before: a picture is
+  updated from its last layout, not laid out from scratch.
+* `docair build --from-serve` takes serve's last layouts as its base, and
+  still checks that they are up to date with the code.
+* No second rust-analyzer kept running beside the editor's (about 1 GB).
+
+The work is split between two sessions: this epic builds the page side; the
+scan and the code index (§4) are steps of their own, for the session that
+makes the scan faster.
 
 ## 1. Where the time goes
 
-Measured on docair itself, through the web app on localhost, 1440×960:
+Measured on docair itself (2,159 parts, 6,481 lines, about 2,000 pictures),
+release build, `DOCAIR_TIMING=1`, which says each step's time on stderr
+(`docair_core::timing`):
 
-| Step | Time | Done again |
-|------|------|------------|
-| Upload, 280 files | 90 ms, about 5 MB | every generation |
-| The server reads the files and makes the page | 0.42 s | every generation |
-| The answer comes back: the page (4.5 MB, the graph inside) and the graph again (1.8 MB) | 50 ms, 6.6 MB | every generation |
-| The page starts and draws its first layer | 0.87 s | every page |
-| … of which laying out the first layer | 0.22 s | every page |
-| Code (417 parts, 740 lines), laid out | 11.8 s | every page |
-| Code, drawn from a kept layout | 0.19 s | kept within one page only, for its last six pictures |
+| Step | Before | Now |
+|------|--------|-----|
+| the code index, after a change to a `.rs` file | 13.6 s | 13.6 s (§4, the scan session's) |
+| the scan, with the index kept | 1.5 s | 1.5 s |
+| working out every picture: 6 layers, ~260 sections twice, ~1,680 slices | 12.9 s | 4.9 s (§3) |
+| … after a save, only what it touched (§2.3): a doc block's words | 12.9 s | 1.4 s, 1,531 of 2,051 pictures taken over |
+| layouts, all kept (4 threads) | 0.5 s | 2 ms, from memory |
+| a picture whose parts changed: Code (889 parts, 2,166 lines), one new function | 270 s from scratch, twice | 2.1 s updated (§5) |
+| drawing and packing every picture (4 threads) | 1.6 s | only the pictures worked out again |
+| panels, index, writing the 13 MB page | 0.85 s | 0.8 s |
+| the page in the browser | a reload every 5 s at most | at once (§6) |
+| **a save, from the file written to the page on disk** | about 31 s, minutes when a big picture changed | **4.5 s** (a doc block's words), **5.8 s** (a new part and line) |
 
-Making the graph is quick. What takes long is laying out the pictures, and
-a page does that again each time it opens: after *Apply & regenerate*,
-after a new upload of the same project, after a reload.
+A save that changes one function in docair's viewer touches about 25
+pictures: the Code layer (twice), the sections of the boxes around it, the
+slices through it. Laid out from scratch, those alone take minutes.
 
-## 2. The layout key
+## 2. A save in `docair serve`
 
-The page keys each layout by a hash of everything it is made from
-(`layoutKey`): the parts, the lines, the hints and the canvas. A layout
-depends on nothing else: no clock and no chance (ELK runs with its fixed
-seed). That is why a kept layout can stand in for a new one.
+1. **The watcher** collects the changed paths. It rebuilds 0.4 s after the
+   last change, and at most 3 s after the first while changes keep coming.
+   It also rebuilds when a code index made in the background lands (§4).
+2. **The graph** is made whole, every time: ids, references, guessed calls
+   and the words that name parts are matched across the whole project, so a
+   change in one file can change what another means. With the changed paths
+   given, the scan does less (§4).
+3. **The pictures** are worked out once per graph (§3), and only where the
+   graph changed. A picture is worked out again when one of its parts is
+   touched: a node that changed, an end of a line that changed, an end of a
+   line that carries a changed datum, the box a part came into or left (a
+   slice counts a box's own parts it leaves out). And when one of its
+   *closed* boxes holds a part that came, went or moved, or an end of a
+   changed line: a closed box stands for what it holds, an open one shows
+   its parts itself. The six layers and the walks are worked out each time;
+   a change to the system, the view, the flows or the walkthroughs works
+   everything out again. Any other picture is taken over, its lines' graph
+   indices mapped to the new graph by the lines' ids.
+4. **Layouts:** each picture is kept by its address between saves: its
+   layout input, its key, its layout and its packed drawing. The same key:
+   kept. Another key: its last layout updated (§5). No layout before: from
+   the layouts kept under their keys, or from scratch.
+5. **Drawing and packing** only for the pictures whose layout or drawing
+   changed; the others' packed drawings are taken as they were.
+6. **The page follows** (§6).
 
-Today's key holds more than the layout reads:
+## 3. Working out the pictures once
 
-| In today's key | The layout reads it | Changes when |
-|----------------|---------------------|--------------|
-| a part's id, its box, its size (`w`, `h`, `minW`) | yes | the picture changes |
-| a box's name | yes: its width is measured | a box is renamed |
-| a part's name | no, only its size | a test passes or fails: `✓` becomes `✗` |
-| a part's classes (closed box, test result) | no | a test result |
-| a line's id, ends and words | yes | the picture changes |
-| a line's `count`, `members`, `via`, `dangling`, `kind` | no | `members`: a line is added anywhere before it in the graph |
-| the hints: lines against their arrow, how far each points ahead | yes | the flows change |
-| the canvas, the direction asked for, the font | yes | the window, the font |
+Each slice and each section looked the whole graph up again, and each
+section worked out all six layers to find the one it belongs to. Now
+`layer_view::Pictures` and `slice::Slicer` look the graph up once per page,
+and the layers are worked out once for all sections. A type's own section
+draws its uses of other types, which can change what a layer draws but not
+what it is about: for a type, only a layer about it is taken from the
+shared layers, else its layers are worked out as before. The pictures are
+the same, byte for byte (the golden pictures of `tests/svg.rs` and the page
+tests).
 
-`members` are positions in the graph's list of lines, so one new line
-renumbers every line after it. Measured with four pages the server made
-from docair, each with one change:
+## 4. The scan and the code index (the other session's steps)
 
-| Change | Layers laid out again: today's key | the layout's fields only |
-|--------|------------------------------------|--------------------------|
-| a doc block's description gets a line | none | none |
-| one new `@calls` | all 6 | apps, code |
-| one e2e test fails | code | none |
+* **A scan from the changed paths:** one function in docair-core, given the
+  changed paths, returns the whole graph, as `scan` does. Until it is there,
+  serve calls `scan`.
+* **The code index is not waited for:** after a save, the last kept index
+  is taken with the edited files' lines mapped to their new places and their
+  calls from the syntax; the full index is made in the background, and when
+  it lands, serve rebuilds once more without a file event.
+* **Comments only:** an edit that changes only comments or doc blocks keeps
+  the index, its positions moved to the new lines.
 
-The new key is made of what the layout reads, and of the layout code's
-version: a hash of the viewer's and ELK's scripts (1.9 MB, 3 ms), since
-kept layouts would outlive the page that made them. The worker gets
-exactly that input, made by the same function, so a layout cannot depend
-on something the key leaves out.
+## 5. A layout updated, not made again
 
-## 3. Kept layouts across pages
+`docair_layout::update(old input, old layout, new input, options)`:
 
-A layout is kept by its key beyond the page:
+* **Parts** are matched by id and box. A matched part keeps its place; a
+  part whose input grew makes room by widening everything to its right, and
+  grows by as much as its input did (a placed part can be wider than its
+  input, where many lines meet it).
+* **Gone parts** are left out; each box that lost one fits what it still
+  holds, as a box does after a part is moved out of it (docair-702.41).
+* **New parts:** a new part, or a new box with what it holds laid out on
+  its own, goes below the other parts of its box, at its left. Room is made
+  by a band: everything below the band's line moves down by the new part's
+  height, so boxes across the line grow and nothing overlaps; a part too
+  wide for its box makes room the same way to the right.
+* **Lines** that stay keep their routes, moved with the bands. New lines,
+  lines at a new, grown or moved part, and lines that now cross a new part
+  are routed around everything else, as after a move by hand
+  (docair-702.40), in one round, and their words placed. On docair's Code
+  layer (889 parts, 2,166 lines), one new function: 24 lines routed again,
+  2,142 keep their ways, 2.1 s (five rounds took 13.8 s, two 4.2 s; laid
+  out from scratch, 270 s).
+* **Not updated, laid out from scratch:** when more than a quarter of the
+  parts are new or gone (and more than 8), when a part gets its first part
+  or loses its last, or when the old layout does not fit the old input.
 
-* **A page on its own** (opened from disk or served): in IndexedDB. Tested
-  in Chromium on a `file://` page: Code's layout (290 kB) is written in
-  5.8 ms and read back, the same, in 4.9 ms. Pages from disk share one
-  store; their keys do not collide, since they are made from the pictures.
-  Firefox and Safari are not tested yet. Where a browser gives no storage,
-  the page works as today.
-* **In the web app**, the page runs in a sandboxed frame, where storage
-  throws (tested: `SecurityError`). The app keeps the layouts in its own
-  IndexedDB. The page asks for a layout by its key and hands over each new
-  one; the app answers, with messages like the ones they exchange now. The
-  app writes a mark into the page it shows, so the page asks from its first
-  layer on.
-* **How many:** no limit of its own. A browser bounds what a site may
-  store and clears it when the disk runs short; a write it refuses is
-  skipped, and that picture is laid out as today. docair's six layers take
-  320 kB, and each changed picture adds its layout (Code's: 290 kB).
-* **Trust:** a layout is data: numbers, part and line ids, the name of a
-  way. The page checks its shape before it draws it, and the app its size
-  before it keeps it; the app takes messages from the frame only, as now.
-  A bad layout can draw a wrong picture, never run code.
+Routing a few lines around a big picture's every staying line gave the
+router more tracks than its grid may hold, and widening its lattice never
+got below that: the router now also merges the soft tracks further apart
+once its lattice is wider than the picture, and stops past that. Pictures
+that fit before take the same way, so their layouts are the same.
 
-| Case | Today | With kept layouts |
-|------|-------|-------------------|
-| The page opened again, then Code | 11.8 s | 0.2 s |
-| The page's first layer | 0.22 s laid out | 15 ms, drawn from its kept layout |
-| *Apply & regenerate* after a description edit, then Code | 11.8 s | 0.2 s |
-| *Apply & regenerate* after one new call | all six layers laid out | apps and code laid out |
+Over many saves a picture drifts from what a new layout would give. It is
+not laid out again by itself: that would make it jump. *Lay out again*
+(§7) does it on request.
 
-## 4. The open page takes the new graph (web app)
+## 6. The page follows
 
-Today *Apply & regenerate* loads a new page into the frame. It starts
-again (0.87 s on docair's page) and opens on its first layer. The app gives
-it back the hidden sections and the tests switch; the layer, the zoom, the
-selection and the opened boxes are lost.
+* **Waiting, not polling:** `GET /api/version?after=<n>` answers as soon as
+  the version is newer than `n`, or after 25 s with the same; the page asks
+  again at once. Before: every 5 s.
+* **The reload keeps the view:** before it reloads, the page notes in
+  `history.state` (it works in the web app's sandboxed frame, where storage
+  throws) the picture, the selected part and the zoom; after it, it opens
+  that picture, selects that part and zooms around it (or around the
+  picture's middle), as the layout may have moved things. The address keeps
+  the picture already; `?editor` stays.
+* **Not patched in place:** the page is reloaded, not updated part by part:
+  a page that started once has no state left over from the old graph, and
+  `page.js` stays within its 1,050-line budget, which only the user raises.
 
-Instead, the app sends the new graph into the open page (`docair:graph`),
-and the page takes it in place:
+## 7. Lay out again
 
-* **Kept:** the layer, zoom and pan, the selected part (cleared when it is
-  gone), opened boxes, hidden sections, the tests switch, the walkthroughs
-  replies added (where their parts still exist).
-* **Drawn:** from the kept layouts where a picture's key is the same; laid
-  out again where it is not.
-* **What it needs:** the graph, which the answer already carries, and the
-  page's texts (`docair-html`, 0.35 MB), which the app takes from the new
-  page. The server's API does not change.
-* **When not:** the open page's viewer must be the one that made the new
-  page. docair writes the viewer's version into each page (the hash of §2),
-  and the page says its own in `docair:ready`. When they differ (docair was
-  updated in between), the app loads the new page, as today.
+`POST /api/relayout` with an address, or none for every picture: serve
+forgets the kept layouts of that picture (or all) and writes the page again,
+those pictures laid out from the layouts kept under their keys or from scratch. The
+page offers it, served, as a button at the bottom right of the picture.
 
-In the page, `boot()` splits in two: what is done once (Cytoscape, the
-wiring, the workers) and what is done for each graph (the maps,
-`classify()`, the view, the glossary and the walks, the tree and the bars,
-the picture). The risk is state left over from the old graph; the test is
-that a page updated in place equals a new page of the same graph.
+## 8. `docair build --from-serve`
 
-## 5. Not in this design
+`serve` writes its kept layouts after each rebuild to `.docair/serve/`:
+`state.json` (the layout code's version, and for each picture's address its
+key and its layout's file) and the layouts, each in a file named by its
+content. `state.json` is replaced in one step, so a build never reads half
+of it; layout files nothing names any more are removed.
 
-* **A changed picture is laid out in full.** One new call still costs Code
-  11.8 s. Keeping the boxes that did not change and routing only the lines
-  near the change (as a drag does: about 0.4 s) is a later step; over many
-  edits, such a picture drifts from what a new layout would give.
-* **The server** makes a page in 0.42 s, keeps nothing between requests
-  and runs two copies in the cluster. Keeping uploads or graphs there would
-  gain little.
-* **Uploading only changed files** saves about 5 MB per regeneration,
-  which matters only on a slow link.
-* **An answer without the page:** with §4, the app needs 2.1 MB of the
-  6.6 MB answer.
-* **The CLI's code index:** `docair build .` takes 6.0 s, 5.5 s of it
-  `rust-analyzer scip`. Keeping the index by a hash of the Rust files is
-  the cache per file hash that ADAPTERS.md §11 plans for later.
+`docair build --from-serve` builds as always (the graph from the files),
+and for each picture:
 
-## 6. Decided (2026-11-18)
+| Serve's state for its address | The build |
+|-------------------------------|-----------|
+| the same key | takes serve's layout |
+| another key | updates serve's layout to the code (§5) |
+| none, or another layout code version | lays it out from the layouts kept under their keys, or from scratch |
 
-1. **The canvas counts exactly in the key.** A regenerated page keeps the
-   window, so its layouts are found again.
-2. **No size limit of docair's own** (§3): the browser's bounds are enough.
-3. **The open page takes the new graph (§4)**, as step 3, after kept
-   layouts.
+It says how many pictures it took, updated and laid out, and warns when
+there was no state or it could not be used. Without the flag, `docair
+build` and CI lay out from scratch, as before.
 
-## 7. Steps (docair-cof.1, .2, .3)
+## 9. Steps
 
-1. **The key:** made of what the layout reads and the layout code's
-   version; the worker gets the same input. A fixture with the three
-   changes of §2, and a test of their keys.
-2. **Kept layouts:** IndexedDB for a page on its own, the app's store in
-   the web app. e2e: a reloaded page draws Code without
-   laying it out; *Apply & regenerate* after a description edit lays out
-   nothing. SPEC §3.5.
-3. **In place:** `boot()` in two, `docair:graph`, the version check. e2e:
-   the frame is not loaded again; the layer, zoom and selection stay; the
-   result equals a new page. SPEC §10.6.
+| Step | Issue | What |
+|------|-------|------|
+| 1 | docair-live.1 | this design, the decisions as beads |
+| 2 | docair-live.2 | where the time goes: `DOCAIR_TIMING` (§1) |
+| 3 | docair-live.3 | the pictures worked out once per graph (§3) |
+| 4 | docair-live.4 | `docair_layout::update` (§5) |
+| 5 | docair-live.5 | serve keeps the page between saves (§2.3 to §2.5) |
+| 6 | docair-live.6 | the watcher: changed paths, quiet and at most, the index landing (§2.1) |
+| 7 | docair-live.7 | the page follows: waiting for the version, the view kept (§6) |
+| 8 | docair-live.8 | lay out again (§7) |
+| 9 | docair-live.9 | serve's state on disk, `docair build --from-serve` (§8) |
+| 10 | docair-live.10 | tests, the numbers after, SPEC, ARCHITECTURE |
+| A | docair-live.11 | a scan from the changed paths (§4), the other session |
+| B | docair-live.12 | the code index not waited for (§4), the other session |
+| C | docair-live.13 | comments only keep the index (§4), the other session |
 
-Each step is measured before and after, keeps `docair check` at 0 errors
-and 0 warnings, and keeps e2e green.
+## 10. Built (docair-live.2 to .10)
+
+| Piece | Where |
+|-------|-------|
+| timing points, `DOCAIR_TIMING=1` | `docair_core::timing`; points in `scan`, docair-lang-rust, `doc_page` |
+| the pictures worked out once per graph | `layer_view::PictureSet`, `slice::Slicer` |
+| a layout updated | `docair_layout::update_layout`, `try_update_layout` (`incremental.rs`); the router's grid loop |
+| the page kept between saves | `docair_viewer::page_state` (`PageState`, `ChangeReach`, `save`, `load`); `doc_page::render_page_kept`, `write_html_kept` |
+| serve: the watcher, the version, lay out again, the state on disk | `serve.rs` `watch`; `project.rs` `refresh_changed`, `wake`, `lay_out_again`, `version`, `relayout`, `written` |
+| the page | `page.js` `wait`, `again`, `viewBack`, the `#relayout` button (`page.html`, `page.css`); 1,050 lines |
+| `docair build --from-serve` | `docair-cli` `cmd_scan` |
+
+Tests: the update (the same input, a new part, a gone part, a grown part,
+too many changes, the same every time, no overlaps); docair's Code layer
+updated after one new function, every line drawn (`tests/update_big.rs`, by
+hand); the kept page's pictures are a new page's after a new function, a
+rename, a removal, a move and a renamed datum; serve's layouts saved, read
+back and a checked base; serve written again on a change or a wake, the
+version waited on, lay out again; e2e `live.spec.ts`: a save on the page
+within seconds where the reader was, `docair build --from-serve`, lay out
+again.

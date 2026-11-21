@@ -552,6 +552,15 @@ pub fn findings_file(pair: &CommitPair) -> PathBuf {
  * @calls docair-viewer.doc_page.render_page_with "writes the page with its changes section"
  ***/
 pub fn changes_page(pair: &CommitPair) -> String {
+    changes_page_with(pair, None)
+}
+
+/// As `changes_page`, keeping the pictures in `state` for the next page, as `docair serve` does
+/// after each save (docs/REGENERATE.md §2).
+pub fn changes_page_with(
+    pair: &CommitPair,
+    state: Option<&mut docair_viewer::page_state::PageState>,
+) -> String {
     let findings: Option<serde_json::Value> = std::fs::read_to_string(findings_file(pair))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
@@ -561,11 +570,13 @@ pub fn changes_page(pair: &CommitPair) -> String {
         findings: findings.as_ref(),
         links: &pair.links,
     };
-    docair_viewer::doc_page::render_page_with(
-        &pair.b,
-        Some(&docair_scip::cache_dir().join("layouts")),
-        Some(&changed),
-    )
+    let keep = docair_scip::cache_dir().join("layouts");
+    match state {
+        Some(s) => {
+            docair_viewer::doc_page::render_page_kept(&pair.b, Some(&keep), Some(&changed), s)
+        }
+        None => docair_viewer::doc_page::render_page_with(&pair.b, Some(&keep), Some(&changed)),
+    }
 }
 
 #[cfg(test)]

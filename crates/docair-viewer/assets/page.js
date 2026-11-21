@@ -310,14 +310,10 @@ function wireChat() {
       if (!ai.enabled) off('ai-off', ai.error);
     })
     .catch(() => off('no-server'));
-  // Documentation written again from elsewhere (another tab, the project's files): the page reloads.
-  let version = null;
-  const now = () => fetch(`${base}/api/version`).then((r) => r.json()).then((v) => v.version);
-  now().then((v) => (version = v)).catch(() => {});
-  setInterval(() => {
-    if (document.visibilityState !== 'visible' || version === null) return;
-    now().then((v) => v > version && location.reload()).catch(() => {});
-  }, 5000);
+  // Documentation written again (a save, another tab): the page waits for it and opens again where it was.
+  let version = 0;
+  const wait = (v, t = Date.now()) => fetch(`${base}/api/version?after=${v}`).then((r) => r.json()).then((n) => (n.version > version ? again() : setTimeout(() => wait(Math.max(n.version, version)), Date.now() - t < 1000 ? 5000 : 0)), () => setTimeout(() => wait(v), 5000));
+  fetch(`${base}/api/version`).then((r) => r.json()).then((n) => wait((version = n.version))).catch(() => {});
   const busy = (on) => {
     chat.querySelector('[data-test="typing"]').hidden = !on;
     for (const b of chat.querySelectorAll('.tool, .send, .suggest')) b.disabled = on;
@@ -328,6 +324,7 @@ function wireChat() {
     if (!r.ok) throw new Error(a.error || `${r.status}`);
     return a;
   };
+  $('#relayout').addEventListener('click', () => post('/api/relayout', { addr: S.addr }).then(again, (e) => toast(e.message)));
   const ask = async (path, body, said, chips) => {
     if (said) say({ role: 'user', text: said, ...(chips?.length ? { chips } : {}) });
     busy(true);
@@ -341,7 +338,7 @@ function wireChat() {
       if (said) state.history.push({ question: said, answer: a.reply?.answer || '', ...(body.context ? { context: body.context } : {}) });
       if (a.version) version = a.version;
       save();
-      if (a.regenerated) location.reload();
+      if (a.regenerated) again();
     } catch (err) { say({ role: 'error', text: err.message }); }
     busy(false);
   };
@@ -390,7 +387,7 @@ function wireChat() {
         if (state.log[k]) state.log[k].applied = true;
         if (a.version) version = a.version;
         save();
-        if (a.regenerated) location.reload();
+        if (a.regenerated) again();
       } catch (err) {
         say({ role: 'error', text: err.message });
       }
@@ -408,13 +405,13 @@ function wireChat() {
       let job = await post('/api/explain', { a: explain.dataset.a, b: explain.dataset.b || undefined }).catch((err) => ({ error: err.message }));
       for (; job.running; job = await fetch(`${base}/api/explain/${job.job}`).then((r) => r.json()).catch((err) => ({ error: err.message }))) (S.review = job), reviewShown(job), await new Promise((r) => setTimeout(r, 1000));
       (S.review = job), reviewShown(job);
-      if (job.phase === 'done') location.reload();
+      if (job.phase === 'done') again();
     }
     const one = ev.target.closest('[data-tidy-one]');
     if (!one && !ev.target.closest('[data-test="tidy-apply"]')) return;
     const tags = (one ? [one] : [...document.querySelectorAll('#details .tidy-tag input:checked')]).map((x) => ({ node: x.dataset.node, tag: x.dataset.tag }));
     const a = tags.length && (await post('/api/tidy', { tags }).catch((err) => toast(err.message)));
-    if (a?.regenerated) location.reload();
+    if (a?.regenerated) again();
   });
 }
 
@@ -698,6 +695,10 @@ function fit() {
   look(S.full.x + S.full.w / 2, S.full.y + S.full.h / 2, fitScale());
   S.fitted = true;
 }
+/** A new page, opened where this one is (docs/REGENERATE.md §6): the address keeps the picture; the selection and the zoom around it (the selected part's middle, else the picture's) go into history.state, which a sandboxed frame keeps too, and come back once it shows. */
+const anchor = (id = S.selected) => { const b = id && S.svg?.querySelector(`.part[data-id="${esc(id)}"], .box[data-id="${esc(id)}"]`)?.getBBox(); return b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : S.full && { x: S.full.x + S.full.w / 2, y: S.full.y + S.full.h / 2 }; };
+const again = () => { const a = anchor(), r = $('#pic').getBoundingClientRect(); if (a && S.view && !S.fitted) history.replaceState({ ...history.state, view: { sel: S.selected, scale: r.width / S.view.w, dx: S.view.x + S.view.w / 2 - a.x, dy: S.view.y + S.view.h / 2 - a.y } }, ''); location.reload(); };
+const viewBack = (v = history.state?.view) => { if (!v) return; if (v.sel && drawnHere(v.sel)) select(v.sel); const a = anchor(); if (a) look(a.x + v.dx, a.y + v.dy, v.scale); };
 
 function setView(v) {
   [S.view, S.fitted] = [v, false];
@@ -1039,7 +1040,7 @@ unpack(IX.panels)
     wirePopups();
     wireSides();
     wireChat();
-    return show(addressOf(location.hash));
+    return show(addressOf(location.hash)).then(viewBack);
   })
   .then(() => {
     document.body.dataset.ready = 'true';

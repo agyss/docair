@@ -616,6 +616,7 @@ dependencies = [
  "miniz_oxide",
  "pulldown-cmark",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

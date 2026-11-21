@@ -19,6 +19,14 @@ use tower_http::services::{ServeDir, ServeFile};
 
 /// A change is acted on once the files have been quiet this long: a save or a checkout is many events.
 const QUIET: Duration = Duration::from_millis(400);
+/// … and at most this long after its first event, while changes keep coming (docs/REGENERATE.md §2.1).
+const AT_MOST: Duration = Duration::from_secs(3);
+
+/// What the watcher waits for: a file event, or a wake without one (a code index landed).
+enum Heard {
+    File(notify::Result<notify::Event>),
+    Wake,
+}
 /// Without file events (the system refused a watch), how often the files are looked at instead.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
 
@@ -92,14 +100,14 @@ pub fn cmd_serve(
 }
 
 /***
- * Watch the project's files by the system's file events, and write the documentation again once a change has settled; without file events, look at the files every two seconds instead.
+ * Watch the project's files by the system's file events, and write the documentation again once a change has settled: 0.4 s after its last event, at most 3 s after its first (docs/REGENERATE.md §2.1), with the paths that changed; also when woken without one (a code index made in the background landed); without file events, look at the files every two seconds instead.
  *
  * @calls docair-server.project.watched "keeps changes that can change the documentation"
- * @calls docair-server.project.served-project.refresh "scans again when the files changed"
+ * @calls docair-server.project.served-project.refresh_changed "scans again from the changed paths"
  ***/
 fn watch(project: &ServedProject) {
     let (root, out) = project.folders();
-    let refresh = || match project.refresh() {
+    let refresh = |changed: &[PathBuf], force: bool| match project.refresh_changed(changed, force) {
         Ok(true) => println!(
             "docair serve: files changed, documentation written again (version {})",
             project.version.load(Ordering::SeqCst)
@@ -107,38 +115,66 @@ fn watch(project: &ServedProject) {
         Ok(false) => {}
         Err(e) => eprintln!("docair serve: {e:#}"),
     };
-    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
-    let mut watcher = match notify::recommended_watcher(tx) {
+    let (tx, rx) = std::sync::mpsc::channel::<Heard>();
+    let wake = tx.clone();
+    project.set_wake(Box::new(move || {
+        let _ = wake.send(Heard::Wake);
+    }));
+    let mut watcher = match notify::recommended_watcher(move |ev| {
+        let _ = tx.send(Heard::File(ev));
+    }) {
         Ok(w) => w,
-        Err(e) => return look(&refresh, &e),
+        Err(e) => return look(&|| refresh(&[], false), &e),
     };
     if let Err(e) = notify::Watcher::watch(&mut watcher, &root, notify::RecursiveMode::Recursive) {
-        return look(&refresh, &e);
+        return look(&|| refresh(&[], false), &e);
     }
-    let counts = |ev: &notify::Result<notify::Event>| {
-        ev.as_ref().is_ok_and(|e| {
-            !e.kind.is_access()
-                && e.paths
-                    .iter()
-                    .any(|p| docair_server::project::watched(&root, &out, p))
-        })
+    // The paths of an event that count: inside the project, outside the output and what a scan skips.
+    let counted = |ev: &notify::Result<notify::Event>| -> Vec<PathBuf> {
+        match ev {
+            Ok(e) if !e.kind.is_access() => e
+                .paths
+                .iter()
+                .filter(|p| docair_server::project::watched(&root, &out, p))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
     };
-    while let Ok(ev) = rx.recv() {
-        if !counts(&ev) {
+    while let Ok(heard) = rx.recv() {
+        let (mut changed, mut force) = match heard {
+            Heard::Wake => (Vec::new(), true),
+            Heard::File(ev) => (counted(&ev), false),
+        };
+        if changed.is_empty() && !force {
             continue;
         }
-        // Wait until the files are quiet: what counts restarts the wait, the rest is dropped, so a
-        // build writing `target` does not hold the documentation back (docair-8l6.66).
-        let mut until = std::time::Instant::now() + QUIET;
+        // Wait until the files are quiet, at most AT_MOST: what counts restarts the wait, the rest is
+        // dropped, so a build writing `target` does not hold the documentation back (docair-8l6.66).
+        let first = std::time::Instant::now();
+        let mut until = first + QUIET;
         loop {
-            match rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())) {
-                Ok(ev) if counts(&ev) => until = std::time::Instant::now() + QUIET,
-                Ok(_) => {}
+            let left = until
+                .min(first + AT_MOST)
+                .saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(Heard::File(ev)) => {
+                    let paths = counted(&ev);
+                    if !paths.is_empty() {
+                        for p in paths {
+                            if !changed.contains(&p) {
+                                changed.push(p);
+                            }
+                        }
+                        until = std::time::Instant::now() + QUIET;
+                    }
+                }
+                Ok(Heard::Wake) => force = true,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
-        refresh();
+        refresh(&changed, force);
     }
 }
 

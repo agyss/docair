@@ -337,6 +337,26 @@ pub fn to_json<T: Serialize + ?Sized>(slices: &T) -> String {
 }
 
 /***
+ * Many slices of one graph, its lookups made once (docs/REGENERATE.md §3): the same slices as `slice`, for a page's thousand of them.
+ ***/
+pub struct Slicer<'g> {
+    ix: Index<'g>,
+}
+
+impl<'g> Slicer<'g> {
+    pub fn new(graph: &'g Graph) -> Self {
+        Slicer {
+            ix: Index::new(graph),
+        }
+    }
+
+    /// As `slice`.
+    pub fn slice(&self, seed: &SliceSeed) -> Option<Slice> {
+        slice_in(&self.ix, seed)
+    }
+}
+
+/***
  * Every slice the graph offers, in the order of `seeds`.
  *
  * @calls docair-core.slice.seeds "lists what slices start from"

@@ -52,6 +52,10 @@ mod page_tidy;
  ***/
 mod page_changes;
 /***
+ * The page kept between saves: for each picture by its address, what it was made from and what it came to, so `docair serve` redoes only what a change touched (docs/REGENERATE.md §2).
+ ***/
+pub mod page_state;
+/***
  * docair's review on a pull request: a summary comment and one per change, each with its cut drawn as text, and the plan that brings the pull request's comments up to date.
  ***/
 pub mod pr;
@@ -68,10 +72,35 @@ const CSS: &str = include_str!("../assets/viewer.css");
  * @writes html-file "writes the documentation page"
  ***/
 pub fn write_html(graph: &Graph, path: &Path) -> Result<()> {
+    write_page(path, &render_html(graph))
+}
+
+/***
+ * As `write_html`, keeping the pictures in `state` for the next page (docs/REGENERATE.md §2): what `docair serve` writes after each save.
+ *
+ * @calls docair-viewer.doc_page.render_page_kept "redoes only what the change touched"
+ ***/
+pub fn write_html_kept(
+    graph: &Graph,
+    path: &Path,
+    state: &mut page_state::PageState,
+) -> Result<()> {
+    let page = doc_page::render_page_kept(graph, Some(&doc_page::layouts_dir()), None, state);
+    write_page(path, &page)
+}
+
+/// A page written in one step: to a file beside it, then renamed, so a reader never gets half of it.
+/// The file beside it is the writer's own (process and count), so two writing the same page at once
+/// do not take each other's file away; the last one renamed is the page.
+fn write_page(path: &Path, page: &str) -> Result<()> {
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, render_html(graph)).with_context(|| format!("writing {}", path.display()))
+    let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let part = path.with_extension(format!("html.{}-{n}.part", std::process::id()));
+    std::fs::write(&part, page).with_context(|| format!("writing {}", part.display()))?;
+    std::fs::rename(&part, path).with_context(|| format!("writing {}", path.display()))
 }
 
 /***

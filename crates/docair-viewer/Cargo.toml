@@ -29,3 +29,5 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 [dev-dependencies]
 # The e2e fixtures' graphs, for the golden pictures (tests/svg.rs).
 docair-adapters.workspace = true
+# A folder of its own for the kept layouts of a test (tests/page_state.rs).
+tempfile.workspace = true

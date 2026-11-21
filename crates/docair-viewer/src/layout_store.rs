@@ -29,13 +29,28 @@ pub fn lay_out_kept_with(
     let font = Monospace::default();
     let input = crate::layout_input::input_with(graph, pic, &font, ahead);
     let options = crate::layout_input::options_for(pic);
-    let path = dir.join(format!("{}.json", docair_layout::key(&input, &options)));
+    let key = docair_layout::key(&input, &options);
+    kept_or_made(&input, &options, &key, dir)
+}
+
+/***
+ * A layout input's layout kept in `dir` under its `key`, or laid out and kept there; whether it was kept.
+ *
+ * @calls docair-layout.lay_out "lays out a picture not kept yet"
+ ***/
+pub fn kept_or_made(
+    input: &docair_layout::Input,
+    options: &docair_layout::Options,
+    key: &str,
+    dir: &Path,
+) -> Result<(Layout, bool)> {
+    let path = dir.join(format!("{key}.json"));
     if let Ok(text) = std::fs::read_to_string(&path)
         && let Ok(laid) = serde_json::from_str::<Layout>(&text)
     {
         return Ok((laid, true));
     }
-    let laid = docair_layout::lay_out(&input, &options);
+    let laid = docair_layout::lay_out(input, options);
     std::fs::create_dir_all(dir)?;
     std::fs::write(&path, serde_json::to_string(&laid)?)?;
     Ok((laid, false))

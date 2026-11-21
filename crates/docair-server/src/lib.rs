@@ -122,7 +122,8 @@ impl Config {
  * @id      docair-server.router
  * @calls   docair-server.upload_router "adds the probe, uploads and whether the AI is on"
  * @calls   docair-server.project.page (GET /) -> html
- * @calls   docair-server.project.version (GET /api/version) -> ServeVersion
+ * @calls   docair-server.project.version (GET /api/version: after) -> ServeVersion
+ * @calls   docair-server.project.relayout (POST /api/relayout: addr) -> ServeRelaid
  * @calls   docair-server.project.apply (POST /api/apply) -> ServeApplied
  * @calls   docair-server.project.tidy_list (GET /api/tidy) -> ServeTidy
  * @calls   docair-server.project.tidy_apply (POST /api/tidy: tags) -> ServeApplied
@@ -151,6 +152,7 @@ pub fn router(config: Config) -> Router {
             .route("/", get(project::page))
             .route("/api/version", get(project::version))
             .route("/api/apply", post(project::apply))
+            .route("/api/relayout", post(project::relayout))
             .route(
                 "/api/tidy",
                 get(project::tidy_list).post(project::tidy_apply),
@@ -211,6 +213,7 @@ fn project_routes(config: Config) -> Router {
         .route("/api/ai", get(ai_status))
         .route("/api/version", get(project::version))
         .route("/api/apply", post(project::apply))
+        .route("/api/relayout", post(project::relayout))
         .route(
             "/api/tidy",
             get(project::tidy_list).post(project::tidy_apply),

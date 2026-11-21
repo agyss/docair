@@ -79,6 +79,9 @@ enum Command {
         /// With --changes: compare with this commit instead of the working tree; the page is its documentation (docs/EDITOR.md §3).
         #[arg(long, value_name = "B", requires = "changes")]
         to: Option<String>,
+        /// Take docair serve's last layouts (<out>/serve) as the base, each checked against the code (docs/REGENERATE.md §8).
+        #[arg(long)]
+        from_serve: bool,
     },
     /// What two commits change in the system's flows (docs/CHANGES.md); without B, the working tree is B.
     Diff {
@@ -354,7 +357,15 @@ fn main() -> ExitCode {
             lenient,
             changes,
             to,
-        } => cmd_scan(&root, out, lenient, changes.as_deref(), to.as_deref()),
+            from_serve,
+        } => cmd_scan(
+            &root,
+            out,
+            lenient,
+            changes.as_deref(),
+            to.as_deref(),
+            from_serve,
+        ),
         Command::Tidy {
             root,
             out,
@@ -501,10 +512,21 @@ fn cmd_scan(
     lenient: bool,
     changes: Option<&str>,
     to: Option<&str>,
+    from_serve: bool,
 ) -> Result<ExitCode> {
     let out = out.unwrap_or_else(|| root.join(".docair"));
     let json = out.join("docair.graph.json");
     let html = out.join("docair.html");
+    // docair serve's last layouts as the base, when asked for and usable (docs/REGENERATE.md §8).
+    let mut base =
+        from_serve.then(|| docair_viewer::page_state::PageState::load(&out.join("serve")));
+    if let Some(Err(why)) = &base {
+        eprintln!("warning: --from-serve: {why}; laid out without it");
+    }
+    let mut state = match base.take() {
+        Some(Ok(s)) => Some(s),
+        _ => None,
+    };
     let graph = match changes {
         None => {
             let graph = scan(
@@ -516,7 +538,10 @@ fn cmd_scan(
                 },
             )?;
             docair_core::emit::write_json(&graph, &json)?;
-            docair_viewer::write_html(&graph, &html)?;
+            match state.as_mut() {
+                Some(s) => docair_viewer::write_html_kept(&graph, &html, s)?,
+                None => docair_viewer::write_html(&graph, &html)?,
+            }
             graph
         }
         Some(a) => {
@@ -524,7 +549,7 @@ fn cmd_scan(
             // the page is B's, with a changes section and the findings `docair explain` stored for
             // this pair, when there are any.
             let pair = docair_server::commits::compare(root, a, to, lenient)?;
-            let page = docair_server::commits::changes_page(&pair);
+            let page = docair_server::commits::changes_page_with(&pair, state.as_mut());
             std::fs::create_dir_all(&out)?;
             docair_core::emit::write_json(&pair.b, &json)?;
             std::fs::write(&html, page)?;
@@ -543,6 +568,13 @@ fn cmd_scan(
     print_diagnostics(&graph);
     if let Some(h) = tidy::hint(&graph) {
         println!("{h}");
+    }
+    if let Some(s) = &state {
+        let c = s.counts;
+        println!(
+            "docair: from docair serve's layouts: {} pictures taken as they were, {} updated to the code, {} laid out",
+            c.kept, c.updated, c.laid_out
+        );
     }
     println!(
         "docair: {} nodes, {} edges, {} flows → {} and {}",

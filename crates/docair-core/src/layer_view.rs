@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{Edge, EdgeKind, Graph, Node, Origin};
 
+/// Where a section's time goes, with `DOCAIR_TIMING=1` (docs/REGENERATE.md §1): its sets, its drawing.
+pub static T_SETS: crate::timing::Sum = crate::timing::Sum::new();
+pub static T_DRAW: crate::timing::Sum = crate::timing::Sum::new();
+
 /// The schema of `docair layer`'s JSON.
 pub const SCHEMA: &str = "docair.layer/0";
 
@@ -188,6 +192,7 @@ fn family(kind: EdgeKind) -> Option<Family> {
 }
 
 /// The graph, looked up, with each node's class and what the view leaves out.
+#[derive(Clone)]
 struct Index<'g> {
     graph: &'g Graph,
     sys: &'g str,
@@ -662,11 +667,19 @@ impl<'g> Index<'g> {
 
     /// The first layer whose focus holds the part, else the first that draws it (viewer.js `layerFor`).
     fn layer_for(&self, id: &'g str) -> Option<LayerKey> {
-        let views: Vec<(LayerKey, LayerSets)> = self
-            .offered()
+        self.layer_in(id, &self.layer_views())
+    }
+
+    /// Each layer the graph offers, worked out with nothing opened.
+    fn layer_views(&self) -> Vec<(LayerKey, LayerSets<'g>)> {
+        self.offered()
             .iter()
             .map(|l| (l.key, self.compute(l.key, &[])))
-            .collect();
+            .collect()
+    }
+
+    /// As `layer_for`, from the layers already worked out.
+    fn layer_in(&self, id: &'g str, views: &[(LayerKey, LayerSets<'g>)]) -> Option<LayerKey> {
         views
             .iter()
             .find(|(_, v)| v.focus.contains(id))
@@ -689,8 +702,8 @@ impl<'g> Index<'g> {
         }
         // Context from lines of every kind, except at Network, which keeps its own.
         let kinds = Self::context(key).unwrap_or(None);
-        let v = self.sets(key, focus, Some(kinds));
-        self.draw(Some(key), &[bx], v)
+        let v = T_SETS.time(|| self.sets(key, focus, Some(kinds)));
+        T_DRAW.time(|| self.draw(Some(key), &[bx], v))
     }
 
     /// The outermost box around `id` that holds no part of the layer and is not dissolved.
@@ -1176,7 +1189,59 @@ pub fn section_picture(
     bx: &str,
     tests: Option<bool>,
 ) -> Option<(LayerKey, LayerPicture)> {
-    let mut ix = Index::new(graph, tests);
+    section_of(Index::new(graph, tests), bx, None)
+}
+
+/***
+ * Many pictures of one graph, its lookups made once (docs/REGENERATE.md §3): a page works out about a thousand slices and two hundred sections, and each used to look the whole graph up again. The same pictures as `section_picture` and `slice_picture`.
+ ***/
+pub struct PictureSet<'g> {
+    graph: &'g Graph,
+    /// As `[view] tests` says, and the other way, for sections; each with its layers worked out.
+    shown: (Index<'g>, Vec<(LayerKey, LayerSets<'g>)>),
+    other: (Index<'g>, Vec<(LayerKey, LayerSets<'g>)>),
+    /// Slices show their tests.
+    slices: Index<'g>,
+}
+
+impl<'g> PictureSet<'g> {
+    pub fn new(graph: &'g Graph) -> Self {
+        let with_layers = |ix: Index<'g>| {
+            let views = ix.layer_views();
+            (ix, views)
+        };
+        PictureSet {
+            graph,
+            shown: with_layers(Index::new(graph, None)),
+            other: with_layers(Index::new(graph, Some(!graph.view.tests))),
+            slices: Index::new(graph, Some(true)),
+        }
+    }
+
+    /// As `section_picture`.
+    pub fn section_picture(
+        &self,
+        bx: &str,
+        tests: Option<bool>,
+    ) -> Option<(LayerKey, LayerPicture)> {
+        let (base, views) = match tests {
+            Some(t) if t != self.graph.view.tests => &self.other,
+            _ => &self.shown,
+        };
+        section_of(base.clone(), bx, Some(views))
+    }
+
+    /// As `slice_picture`.
+    pub fn slice_picture(&self, slice: &crate::slice::Slice) -> LayerPicture {
+        slice_picture_in(&self.slices, self.graph, slice)
+    }
+}
+
+fn section_of<'g>(
+    mut ix: Index<'g>,
+    bx: &str,
+    views: Option<&[(LayerKey, LayerSets<'g>)]>,
+) -> Option<(LayerKey, LayerPicture)> {
     let n = *ix.nodes.get(bx)?;
     let id = n.id.as_str();
     if id == ix.sys || ix.kids(id).iter().all(|k| ix.is_data(k)) {
@@ -1195,7 +1260,17 @@ pub fn section_picture(
     if typed {
         ix.type_section = Some(id);
     }
-    let key = ix.layer_for(id)?;
+    // The layers worked out once (`Pictures`): a type's own section shows more lines, which can change
+    // what a layer draws but never what it is about, so for a type only a layer about it is taken from
+    // them; else its layers are worked out again with its lines, as `layer_for` does.
+    let key = match views {
+        Some(v) if !typed => ix.layer_in(id, v)?,
+        Some(v) => match v.iter().find(|(_, s)| s.focus.contains(id)) {
+            Some((k, _)) => *k,
+            None => ix.layer_for(id)?,
+        },
+        None => ix.layer_for(id)?,
+    };
     Some((key, ix.section(key, id)))
 }
 
@@ -1205,7 +1280,10 @@ pub fn section_picture(
  * A part of the slice that holds parts the slice leaves out stands closed for them.
  ***/
 pub fn slice_picture(graph: &Graph, slice: &crate::slice::Slice) -> LayerPicture {
-    let ix = Index::new(graph, Some(true));
+    slice_picture_in(&Index::new(graph, Some(true)), graph, slice)
+}
+
+fn slice_picture_in(ix: &Index<'_>, graph: &Graph, slice: &crate::slice::Slice) -> LayerPicture {
     let mut held: HashSet<&str> = HashSet::new();
     for p in &slice.parts {
         if let Some(n) = ix.nodes.get(p.as_str()) {

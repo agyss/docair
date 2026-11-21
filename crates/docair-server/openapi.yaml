@@ -23,7 +23,9 @@ paths:
   /api/version:
     get:
       operationId: version
-      summary: How often the documentation has been written; the page polls it to reload.
+      summary: How often the documentation has been written; the page waits on it to reload.
+      parameters:
+        - {name: after, in: query, required: false, schema: {type: integer, format: int64}, description: "Answer once the version is newer than this, or after 25 s with the same (docs/REGENERATE.md §6)."}
       responses:
         '200':
           description: The version, one more each time the documentation is written again.
@@ -44,6 +46,29 @@ paths:
                 $ref: '#/components/schemas/ServeApplied'
         '409':
           description: No edits wait to be applied.
+  /api/relayout:
+    post:
+      operationId: relayout
+      summary: Forget the kept layouts of a picture, or of every picture, and write the documentation again (docs/REGENERATE.md §7).
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                addr: {type: string, description: "The picture's address, e.g. layer/code; none for every picture."}
+      responses:
+        '200':
+          description: The documentation written again.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [regenerated, version]
+                properties:
+                  regenerated: {type: boolean}
+                  version: {type: integer, format: int64}
   /healthz:
     get:
       operationId: health

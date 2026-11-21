@@ -130,6 +130,10 @@ pub mod type_uses;
  ***/
 pub mod tidy;
 /***
+ * Where the time goes: with `DOCAIR_TIMING=1`, each timed step says how long it took (docs/REGENERATE.md §1).
+ ***/
+pub mod timing;
+/***
  * Recorded walkthroughs: read, bound to the graph, written.
  ***/
 pub mod walkthrough;
@@ -170,6 +174,7 @@ pub struct Options {
  * @doc   ../../../docs/ARCHITECTURE.md
  ***/
 pub fn scan(root: &Path, adapters: &[&dyn Adapter], opts: &Options) -> Result<Graph> {
+    let _t = timing::stopwatch("scan");
     let mut config = config::load(root)?;
     if opts.untrusted
         && let Some(code) = config.code.as_mut()
