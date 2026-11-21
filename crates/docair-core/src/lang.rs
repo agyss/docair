@@ -63,9 +63,10 @@ pub struct LanguageSpec {
 /***
  * The language registry: file extension → comment family.
  *
- * Rust, TypeScript/JS and Helm use the C-style marker, YAML/TOML/shell the
- * hash marker, HTML the markup marker. Markdown is listed so that stage 1
- * picks it up.
+ * Rust and TypeScript/JS use the C-style marker, YAML/TOML/shell the hash
+ * marker, HTML the markup marker. Markdown is listed so that stage 1 picks it
+ * up. An adapter brings the file types only it reads (Terraform's `.tf`,
+ * Helm's `.tpl`), registered by the adapter registry (`register`).
  ***/
 pub static LANGUAGES: &[LanguageSpec] = &[
     LanguageSpec {
@@ -76,11 +77,6 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     LanguageSpec {
         name: "typescript",
         extensions: &["ts", "tsx", "js", "jsx", "mjs", "cjs"],
-        family: Family::CStyle,
-    },
-    LanguageSpec {
-        name: "helm",
-        extensions: &["tpl"],
         family: Family::CStyle,
     },
     LanguageSpec {
@@ -101,11 +97,6 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     LanguageSpec {
         name: "shell",
         extensions: &["sh", "bash"],
-        family: Family::Hash,
-    },
-    LanguageSpec {
-        name: "terraform",
-        extensions: &["tf"],
         family: Family::Hash,
     },
     LanguageSpec {
@@ -143,10 +134,35 @@ pub fn language_for_file(file_name: &str) -> Option<&'static LanguageSpec> {
         .and_then(|(_, ext)| language_for(ext))
 }
 
+/// The languages adapters bring besides the table (docs/ADAPTERS.md §5.3, docair-4wk.42).
+static ADDED: std::sync::RwLock<Vec<&'static LanguageSpec>> = std::sync::RwLock::new(Vec::new());
+
+/// Read the languages an adapter brings too: a file type core does not know is read from now on,
+/// its doc blocks with its comment family. One already known by name is kept as it is.
+pub fn register(specs: &'static [LanguageSpec]) {
+    let mut added = ADDED.write().unwrap_or_else(|e| e.into_inner());
+    for s in specs {
+        if !LANGUAGES
+            .iter()
+            .chain(added.iter().copied())
+            .any(|l| l.name == s.name)
+        {
+            added.push(s);
+        }
+    }
+}
+
 /// The registry row for a file extension, if docair reads that language.
 pub fn language_for(extension: &str) -> Option<&'static LanguageSpec> {
     let ext = extension.to_ascii_lowercase();
     LANGUAGES
         .iter()
         .find(|l| l.extensions.contains(&ext.as_str()))
+        .or_else(|| {
+            let added = ADDED.read().unwrap_or_else(|e| e.into_inner());
+            added
+                .iter()
+                .copied()
+                .find(|l| l.extensions.contains(&ext.as_str()))
+        })
 }

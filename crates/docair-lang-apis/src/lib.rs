@@ -69,9 +69,16 @@ pub fn read(text: &str) -> Result<Api, Problem> {
  ***/
 pub struct ApiAdapter;
 
+/// This adapter, for the registry (docs/ADAPTERS.md §5.3): every `docair-lang-*` crate exports one.
+pub static ADAPTER: &dyn Adapter = &ApiAdapter;
+
 impl Adapter for ApiAdapter {
     fn name(&self) -> &'static str {
         "apis"
+    }
+
+    fn kind(&self) -> docair_core::adapter::AdapterKind {
+        docair_core::adapter::AdapterKind::Api
     }
 
     fn handles(&self, file: &SourceFile) -> bool {

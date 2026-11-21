@@ -1396,8 +1396,10 @@ An adapter has two jobs:
 
 Terraform, Helm charts and Kubernetes manifests say exactly what creates what
 and where requests go, so docair reads them even when they carry no doc
-block. The infra adapter reads the whole project at once, because references
-cross files:
+block. Three adapters do, one per tool (`docair-lang-terraform`,
+`docair-lang-helm`, `docair-lang-k8s`, kind `infra`), each for its own files,
+from one reading of the whole project (`docair-infra`), because references
+cross files (docs/ADAPTERS.md §5.3, docair-4wk.42):
 
 | Code | Becomes |
 |------|---------|

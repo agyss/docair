@@ -14,9 +14,16 @@ use docair_core::model::{Following, RawBlock, SourceFile};
  ***/
 pub struct GenericAdapter;
 
+/// This adapter, for the registry (docs/ADAPTERS.md §5.3): every `docair-lang-*` crate exports one.
+pub static ADAPTER: &dyn Adapter = &GenericAdapter;
+
 impl Adapter for GenericAdapter {
     fn name(&self) -> &'static str {
         "generic"
+    }
+
+    fn kind(&self) -> docair_core::adapter::AdapterKind {
+        docair_core::adapter::AdapterKind::Guess
     }
 
     fn handles(&self, _file: &SourceFile) -> bool {

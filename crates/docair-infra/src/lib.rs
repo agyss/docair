@@ -1,7 +1,9 @@
 //! Infrastructure from its code: Terraform, Helm charts and Kubernetes manifests (SPEC §6.1).
 //!
-//! The adapter reads the whole project first (every resource, every chart,
-//! every Kubernetes object), then completes and adds nodes file by file:
+//! One reading for the Terraform, Helm and Kubernetes adapters (docs/ADAPTERS.md
+//! §5.3): it reads the whole project first (every resource, every chart, every
+//! Kubernetes object, every Dockerfile), then completes and adds nodes for the
+//! files an adapter asks about:
 //!
 //! * a Terraform `resource` is a node; what it references, and `depends_on`,
 //!   become edges (`@in … from tf:<address>`), and so does the cluster its
@@ -17,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use docair_core::adapter::{Adapter, Project};
+use docair_core::adapter::Project;
 use docair_core::facts::{
     Draw, Evidence, Facts, Inferred, Meet, Relation, Serve, Symbol, Target, Verb,
 };
@@ -1549,15 +1551,16 @@ fn discovered(
     }
 }
 
-/// The facts being collected; each symbol gets its key here.
+/// The facts being collected; each symbol gets its key here, under the adapter's prefix.
 #[derive(Default)]
 struct Out {
     facts: Facts,
+    prefix: &'static str,
 }
 
 impl Out {
     fn add(&mut self, mut s: Symbol, relations: Vec<Relation>) -> String {
-        s.key = format!("infra:{}", self.facts.symbols.len());
+        s.key = format!("{}:{}", self.prefix, self.facts.symbols.len());
         let key = s.key.clone();
         for mut r in relations {
             r.from = key.clone();
@@ -1736,38 +1739,66 @@ impl Index {
     }
 }
 
-/***
- * The infrastructure adapter: Terraform, Helm charts and Kubernetes manifests, read as a whole because references cross files.
- ***/
-pub struct InfraAdapter;
+/// Which tool a file is: Terraform, a Helm chart's YAML, or other Kubernetes YAML; none for others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfraTool {
+    Terraform,
+    Helm,
+    Kubernetes,
+}
 
-impl Adapter for InfraAdapter {
-    fn name(&self) -> &'static str {
-        "infra"
-    }
-
-    fn handles(&self, file: &SourceFile) -> bool {
-        file.lang.name == "terraform" || file.lang.name == "yaml"
-    }
-
-    /***
-     * Read every Terraform file, chart and manifest once, then report each file's relations and the nodes found without a block.
-     *
-     * @calls docair-lang-infra.index.new "reads every resource, chart and object"
-     * @calls docair-lang-infra.index.anchors "completes the authored blocks"
-     * @calls docair-lang-infra.index.discover "finds resources and objects that have no block"
-     ***/
-    fn project(&self, project: &Project) -> Facts {
-        let index = Index::new(project.files, project.blocks, project.system);
-        let mut out = Out::default();
-        for (file, blocks) in project.files.iter().zip(project.blocks) {
-            if self.handles(file) {
-                index.anchors(file, blocks, &mut out);
-                index.discover(file, &mut out);
-            }
+/// The tool a file belongs to: `.tf` is Terraform; YAML in a chart (beside a `Chart.yaml`, or in
+/// its `templates/`) is Helm; other YAML is Kubernetes.
+pub fn tool_of(file: &SourceFile, charts: &BTreeSet<String>) -> Option<InfraTool> {
+    match file.lang.name {
+        "terraform" => Some(InfraTool::Terraform),
+        "yaml" => {
+            let dir = dir_of(&file.rel);
+            let in_chart =
+                chart_of(&file.rel).is_some_and(|c| charts.contains(c)) || charts.contains(dir);
+            Some(if in_chart {
+                InfraTool::Helm
+            } else {
+                InfraTool::Kubernetes
+            })
         }
-        out.facts
+        _ => None,
     }
+}
+
+/// The directories of the project's Helm charts: where a `Chart.yaml` is.
+pub fn chart_dirs(files: &[SourceFile]) -> BTreeSet<String> {
+    files
+        .iter()
+        .filter(|f| f.rel.ends_with("Chart.yaml"))
+        .map(|f| dir_of(&f.rel).to_string())
+        .collect()
+}
+
+/***
+ * The facts of one tool's files: read every Terraform file, chart and manifest once, then report each of that tool's files' relations and the nodes found without a block (docs/ADAPTERS.md §5.3).
+ *
+ * Symbols are keyed `<prefix>:<n>`, so the adapters' keys never meet; lines
+ * between them go by node id.
+ *
+ * @calls docair-infra.index.new "reads every resource, chart and object"
+ * @calls docair-infra.index.anchors "completes the authored blocks"
+ * @calls docair-infra.index.discover "finds resources and objects that have no block"
+ ***/
+pub fn facts(project: &Project, tool: InfraTool, prefix: &'static str) -> Facts {
+    let index = Index::new(project.files, project.blocks, project.system);
+    let charts = chart_dirs(project.files);
+    let mut out = Out {
+        prefix,
+        ..Out::default()
+    };
+    for (file, blocks) in project.files.iter().zip(project.blocks) {
+        if tool_of(file, &charts) == Some(tool) {
+            index.anchors(file, blocks, &mut out);
+            index.discover(file, &mut out);
+        }
+    }
+    out.facts
 }
 
 #[cfg(test)]

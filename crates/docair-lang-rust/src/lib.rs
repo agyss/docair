@@ -60,9 +60,16 @@ fn rules() -> &'static RuleSet {
  ***/
 pub struct RustAdapter;
 
+/// This adapter, for the registry (docs/ADAPTERS.md §5.3): every `docair-lang-*` crate exports one.
+pub static ADAPTER: &dyn Adapter = &RustAdapter;
+
 impl Adapter for RustAdapter {
     fn name(&self) -> &'static str {
         "rust"
+    }
+
+    fn kind(&self) -> docair_core::adapter::AdapterKind {
+        docair_core::adapter::AdapterKind::Code
     }
 
     fn handles(&self, file: &SourceFile) -> bool {

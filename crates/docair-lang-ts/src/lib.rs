@@ -85,9 +85,16 @@ fn rules(tsx: bool) -> &'static RuleSet {
  ***/
 pub struct TsAdapter;
 
+/// This adapter, for the registry (docs/ADAPTERS.md §5.3): every `docair-lang-*` crate exports one.
+pub static ADAPTER: &dyn Adapter = &TsAdapter;
+
 impl Adapter for TsAdapter {
     fn name(&self) -> &'static str {
         "typescript"
+    }
+
+    fn kind(&self) -> docair_core::adapter::AdapterKind {
+        docair_core::adapter::AdapterKind::Code
     }
 
     fn handles(&self, file: &SourceFile) -> bool {

@@ -252,6 +252,33 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// List the adapters: each one's name, kind and the file types it brings.
+    Adapters,
+}
+
+/***
+ * `docair adapters`: every adapter in the order the registry asks them, with its kind and the file types it brings (docs/ADAPTERS.md §5.3).
+ ***/
+fn cmd_adapters() -> ExitCode {
+    println!("{:<12} {:<6} brings", "adapter", "kind");
+    for a in docair_adapters::all() {
+        let brings: Vec<String> = a
+            .languages()
+            .iter()
+            .map(|l| format!("{} (.{})", l.name, l.extensions.join(", .")))
+            .collect();
+        println!(
+            "{:<12} {:<6} {}",
+            a.name(),
+            a.kind().word(),
+            if brings.is_empty() {
+                "-".to_string()
+            } else {
+                brings.join("; ")
+            }
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /***
@@ -371,6 +398,7 @@ fn main() -> ExitCode {
             changes,
         } => serve::cmd_serve(&root, out, lenient, &bind, app, changes),
         Command::Ai { root, check } => ask::cmd_ai(&root, check),
+        Command::Adapters => Ok(cmd_adapters()),
     };
     match result {
         Ok(code) => code,

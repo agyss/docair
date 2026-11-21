@@ -60,7 +60,10 @@
 | `docair-core`  | model, language registry, block extraction, tag parsing, graph building, ref resolution, checks | PoC |
 | `docair-adapters` | the adapter registry used by the CLI and the server ([ADAPTERS.md](ADAPTERS.md)) | PoC |
 | `docair-lang-rust` | Rust adapter (tree-sitter): symbol, kind, module-path ids, parents, actix routes | PoC |
-| `docair-lang-infra` | Terraform, Helm charts, Kubernetes manifests, read as a whole | PoC |
+| `docair-infra` | Terraform, Helm charts, Kubernetes manifests and Dockerfiles, read as a whole: the one reading the three infrastructure adapters report from | PoC |
+| `docair-lang-terraform` | Terraform adapter (kind `infra`): resources, root modules, what they create and use | PoC |
+| `docair-lang-helm` | Helm adapter (kind `infra`): a chart's objects with its values, a chart no Terraform installs as its own release | PoC |
+| `docair-lang-k8s` | Kubernetes adapter (kind `infra`): manifests' objects, what they route, select, run and set | PoC |
 | `docair-lang-generic` | keyword guesses from the line after a block, for languages without an adapter | PoC |
 | `docair-lang-apis` | OpenAPI and AsyncAPI descriptions: the routes and topics they declare, matched with the code by the core (`declare`); where they disagree, `docair check` warns ([IMPORTS.md](IMPORTS.md)) | PoC |
 | `docair-lang-ts` | TypeScript/JavaScript adapter (tree-sitter): declarations, Playwright tests, HttpClient and fetch requests | PoC |

@@ -417,8 +417,10 @@ dependencies = [
  "docair-core",
  "docair-lang-apis",
  "docair-lang-generic",
- "docair-lang-infra",
+ "docair-lang-helm",
+ "docair-lang-k8s",
  "docair-lang-rust",
+ "docair-lang-terraform",
  "docair-lang-ts",
  "tempfile",
 ]
@@ -473,6 +475,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "docair-infra"
+version = "0.1.0"
+dependencies = [
+ "docair-core",
+]
+
+[[package]]
 name = "docair-lang-apis"
 version = "0.1.0"
 dependencies = [
@@ -489,10 +498,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "docair-lang-infra"
+name = "docair-lang-helm"
 version = "0.1.0"
 dependencies = [
  "docair-core",
+ "docair-infra",
+]
+
+[[package]]
+name = "docair-lang-k8s"
+version = "0.1.0"
+dependencies = [
+ "docair-core",
+ "docair-infra",
 ]
 
 [[package]]
@@ -507,6 +525,14 @@ dependencies = [
  "toml",
  "tree-sitter",
  "tree-sitter-rust",
+]
+
+[[package]]
+name = "docair-lang-terraform"
+version = "0.1.0"
+dependencies = [
+ "docair-core",
+ "docair-infra",
 ]
 
 [[package]]

@@ -1,0 +1,19 @@
+#***
+# The infrastructure as one reading: every Terraform file, chart, manifest and
+# Dockerfile read as a whole, since their references cross files. The
+# Terraform, Helm and Kubernetes adapters report from it, each for its own
+# files (docs/ADAPTERS.md §5.3, SPEC §6.1).
+#
+# @id      docair-infra
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-infra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+docair-core.workspace = true

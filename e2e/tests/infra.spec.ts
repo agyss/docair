@@ -13,8 +13,8 @@ test.describe('how things are provisioned and routed', () => {
    * Terraform creates the cluster and the releases, a release holds its chart's objects, and requests go Traefik → Ingress → Service → Deployment.
    *
    * @part-of e2e.infra
-   * @covers  docair-lang-infra.index.discover "checks resources and objects become parts"
-   * @covers  docair-lang-infra.index.anchors "checks creates, routes and selects"
+   * @covers  docair-infra.index.discover "checks resources and objects become parts"
+   * @covers  docair-infra.index.anchors "checks creates, routes and selects"
    * @covers  docair-core.layer_view.picture "checks the infrastructure, Kubernetes and network layers draw them"
    ***/
   test('Terraform, Helm and manifests become one picture', async ({ page }) => {

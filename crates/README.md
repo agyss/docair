@@ -5,7 +5,10 @@
 | `docair-core` | the pipeline: discover, extract, collect facts, merge, build, resolve, check |
 | `docair-adapters` | the adapter registry, in the order that decides who says what a symbol is |
 | `docair-lang-rust` | the Rust adapter (tree-sitter) |
-| `docair-lang-infra` | the infrastructure adapter: Terraform, Helm charts, Kubernetes manifests |
+| `docair-infra` | the one reading of all infrastructure code: Terraform, Helm charts, Kubernetes manifests, Dockerfiles |
+| `docair-lang-terraform` | the Terraform adapter (infra) |
+| `docair-lang-helm` | the Helm adapter (infra) |
+| `docair-lang-k8s` | the Kubernetes adapter (infra) |
 | `docair-lang-ts` | the TypeScript/JavaScript adapter: declarations, tests, HTTP requests, calls |
 | `docair-scip` | reads SCIP code indexes: which function each call reaches |
 | `docair-lang-generic` | the generic adapter: guesses from the line after a block, for code no other adapter knows |

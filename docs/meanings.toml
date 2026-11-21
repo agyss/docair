@@ -215,7 +215,7 @@ term = false
 why = "Everyday word: the identifiers of nodes, which the reader knows."
 
 [index]
-from = "docair-lang-infra.index"
+from = "docair-infra.index"
 why = "The adapter's index of the whole project is a project word; the part defines it."
 
 [inferred]

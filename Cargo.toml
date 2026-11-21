@@ -16,7 +16,7 @@ docair-layout = { path = "crates/docair-layout" }
 docair-layout-wasm = { path = "crates/docair-layout-wasm" }
 docair-lang-apis = { path = "crates/docair-lang-apis" }
 docair-lang-generic = { path = "crates/docair-lang-generic" }
-docair-lang-infra = { path = "crates/docair-lang-infra" }
+docair-infra = { path = "crates/docair-infra" }
 docair-lang-rust = { path = "crates/docair-lang-rust" }
 docair-lang-ts = { path = "crates/docair-lang-ts" }
 docair-rules = { path = "crates/docair-rules" }

@@ -1,4 +1,5 @@
-//! Stage 3: adapters read the code and report facts (docs/ADAPTERS.md §5).
+//! Stage 3: adapters read the code and report facts (docs/ADAPTERS.md §5). An adapter names its
+//! type and the file types it brings, so adding one needs no change elsewhere (§5.3).
 
 use crate::config::Config;
 use crate::facts::Facts;
@@ -17,6 +18,30 @@ pub struct Project<'a> {
     pub blocks: &'a [Vec<RawBlock>],
 }
 
+/// The type of an adapter (docs/ADAPTERS.md §5.3): what it reads. The registry orders by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AdapterKind {
+    /// A programming language: Rust, TypeScript.
+    Code,
+    /// Infrastructure as code: Terraform, Helm, Kubernetes.
+    Infra,
+    /// API descriptions: OpenAPI, AsyncAPI.
+    Api,
+    /// Guesses for what no other adapter reads.
+    Guess,
+}
+
+impl AdapterKind {
+    pub fn word(self) -> &'static str {
+        match self {
+            AdapterKind::Code => "code",
+            AdapterKind::Infra => "infra",
+            AdapterKind::Api => "api",
+            AdapterKind::Guess => "guess",
+        }
+    }
+}
+
 /***
  * The extension point for one language: read the code and report what is in it, as facts.
  *
@@ -25,6 +50,12 @@ pub struct Project<'a> {
  ***/
 pub trait Adapter: Sync {
     fn name(&self) -> &'static str;
+    /// Its type: code, infra, api or guess.
+    fn kind(&self) -> AdapterKind;
+    /// The file types it brings that core's table does not know: their extensions and comment family.
+    fn languages(&self) -> &'static [crate::lang::LanguageSpec] {
+        &[]
+    }
     /// Whether this adapter reads `file`.
     fn handles(&self, file: &SourceFile) -> bool;
     /// The facts of one file it handles; `blocks` are that file's doc blocks.
@@ -46,7 +77,9 @@ pub trait Adapter: Sync {
  * @flow  scan 6 "adapters read the code"
  * @in    blocks: RawBlock[] from docair-core.extract.extract
  * @calls docair-lang-rust.rust-adapter.project "reads every Rust file with tree-sitter"
- * @calls docair-lang-infra.infra-adapter.project "reads Terraform, charts and manifests as a whole"
+ * @calls docair-lang-terraform.terraform-adapter.project "reads Terraform"
+ * @calls docair-lang-helm.helm-adapter.project "reads Helm charts"
+ * @calls docair-lang-k8s.kubernetes-adapter.project "reads Kubernetes manifests"
  * @calls docair-lang-apis.api-adapter.project "reads OpenAPI and AsyncAPI descriptions"
  * @calls docair-lang-generic.generic-adapter.file "guesses what each block documents from its code line"
  * @out   facts: Facts[]

@@ -197,8 +197,9 @@ pub trait LanguageAdapter: Send + Sync {
 }
 ```
 
-The infra adapter fits the same trait: `file` reads Terraform blocks and
-Kubernetes objects, `link` follows references across files. That removes the
+The infrastructure fits the same trait: one adapter per tool (Terraform,
+Helm, Kubernetes, §5.3), each reporting its own files from one reading of the
+whole project that follows references across files. That removes the
 special case in `lib.rs`.
 
 ### 5.2 Rules: one file per framework pattern
@@ -300,6 +301,45 @@ One crate, `docair-adapters`, lists every language adapter with its built-in
 rules. The CLI and the server both use `docair_adapters::all()`, so they can't
 drift apart. Later, a project can add its own rules through `[rules] dirs` in
 docair.toml (for a team's in-house HTTP wrapper, for example).
+
+**Adding an adapter touches nothing else (docair-4wk.42, the user,
+2026-11-21).** An adapter is a crate `docair-lang-<name>` that exports
+`pub static ADAPTER: &dyn Adapter` and says, through the trait:
+
+| Method | Says | Example |
+|--------|------|---------|
+| `name` | its name | `terraform` |
+| `kind` | its type: `code`, `infra`, `api` or `guess` | `infra` |
+| `languages` | the file types it brings: extensions and their comment family, so doc blocks in them are read | `tf`, hash comments |
+| `handles` | which files it reads | `.tf` files |
+| `file`, `project` | the facts of each file, or of the whole project | resources, what they create |
+
+The registry's build script lists every dependency of `docair-adapters` named
+`docair-lang-*`: adding an adapter is its crate and one line in that
+`Cargo.toml` (the workspace takes every crate in `crates/`). `all()` orders
+them by kind (code, infra, api, guess; within a kind as listed) and registers
+their languages with core's language table (`lang::register`): a file type
+core does not know yet is read once an adapter brings it, with no change to
+core's own table. `docair adapters` lists them: name, kind, languages.
+
+**Infrastructure: one adapter per tool.** Terraform, Helm and Kubernetes were
+one adapter, `docair-lang-infra`, since their references cross files (a
+`helm_release` installs a chart, a Service selects a Deployment, a pod's image
+is what a Dockerfile builds). They are three adapters now, as Rust and
+TypeScript are, on one shared reading:
+
+| Crate | Kind | Reads | Reports |
+|-------|------|-------|---------|
+| `docair-infra` | library | every Terraform file, chart, manifest, Dockerfile and `Cargo.toml` once, into one index (`Index`): resources, objects, values, image builds | — |
+| `docair-lang-terraform` | infra | `.tf` | resources, the root modules, what they create (clusters, namespaces, releases), what they use |
+| `docair-lang-helm` | infra | a chart's YAML (`Chart.yaml`, `values.yaml`, `templates/`) | its objects with `.Values` filled in, a chart no Terraform installs as its own release |
+| `docair-lang-k8s` | infra | other Kubernetes YAML | its objects: what an Ingress routes, a Service selects, a pod runs and sets |
+
+Each reports only its own files' symbols, keyed `terraform:n`, `helm:n`,
+`k8s:n`; lines across them go by node id, as before, so the graph is the same
+as with one adapter (the golden graphs do not move). Dockerfiles stay read
+by the shared index only: they make no part of their own, only the program a
+pod runs.
 
 ### 5.4 Who calls whom: one index format for every language
 
@@ -830,7 +870,10 @@ crates/
   docair-rules          the rule format (ast-grep + facts), the matcher, the fixture runner
   docair-lang-rust      symbols, modules, use paths, calls; rules/: actix, axum, reqwest, sqlx, …
   docair-lang-ts        TS/JS: symbols, classes, decorators, imports, calls; rules/: angular, http-client, fetch, playwright, …
-  docair-lang-infra     Terraform, Helm, Kubernetes (today's core/src/infra.rs)
+  docair-infra          one reading of Terraform, Helm, Kubernetes and Dockerfiles (a library)
+  docair-lang-terraform Terraform (infra)
+  docair-lang-helm      Helm charts (infra)
+  docair-lang-k8s       Kubernetes manifests (infra)
   docair-lang-generic   keyword guesses for languages without an adapter (today's adapter::fallback)
   docair-scip           reads SCIP indexes (any language) into calls and the names of types; runs the installed indexers
   docair-adapters       the registry: all()

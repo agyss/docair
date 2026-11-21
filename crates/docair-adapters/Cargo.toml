@@ -15,10 +15,14 @@ publish.workspace = true
 
 [dependencies]
 docair-core.workspace = true
+# The adapters: every dependency named docair-lang-* is one (build.rs lists them,
+# docs/ADAPTERS.md §5.3). Adding an adapter is its crate and one line here.
 docair-lang-apis.workspace = true
 docair-lang-generic.workspace = true
-docair-lang-infra.workspace = true
+docair-lang-helm = { path = "../docair-lang-helm" }
+docair-lang-k8s = { path = "../docair-lang-k8s" }
 docair-lang-rust.workspace = true
+docair-lang-terraform = { path = "../docair-lang-terraform" }
 docair-lang-ts.workspace = true
 
 [dev-dependencies]

@@ -1,0 +1,19 @@
+#***
+# The Terraform adapter: Terraform: its resources, the root modules, what they create (clusters, namespaces, releases) and what they use.
+# It reports from docair-infra's one reading of all infrastructure code
+# (docs/ADAPTERS.md §5.3).
+#
+# @id      docair-lang-terraform
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-lang-terraform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+docair-core.workspace = true
+docair-infra.workspace = true
