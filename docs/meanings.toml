@@ -1,0 +1,563 @@
+# What the words of the docs mean: decisions written by `docair glossary`
+# (docs/MEANINGS.md in docair). Review them like code.
+
+[about]
+term = false
+why = "everyday preposition in all three sentences; the component named About is unrelated"
+
+[adapter]
+from = "docair-core.adapter.adapter"
+checked = "f4b9c14a"
+why = "the sentences mean docair's per-language adapters, and the glossary entry says what the code says"
+
+["ai settings"]
+term = false
+why = "self-explanatory: the settings of the AI feature, wherever they come from"
+
+[answer]
+term = false
+why = "everyday word for what the model or a service returns; the component named Answer has no text"
+
+[api]
+term = false
+why = "short for the already-explained API description, or the common word API"
+
+[app]
+term = false
+why = "everyday word for application; the sentences mean the web app or the system's apps, not the root component"
+
+[ask]
+term = false
+why = "everyday verb in these sentences, like check; the modules of the same name have no text"
+
+[asked]
+term = false
+why = "everyday word for what a client or a person asked for; request::asked only lists the requests a part sends"
+
+[asyncapi]
+why = "a description format a newcomer will not know; the module of the same name has no text of its own"
+
+[build]
+term = false
+why = "everyday verb: to build the graph; the stage of the same name needs no entry of its own"
+
+[callee]
+term = false
+why = "everyday programming word: the function a call reaches; the Callee enum of the Rust adapter is an internal detail with no text of its own"
+
+[count]
+term = false
+why = "everyday word: how many; the Count struct of `docair check --coverage` only holds three numbers"
+
+[change]
+term = false
+why = "everyday word here: the verb, or half of 'view change'; the components named Change mean a proposed edit, which these sentences do not mean"
+
+[changed]
+term = false
+why = "Plain word: different from before; the page's Changed (docair-viewer.doc_page), what changed between two versions, is named after it."
+
+["change steps"]
+from = "docair-core.change_steps"
+why = "the module that works out a changed flow's steps; its ChangeStep is one of them"
+
+[check]
+term = false
+why = "everyday verb, as in the examples; the command and stage of the same name need no entry"
+
+[class]
+term = false
+why = "everyday programming word; the sentences list it among ordinary declarations"
+
+[cli]
+term = false
+why = "common abbreviation for a command-line tool; the component of the same name has no text"
+
+[client]
+term = false
+why = "everyday web word: the side that sends a request; the module of the same name is unrelated"
+
+[command]
+term = false
+why = "everyday word: a command of the CLI and its command line"
+
+[config]
+term = false
+why = "everyday shorthand for configuration; no sentence uses it in a special sense"
+
+[data]
+term = false
+why = "the sentences use 'data' in its everyday sense; the Data list of the same name is a different thing"
+
+[decision]
+from = "docair-core.meanings.decision"
+checked = "db16ce04"
+why = "the sentences mean the recorded decisions about words, which the part defines only tersely"
+
+[declare]
+term = false
+why = "everyday verb: what a description or a block says it has; the already-explained API description carries the concept"
+
+[defined]
+term = false
+why = "everyday participle: a word defined by a heading; the component named Defined is about such headings"
+
+[described]
+from = "docair-core.declare.described-const"
+code = "docair-core.declare.described-const"
+why = "the AI (docair glossary, 2026-11-21): a project-specific tag name the reader cannot guess; the DESCRIBED const defines it"
+
+[diagnostic]
+from = "docair-web.app.scan-service.diagnostic"
+checked = "a0592383"
+why = "Already explained; the part's line (one diagnostic as the server reports it) matches the entry."
+
+[digest]
+from = "data.digest"
+checked = "c0fbcc7c"
+
+[direction]
+term = false
+why = "everyday word: which way something runs or points; docair-layout's Direction (the way its layers run) means the same"
+
+[discover]
+from = "docair-core.discover"
+why = "Names the first pipeline stage; the module text says what it does."
+
+[doc]
+term = false
+why = "Everyday word here: the sentences mean the documentation."
+
+[draw]
+from = "docair-core.facts.draw"
+why = "The Draw::Always and Draw::Alone markers are project vocabulary; the part says they set when a symbol becomes a node."
+
+[edge]
+why = "Project word, already explained; the model part has no text to check the entry against."
+
+[edit]
+from = "docair-core.edit"
+why = "Project word: the model's proposed changes to doc blocks, which docair apply writes."
+
+[emit]
+from = "docair-core.emit"
+why = "Names the last pipeline stage; the module text says it writes the graph JSON."
+
+[event]
+from = "docair-lang-apis.model.event"
+checked = "6101ed07"
+why = "AsyncAPI vocabulary; the part's fragment alone is too terse."
+
+[extract]
+from = "docair-core.extract"
+why = "Names a pipeline stage; the module text says what it does."
+
+[facts]
+from = "docair-core.facts"
+why = "Central project word: what adapters report from the code; the module text defines it."
+
+[family]
+from = "docair-core.lang.family"
+checked = "b59e30b4"
+why = "Project word: the comment families the registry maps file extensions to; the part's text assumes the word is known."
+
+["file text"]
+term = false
+why = "Plain phrase: the text of a file, which is how the sentences use it."
+
+[files]
+term = false
+why = "Everyday word here: the sentences mean the project's files."
+
+[fit]
+from = "docair-core.route.fit"
+checked = "9f12ad75"
+why = "Project word for route matching; the part's text reuses the word itself."
+
+[flow]
+why = "Project word, already explained; the model part has no text to check the entry against."
+
+[following]
+term = false
+why = "Everyday use in the sentences ('the following lines'); the part named Following means the line a block attaches to."
+
+[format]
+term = false
+why = "Everyday word in the sentences (file format, reply format); the part named Format means the kind of description."
+
+[found]
+term = false
+why = "Everyday participle in the sentences ('doc blocks found by comment syntax'); the part named Found is a rule's match."
+
+[glossary]
+from = "docair-core.glossary"
+checked = "22ce8a4a"
+why = "Already explained; the module text (what the words mean, and the docs it links to) matches the entry."
+
+[grammar]
+from = "docair-rules.grammar"
+why = "Technology word: a tree-sitter grammar as the ast-grep rules need it."
+
+[graph]
+from = "data.graph"
+checked = "e9f43579"
+why = "The sentences mean the graph docair builds and writes to docair.graph.json; the part says the same as the glossary entry."
+
+[hints]
+term = false
+why = "everyday word: what an author or the code suggests; model::Hints (what an adapter suggests about a block) and the layout's hints (which way a line should point) are no terms"
+
+[http]
+term = false
+why = "the docs mean the protocol; the `@http` tag is explained with the tags (SPEC §4.1)"
+
+[ids]
+term = false
+why = "Everyday word: the identifiers of nodes, which the reader knows."
+
+[index]
+from = "docair-infra.index"
+why = "The adapter's index of the whole project is a project word; the part defines it."
+
+[inferred]
+from = "docair-core.facts.inferred"
+checked = "4c4ef57a"
+why = "Project word: a value the adapter read from the code, as opposed to an authored one."
+
+[input]
+term = false
+why = "everyday word for what a step is given; meanings::Input and docair-layout's Input are each what their own step reads"
+
+["found off"]
+from = "docair-ai.explain.found-off"
+checked = "7db7898d"
+why = "the review's heading for what the AI found wrong, of three kinds: a contradiction of a commit, doc or code comment, what nothing mentions, a risk (docs/EXPLAIN.md §9.1, docair-8l6.58, 8l6.62); confirmed by the user (2026-11-20)"
+
+[intent]
+from = "docair-core.review.intent"
+checked = "314dbf2b"
+why = "the review's word for what was meant beside what changed: the commit messages, the changed docs, the doc blocks whose words changed (docs/EXPLAIN.md §9.2); with it the changed parts' whole texts and the changed files no part holds (docair-8l6.47); confirmed by the user (2026-11-20)"
+
+[item]
+from = "docair-lang-rust.item"
+checked = "cbf29ce4"
+why = "Project word: anything the Rust adapter picks up in a Rust file, not the everyday sense."
+
+[layout]
+why = "The sentences mean the graph layout, how boxes are arranged in the picture; the page-layout component only shares the name."
+
+["layout input"]
+term = false
+why = "self-explanatory: what docair-layout is given to lay out a picture; docair-viewer's layout_input module makes it"
+
+[lines]
+term = false
+why = "the docs mean lines on the chart or lines of code, not the lines `docair word` fills"
+
+[markdown]
+term = false
+why = "Everyday technology: Markdown files and fenced blocks, which the reader knows."
+
+[marker]
+from = "docair-core.lang.marker"
+checked = "9594a4ba"
+why = "Project word: the comment symbols that fence doc blocks; the summary alone does not say what they are for."
+
+[meet]
+from = "docair-core.facts.meet"
+checked = "8db837fe"
+why = "Project word: where two sides are joined without knowing each other; the examples make it concrete."
+
+[merge]
+from = "docair-core.merge"
+checked = "fce4c453"
+why = "Project word: the core's step of joining facts with doc blocks and descriptions, not the everyday sense."
+
+[merged]
+term = false
+code = "docair-core.change_steps.merged"
+why = "the AI (docair glossary, 2026-11-21): used in its everyday sense in prose (edges merged, endpoints merged into handlers), though `change_steps::merged` names the function"
+
+[message]
+term = false
+why = "Everyday word: error and status messages, which the reader knows."
+
+[model]
+term = false
+why = "Everyday word here: the AI model docair asks; the modules named model only share the name."
+
+[node]
+from = "docair-core.model.node"
+checked = "cbf29ce4"
+why = "The sentences mean graph nodes, which the glossary entry explains; the API-description tree node only shares the name."
+
+["open word"]
+from = "docair-core.meanings.open-word"
+why = "Project word: a used word naming parts whose meaning nothing settles; the part defines it."
+
+[openapi]
+term = false
+why = "Already explained: the glossary's API description entry covers OpenAPI."
+
+[operation]
+from = "docair-lang-apis.model.operation"
+why = "Project word: an OpenAPI operation, a route the described service answers, not any operation."
+
+[options]
+term = false
+why = "everyday word: what a caller can choose; docair-core's Options (how a scan runs) and docair-layout's Options (how a picture is laid out) are each just that"
+
+[origin]
+why = "The sentences mean a URL's origin in the browser (CORS) sense; the model's Origin, where a value came from, only shares the name."
+
+[out]
+term = false
+why = "Everyday word in the sentences: 'leaves out' and 'lay it out' are verbs; the Out component is not what they mean."
+
+[panels]
+from = "docair-viewer.page_panels"
+why = "the page's panels around the pictures: details, tips, the tree, the search words, the legend and the diagnostics; the module's docs say so, not the builder struct Panels (the user, 2026-11-20)"
+
+[part]
+term = false
+why = "everyday word in docair's docs for a node of the picture; docair-layout's Part is the same thing as the layout sees it"
+
+[patch]
+from = "data.patch"
+checked = "5c22cd65"
+why = "The sentences use patch for the proposed doc-block edits; the glossary entry and data.patch say the same."
+
+["picked file"]
+term = false
+why = "Everyday phrase: a file the user picked; the sentences use it plainly."
+
+[piece]
+from = "docair-core.review.piece"
+checked = "b6fc4925"
+why = "the review's word for one bit of a change docair found, which the AI groups into changes (docs/EXPLAIN.md §9.2); confirmed by the user (2026-11-20)"
+
+[placed]
+term = false
+why = "Everyday participle in the sentences (laid out on the canvas); the Placed part is about where symbols merge, a different sense."
+
+[placement]
+term = false
+why = "everyday word: where things are put; docair-layout's Placement is the result of placing a picture's parts"
+
+[plan]
+from = "docair-viewer.pr.plan"
+code = "docair-viewer.pr.plan"
+why = "the AI (docair glossary, 2026-11-21): the docs use `plan` as docair's command that updates a pull request's comments, not the everyday sense"
+
+[problem]
+term = false
+why = "the docs use the everyday word: what went wrong"
+
+[progress]
+term = false
+why = "everyday word for how far something is: an upload, a scan, a page drawing itself; the Progress type of the web app only holds that"
+
+[project]
+term = false
+why = "Everyday sense in the sentences: the codebase as a whole ('the whole project', 'the project root')."
+
+[question]
+term = false
+why = "Everyday word: what the user types to ask; the sentences use it plainly."
+
+[reach]
+from = "docair-core.model.reach"
+why = "the sentences mean how sure the code is about where a line goes (certain, one of, could), which the Reach type defines (docs/ADAPTERS.md §5.5)"
+
+[reader]
+term = false
+why = "The sentences mean a human reader; the Reader part merely shares the name and has no text."
+
+[recorded]
+term = false
+why = "Everyday participle: a walkthrough that was recorded; the Recorded part only holds who wrote it and when."
+
+[reference]
+term = false
+why = "everyday word: a place in the code that names a function, or a ref; the Reference struct of docair-scip only holds that place"
+
+[relation]
+from = "docair-core.facts.relation"
+why = "Project word for what adapters extract between symbols; the Relation part defines it and its kinds."
+
+[reply]
+term = false
+why = "Everyday word: what the model answers; the sentences use it plainly."
+
+[reported]
+term = false
+why = "Everyday verb in the sentences (shown to the user); the Reported part is about test results, not these sentences."
+
+[request]
+term = false
+why = "The sentences mean a request docair sends to the AI model, the everyday HTTP sense; the Request fact about code is a different sense."
+
+[resolve]
+from = "docair-core.resolve"
+why = "A pipeline stage name; the resolve module text says what stage 5 does."
+
+[resolved]
+term = false
+why = "Everyday participle (worked out, applied) in mixed senses; the Resolved part has no text."
+
+[review]
+from = "docair-ai.explain.change-findings"
+checked = "1f6c6f3b"
+why = "what docair explain writes and the changes section shows first: the changes, made understandable by the AI (docs/EXPLAIN.md §9); confirmed by the user against the stored review's docs (2026-11-20)"
+
+[route]
+from = "docair-core.route.route"
+checked = "08bb6297"
+why = "Project word for the paths code serves and descriptions declare; the route parts define it."
+
+[router]
+term = false
+why = "everyday word: what draws the lines; docair-layout's router module is docair's own router, ported from viewer.js"
+
+[rule]
+from = "docair-rules.rule"
+checked = "018c3443"
+why = "Project word for the framework patterns docair matches; the Rule part defines it."
+
+["rule file"]
+from = "docair-rules.rule-file"
+checked = "cbf29ce4"
+why = "Project word for the YAML files the rules live in; the RuleFile part is it, but its text is empty."
+
+[segment]
+term = false
+why = "Plain word: one piece of a path or of an id; the sentences use it in its everyday sense."
+
+[selection]
+term = false
+why = "Plain word: what the reader picks in the picture; the chat panel that defined it went with the web app's AI."
+
+[serve]
+from = "docair-core.facts.serve"
+checked = "9cae9cb8"
+why = "Project word for the handler side of a route; the Serve part defines it."
+
+[severity]
+term = false
+why = "Everyday word: how serious a diagnostic is; the Severity part has no text of its own."
+
+[signature]
+from = "docair-core.model.signature"
+why = "Programming term the docs lean on; the Signature part defines it in plain words."
+
+[slice]
+from = "docair-core.slice"
+checked = "5e603544"
+why = "one part of the system from a seed to its ends; the glossary entry explains both the module and struct Slice, as the user asked (2026-11-20)"
+
+["source file"]
+term = false
+why = "Everyday word: a file of code; the part only adds that stage 1 picked it."
+
+[svg]
+term = false
+why = "the picture format; the sentences mean SVG pictures, and the module svg has no text of its own"
+
+[symbol]
+from = "docair-core.facts.symbol"
+why = "Jargon for anything named in the code; the Symbol part defines it with examples."
+
+[tag]
+why = "Project word, already explained in the glossary; the Tag part has no text of its own."
+
+["tag value"]
+from = "docair-core.resolve.tag-value"
+checked = "9cd87ee7"
+why = "Project word; the part's summary is a terse list of notations, so it is spelled out."
+
+[target]
+term = false
+why = "Everyday word: what a relation points at; the part's text says exactly that."
+
+[term]
+term = false
+why = "Everyday word here: a word the glossary explains; the part's text says it plainly."
+
+[text]
+term = false
+why = "everyday word; docair-layout's text module only measures words in one monospace font"
+
+[tidy]
+term = false
+why = "Plain verb: to put in order; docair tidy, docair-core.tidy and the page's Tidy are named after it (docs/ADAPTERS.md §6.1)."
+
+[tree]
+term = false
+why = "Everyday word; the sentences mean the page's list panel and the syntax tree, and the listed part has no text."
+
+[turn]
+term = false
+why = "Everyday word: one exchange of a conversation; the part's text says it."
+
+[unchecked]
+from = "docair-core.meanings.unchecked"
+why = "Project word for a state of glossary words; the part's text defines it in one plain sentence."
+
+["upload panel"]
+from = "docair-web.upload-panel"
+why = "Named part of the web app; the part's text says what it does and what it leaves out."
+
+[value]
+term = false
+why = "Everyday word; the sentences mean tag values and Helm values, not the YAML Value part."
+
+[view]
+from = "docair-core.model.view"
+checked = "57b8e3e7"
+why = "Project word: the page's display state that replies change and apply writes; the part's text is very short."
+
+["view change"]
+from = "docair-ai.ask.view-change"
+checked = "72f639a3"
+why = "Project word; the part's text is just 'sections to hide and show', so it is tied to the reply and the view."
+
+[walkthrough]
+from = "docair-core.model.walkthrough"
+checked = "626458b9"
+why = "Already explained; the part's text says the same as the glossary entry."
+
+[word]
+term = false
+why = "Everyday word; the sentences use it plainly and the word part has no text."
+
+["repeated tag"]
+from = "docair-core.tidy.repeated-tag"
+why = "Project word: a hand-written tag the code says for certain, with nothing of its own (docs/ADAPTERS.md §6.1); the RepeatedTag part defines it."
+
+["served project"]
+from = "docair-server.project.served-project"
+why = "Project word: the project docair serve (or a kept upload) serves; the ServedProject part defines it."
+
+[diff]
+term = false
+why = "Plain word: a comparison of two versions, as git uses it; docair-core.diff and docair-cli.diff are named after it."
+
+[workflow]
+term = false
+why = "Plain word: what a user does, step by step. docair's findings no longer hold workflows; the AI words each change step instead (docs/EXPLAIN.md §8)."
+
+["graph diff"]
+from = "docair-core.diff.graph-diff"
+why = "Project word: what two graphs of a project differ in (docs/CHANGES.md §3); the GraphDiff part defines it."
+
+[explain]
+term = false
+why = "Plain verb; docair explain and docair-ai.explain are named after it."
+
+[commits]
+from = "docair-server.commits"
+why = "Project word: two commits of a project compared, their graphs read from git worktrees (docs/CHANGES.md); docair-server.commits defines it."
+
+["explain job"]
+from = "docair-server.project.explain-job"
+why = "Project word: one run of explaining a pair of commits on the server, followed through GET /api/explain/<job> (docs/EXPLAIN.md §8); docair-server.project.explain-job is what it answers, explain-jobs keeps them."

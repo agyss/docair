@@ -1,0 +1,31 @@
+#***
+# docair-layout's move of a part by hand, built to WebAssembly for the page
+# (docs/SLICES.md §7): the page asks it where a moved part's lines go, and
+# the router that answers is the one `docair build` lays out with.
+#
+# The module is not kept in the repository: build.rs builds it for wasm32
+# whenever this crate is built for the host, so it is always built from the
+# code as it is (docair-702.42); a build needs the wasm32 target.
+#
+# @id      docair-layout-wasm
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-layout-wasm"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "docair-layout's move of a part, as a WebAssembly module for the page"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+docair-layout = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true

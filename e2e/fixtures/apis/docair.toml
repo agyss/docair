@@ -1,0 +1,12 @@
+# An orders system whose APIs are also described in OpenAPI and AsyncAPI
+# files, used by the tests of docs/IMPORTS.md. Some routes and events disagree
+# with the code on purpose.
+system = "orders"
+
+[[import.api]]
+file    = "vendor/payments-openapi.json"
+part_of = "payments"
+
+[[import.api]]
+file   = "api/openapi.yaml"
+ignore = ["GET /api/healthz"]

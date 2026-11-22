@@ -1,0 +1,11 @@
+#***
+# Books: the ledger of payments and its nightly audit.
+#
+# @id      books
+# @kind    module
+# @part-of words
+#***
+[package]
+name = "books"
+version = "0.1.0"
+edition = "2024"

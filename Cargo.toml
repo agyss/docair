@@ -1,0 +1,84 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+license = "Elastic-2.0"
+authors = ["Andreas Mennel"]
+repository = "https://github.com/agyss/docair"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace.dependencies]
+docair-adapters = { path = "crates/docair-adapters" }
+docair-ai = { path = "crates/docair-ai" }
+docair-core = { path = "crates/docair-core" }
+docair-layout = { path = "crates/docair-layout" }
+docair-layout-wasm = { path = "crates/docair-layout-wasm" }
+docair-lang-apis = { path = "crates/docair-lang-apis" }
+docair-lang-generic = { path = "crates/docair-lang-generic" }
+docair-infra = { path = "crates/docair-infra" }
+docair-lang-rust = { path = "crates/docair-lang-rust" }
+docair-lang-ts = { path = "crates/docair-lang-ts" }
+docair-rules = { path = "crates/docair-rules" }
+docair-scip = { path = "crates/docair-scip" }
+docair-viewer = { path = "crates/docair-viewer" }
+
+anyhow = "1.0.104"
+# rust-analyzer as a library for docair-index (docs/REGENERATE.md §4.4, docs/LIBRARIES.md): its
+# crates are published weekly with an unstable API, so all pinned exactly to one release,
+# 0.0.358 (2026-10-12), the newest older than two weeks.
+ra_ap_hir = "=0.0.358"
+ra_ap_ide = "=0.0.358"
+ra_ap_ide_db = "=0.0.358"
+ra_ap_load-cargo = "=0.0.358"
+ra_ap_project_model = "=0.0.358"
+ra_ap_syntax = "=0.0.358"
+ra_ap_vfs = "=0.0.358"
+# ra_ap_hir_def pins unicode-ident 1.0.24 (Unicode 17), and rustc_lexer checks both name the same
+# Unicode version: unicode-properties 0.1.5 is Unicode 18, so 0.1.4.
+unicode-properties = "=0.1.4"
+# Packing the pictures into the page (docs/LIBRARIES.md); both the newest, and older than two weeks.
+base64 = "0.23.1"
+# Framework rules as patterns (docs/ADAPTERS.md §5.2); same tree-sitter 0.27 as the adapters.
+# Exact: newest release older than two weeks (0.51.1, 2026-11-02; 0.51.2 and 0.51.3 are newer).
+ast-grep-config = "=0.51.1"
+ast-grep-core = "=0.51.1"
+clap ={ version = "4.6.7", features = ["derive"] }
+globset = "0.4.21"
+ignore = "0.4.34"
+miniz_oxide = "0.9.1"
+petgraph = "0.8.3"
+# scip pins protobuf exactly; both are older than two weeks (docs/LIBRARIES.md).
+protobuf = "=3.7.2"
+pulldown-cmark = { version = "0.13.5", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Exact: newest release older than two weeks; ast-grep-config 0.51 needs ^2.0.0 (docs/LIBRARIES.md).
+serde-saphyr = "=2.0.0"
+scip = "=0.10.0"
+toml = "1.1.8"
+tree-sitter = "0.27.1"
+tree-sitter-rust = "0.24.2"
+# 0.23.2 (2024-11-11) is the newest release (docs/LIBRARIES.md).
+tree-sitter-typescript = "0.23.2"
+axum = { version = "0.8.9", features = ["multipart"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "sync"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs"] }
+tempfile = "3.27.0"
+similar = "3.2.1"
+# 8.2.2 is younger than two weeks (docs/LIBRARIES.md).
+notify = "=8.2.1"
+ureq = { version = "3.5.2", features = ["json"] }
+
+# The page's WebAssembly module (docair-layout-wasm's build.rs): small over fast.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

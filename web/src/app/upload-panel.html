@@ -1,0 +1,49 @@
+<section
+  class="drop"
+  [class.dragging]="dragging()"
+  (dragover)="over($event)"
+  (dragleave)="dragging.set(false)"
+  (drop)="drop($event)"
+>
+  <p class="lead">Drop a project folder here, or</p>
+  <div class="buttons">
+    <label class="button primary">
+      Choose a folder
+      <input type="file" webkitdirectory multiple (change)="pick($event)" data-test="folder-input" />
+    </label>
+    <label class="button secondary">
+      Choose files
+      <input type="file" multiple (change)="pick($event)" data-test="files-input" />
+    </label>
+  </div>
+  <p class="hint muted" data-test="drop-hint">
+    A big project? Drag its folder in: a chosen folder makes the browser list every file in it first,
+    build output and dependencies too, while a dropped one is walked by docair, which skips them.
+  </p>
+
+  @if (reading(); as r) {
+    <app-progress-line [progress]="r" />
+  }
+  @if (problem()) {
+    <p class="error" data-test="pick-error">{{ problem() }}</p>
+  }
+
+  @if (files().length) {
+    <p class="picked" data-test="picked">
+      <strong>{{ folder() || 'files' }}</strong> · {{ files().length }} files · {{ size() }}
+      @if (skipped()) {
+        <span class="muted">({{ skipped() }} left out: what git ignores, dependencies, build output, secrets and files over 2 MB)</span>
+      }
+    </p>
+    <button class="button primary" [disabled]="busy()" (click)="generate.emit(files())" data-test="generate">
+      @if (busy()) {
+        Generating…
+      } @else {
+        Generate docair page
+      }
+    </button>
+    @if (progress(); as p) {
+      <app-progress-line [progress]="p" />
+    }
+  }
+</section>

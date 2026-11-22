@@ -1,0 +1,2 @@
+# A tiny project for the e2e tests: a library with one documented function and a module of code no doc block describes.
+system = "fold"

@@ -1,0 +1,392 @@
+# docair-server's HTTP API as an OpenAPI description. docair reads it
+# (docs/IMPORTS.md): every operation merges into the handler that serves its
+# route, and a route on one side only is a warning (W114, W115).
+openapi: 3.1.0
+info:
+  title: docair-server
+  version: 0.1.0
+  description: Turns an uploaded folder into a docair page, and answers questions about it with the configured AI model.
+paths:
+  /:
+    get:
+      operationId: page
+      summary: The documentation of the project `docair serve` serves.
+      responses:
+        '200':
+          description: The documentation, never cached.
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: The server serves no project.
+  /api/version:
+    get:
+      operationId: version
+      summary: How often the documentation has been written; the page waits on it to reload.
+      parameters:
+        - {name: after, in: query, required: false, schema: {type: integer, format: int64}, description: "Answer once the version is newer than this, or after 25 s with the same (docs/REGENERATE.md §6)."}
+      responses:
+        '200':
+          description: The version, one more each time the documentation is written again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeVersion'
+  /api/apply:
+    post:
+      operationId: apply
+      summary: Write the edits that wait into the project's files, scan again and write the documentation again.
+      responses:
+        '200':
+          description: The files written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeApplied'
+        '409':
+          description: No edits wait to be applied.
+  /api/relayout:
+    post:
+      operationId: relayout
+      summary: Forget the kept layouts of a picture, or of every picture, and write the documentation again (docs/REGENERATE.md §7).
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                addr: {type: string, description: "The picture's address, e.g. layer/code; none for every picture."}
+      responses:
+        '200':
+          description: The documentation written again.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [regenerated, version]
+                properties:
+                  regenerated: {type: boolean}
+                  version: {type: integer, format: int64}
+  /healthz:
+    get:
+      operationId: health
+      summary: Liveness and readiness probe.
+      responses:
+        '200':
+          description: The server is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/projects/{id}/{rest}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}, description: "The kept upload: `page` of the scan's answer is /api/projects/<id>/."}
+      - {name: rest, in: path, required: true, schema: {type: string}, description: "Empty for the page; else api/ai, api/version, api/ask, api/word, api/glossary, api/apply, or another output (docair.graph.json)."}
+    get:
+      operationId: kept_upload
+      summary: The kept upload's page, its version, whether the AI is on, or another output; open to any origin.
+      responses:
+        '200': {description: The page (text/html) or the route's JSON, as docair serve answers it at /.}
+        '404': {description: The upload is no longer kept.}
+    post:
+      operationId: kept_upload_post
+      summary: Ask, word, explain or apply on the kept upload, as docair serve does for its project; open to any origin.
+      responses:
+        '200': {description: A ServeAnswer, or for api/apply a ServeApplied.}
+        '404': {description: The upload is no longer kept.}
+  /api/explain:
+    post:
+      operationId: explain
+      summary: Start explaining what the served project changes since commit a (or between a and b), as a job; the findings are stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [a]
+              properties:
+                a: {type: string}
+                b: {type: string}
+      responses:
+        '202': {description: "ExplainJob: job, a, b, running, phase, flows, requests, started, answered, left, asking, seconds, error, text, version, findings. A job of the same commits that still runs is answered again."}
+        '409': {description: The project has no git history (an upload), or a job of other commits runs.}
+        '503': {description: AI is off.}
+  /api/explain/{job}:
+    get:
+      operationId: explain_job
+      summary: How far an explain job is, the words the page shows, and at the end its findings (ChangeFindings) and the documentation's new version.
+      parameters:
+        - {name: job, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: ExplainJob.}
+        '404': {description: The job is no longer kept (10 minutes after it ends).}
+  /api/changes:
+    get:
+      operationId: changes
+      summary: What the served page compares (docs/EDITOR.md §4), whether a comparison is being written, and why the page has no changes section when a side could not be read.
+      responses:
+        '200':
+          description: The pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeChanges'
+        '404': {description: The server serves no project.}
+    post:
+      operationId: compare
+      summary: Compare old with new (the working tree without it), from where new left old; the page is written again in the background and reloads.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComparedSides'
+      responses:
+        '202':
+          description: Being compared; GET says when it is done.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeChanges'
+        '400': {description: git knows no commit by one of the names.}
+        '409': {description: The project has no git history, or a comparison is being written.}
+    delete:
+      operationId: stop_comparing
+      summary: The page without its changes section, written again.
+      responses:
+        '200':
+          description: The page compares nothing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServeChanges'
+        '409': {description: A comparison is being written.}
+  /api/tidy:
+    get:
+      operationId: tidy_list
+      summary: The tags the code repeats in the served project, and the patch that removes them.
+      responses:
+        '200': {description: "{ tags: [{ node, tag, line, code_says, code_file, code_line, reason }], patch }"}
+    post:
+      operationId: tidy_apply
+      summary: Remove the picked repeated tags (all when none are named) and write the documentation again.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: object, properties: {node: {type: string}, tag: {type: string}}}}
+      responses:
+        '200': {description: A ServeApplied.}
+        '409': {description: No tag repeats the code.}
+  /api/scan:
+    post:
+      operationId: scan_upload
+      summary: Scan an uploaded folder and answer with its graph and page.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '200':
+          description: The summary, the graph and the page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResult'
+  /api/ai:
+    get:
+      operationId: ai_status
+      summary: Whether questions can be asked, and of which model.
+      responses:
+        '200':
+          description: The AI settings, without the key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiStatus'
+  /api/ask:
+    post:
+      operationId: ask
+      summary: Ask the model about the graph, or without a graph about the project the server serves (then the answer is a ServeAnswer).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+      responses:
+        '200':
+          description: The answer, a walkthrough, a view change, proposed edits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+  /api/word:
+    post:
+      operationId: word
+      summary: Let the model word the lines that say nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WordRequest'
+      responses:
+        '200':
+          description: The words, as edits of the tags.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+  /api/glossary:
+    post:
+      operationId: glossary
+      summary: Let the model explain the terms the glossary lacks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlossaryRequest'
+      responses:
+        '200':
+          description: The new glossary entries, as edits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+  /api/patch:
+    post:
+      operationId: patch
+      summary: Apply edits to the uploaded files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchRequest'
+      responses:
+        '200':
+          description: The changed files and their diff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatchAnswer'
+components:
+  schemas:
+    ScanResult:
+      type: object
+      properties:
+        system: {type: string}
+        files: {type: integer}
+        nodes: {type: integer}
+        edges: {type: integer}
+        flows: {type: integer}
+        errors: {type: integer}
+        warnings: {type: integer}
+        diagnostics: {type: array, items: {type: object}}
+        html: {type: string}
+        graph: {type: object}
+        page: {type: string, description: "Where the server keeps the upload as a project: /api/projects/<id>/."}
+    ComparedSides:
+      type: object
+      required: [old]
+      properties:
+        old: {type: string, description: "A branch, tag or commit."}
+        new: {type: [string, "null"], description: "A branch, tag or commit; none for the working tree."}
+    ServeChanges:
+      type: object
+      properties:
+        old: {type: [string, "null"]}
+        new: {type: [string, "null"]}
+        base: {type: [string, "null"], description: "The commit compared from when it is not old: where new left old."}
+        comparing: {type: boolean}
+        error: {type: [string, "null"]}
+        version: {type: integer}
+    ServeVersion:
+      type: object
+      properties:
+        version: {type: integer}
+    ServeAnswer:
+      type: object
+      properties:
+        reply: {$ref: '#/components/schemas/Reply'}
+        regenerated: {type: boolean}
+        version: {type: integer}
+        patch: {type: string}
+        pending: {type: integer}
+        html: {type: string, description: "The reply as the page's chat shows it: the answer, a walkthrough to play, words, terms, a view change, the edits waiting with their diff."}
+    ServeApplied:
+      type: object
+      properties:
+        edited: {type: array, items: {type: string}}
+        regenerated: {type: boolean}
+        version: {type: integer}
+    AiStatus:
+      type: object
+      properties:
+        enabled: {type: boolean}
+        model: {type: [string, 'null']}
+    AskRequest:
+      type: object
+      properties:
+        question: {type: string}
+        graph: {type: [object, 'null']}
+        history: {type: array, items: {type: object}}
+        context:
+          description: "What the question points at: one part's id, or typed refs: part:<id>, data:<id>, term:<word>, line:<k>@<address>, edges:<i>,<j>. Refs that name nothing are left out and named in the reply's problems."
+          oneOf:
+            - {type: string}
+            - {type: array, items: {type: string}}
+            - {type: 'null'}
+    WordRequest:
+      type: object
+      properties:
+        graph: {type: [object, 'null']}
+        scope: {type: [string, 'null']}
+        limit: {type: [integer, 'null']}
+        all: {type: boolean}
+    GlossaryRequest:
+      type: object
+      properties:
+        graph: {type: [object, 'null']}
+        limit: {type: [integer, 'null']}
+    PatchRequest:
+      type: object
+      properties:
+        changes: {type: array, items: {type: object}}
+        files: {type: array, items: {$ref: '#/components/schemas/FileText'}}
+        ids: {type: array, items: {type: string}}
+    PatchAnswer:
+      type: object
+      properties:
+        files: {type: array, items: {$ref: '#/components/schemas/FileText'}}
+        diff: {type: string}
+        applied: {type: array, items: {type: integer}}
+        problems: {type: array, items: {type: string}}
+    FileText:
+      type: object
+      properties:
+        path: {type: string}
+        text: {type: string}
+    Reply:
+      type: object
+      properties:
+        answer: {type: string}
+        walkthrough: {type: object}
+        view: {type: object}
+        changes: {type: array, items: {type: object}}
+        wording: {type: array, items: {type: object}}

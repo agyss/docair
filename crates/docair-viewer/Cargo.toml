@@ -1,0 +1,36 @@
+#***
+# Renders the graph into one self-contained HTML file: every picture laid out
+# (docair-layout) and drawn as SVG by the CLI, the panels around them, and a
+# thin script that shows them, so it works offline and can be mailed or archived.
+#
+# @id      docair-viewer
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-viewer"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+docair-core.workspace = true
+docair-layout = { workspace = true, features = ["serde"] }
+# The router built to WebAssembly, for moving a part by hand in the page (docair-9qv).
+docair-layout-wasm.workspace = true
+miniz_oxide.workspace = true
+pulldown-cmark = { workspace = true, features = ["html"] }
+# float_roundtrip: a layout kept on disk reads back to the very numbers it was written with (docs/LIBRARIES.md).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
+[dev-dependencies]
+# The e2e fixtures' graphs, for the golden pictures (tests/svg.rs).
+docair-adapters.workspace = true
+# A folder of its own for the kept layouts of a test (tests/page_state.rs).
+tempfile.workspace = true

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Hands post-merge to beads' hook (see .beads/hooks); the secret check runs at pre-commit only.
+[ -x .beads/hooks/post-merge ] && exec .beads/hooks/post-merge "$@"
+exit 0

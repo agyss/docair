@@ -1,0 +1,23 @@
+# Reading files in Node: `fs.readFileSync(path)`, `readFile(path)` from
+# `node:fs/promises`, `fs.readdirSync(dir)`. The block names the store; the
+# rule confirms that the code reads one (docs/ADAPTERS.md §5.7).
+id: ts.node.fs-read
+language: typescript
+rule:
+  any:
+    - pattern: $FS.readFileSync($P, $$$)
+    - pattern: $FS.readFileSync($P)
+    - pattern: $FS.readdirSync($P, $$$)
+    - pattern: $FS.readdirSync($P)
+    - pattern: $FS.readFile($P, $$$)
+    - pattern: $FS.readFile($P)
+    - pattern: readFileSync($P, $$$)
+    - pattern: readFileSync($P)
+    - pattern: readFile($P, $$$)
+    - pattern: readFile($P)
+constraints:
+  FS: { regex: ^(fs|fsp|promises|fs\.promises)$ }
+facts:
+  - reads: file
+    path: $P
+    by: enclosing

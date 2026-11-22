@@ -1,0 +1,121 @@
+{
+  "schema": "docair.walkthrough/0",
+  "id": "how-much-is-done-by-the-ai-how-much-by-docair",
+  "question": "how much is done by the AI, how much by docair?",
+  "title": "What the model does, and what docair does around it",
+  "summary": "docair builds the graph, the page and the edits itself; the model is consulted in four places, and each time docair prepares the input and checks the output against the graph.",
+  "recorded": {
+    "at": "2026-11-19T22:14:43Z",
+    "by": "ai",
+    "model": "zai-org/GLM-5.3-Flash",
+    "endpoint": "https://api.together.xyz/v1"
+  },
+  "steps": [
+    {
+      "title": "docair builds the graph itself, no model involved",
+      "text": "Scanning is deterministic: docair walks the files, extracts doc blocks, lets the language adapters read the code, and resolves refs into edges. The model is never asked during a scan — the graph is docair's own work.",
+      "nodes": [
+        "docair-core.scan",
+        "docair-core.adapter.collect"
+      ],
+      "edges": [
+        {
+          "from": "docair-core.scan",
+          "to": "docair-core.adapter.collect"
+        }
+      ]
+    },
+    {
+      "title": "Your question goes to the model with a digest docair made",
+      "text": "When you ask something, docair condenses the graph into a digest — nodes, edges and scenarios, no source code — and sends it with the question and the earlier turns. The prompt is docair's; the answer is the model's.",
+      "nodes": [
+        "docair-ai.ask.ask",
+        "docair-ai.ask.digest",
+        "docair-ai.client.chat"
+      ],
+      "edges": [
+        {
+          "from": "docair-ai.ask.ask",
+          "to": "docair-ai.ask.digest"
+        },
+        {
+          "from": "docair-ai.ask.ask",
+          "to": "docair-ai.client.chat"
+        },
+        {
+          "from": "docair-ai.client.chat",
+          "to": "ai-endpoint"
+        }
+      ]
+    },
+    {
+      "title": "docair checks the model's reply against the graph",
+      "text": "The model answers with a walkthrough in JSON, but docair binds every id and proposed edit against the graph and sends one repair request when the reply names things that are not there. Only a reply that fits the graph is kept.",
+      "nodes": [
+        "docair-ai.ask.check_draft",
+        "docair-core.walkthrough.bind"
+      ],
+      "edges": [
+        {
+          "from": "docair-ai.ask.ask",
+          "to": "docair-ai.ask.check_draft"
+        },
+        {
+          "from": "docair-ai.ask.check_draft",
+          "to": "docair-core.walkthrough.bind"
+        }
+      ]
+    },
+    {
+      "title": "docair, not the model, writes the files",
+      "text": "The checked reply becomes a recorded walkthrough and a patch of doc blocks, written by docair's edit code. The model proposes; docair resolves where each edit goes and applies it.",
+      "nodes": [
+        "docair-cli.ask.turn",
+        "docair-core.walkthrough.save",
+        "docair-core.edit.patch"
+      ],
+      "edges": [
+        {
+          "from": "docair-cli.ask.turn",
+          "to": "docair-core.walkthrough.save"
+        },
+        {
+          "from": "docair-cli.ask.turn",
+          "to": "docair-core.edit.patch"
+        }
+      ]
+    },
+    {
+      "title": "Three smaller AI jobs, each wrapped by docair",
+      "text": "The model also words the lines that say nothing (docair word), proposes glossary entries (docair glossary), and reviews what two commits change (docair explain). In each, docair prepares the input — the unworded lines, the docs' words, the pieces and intent of a change — and keeps only what binds to the graph.",
+      "nodes": [
+        "docair-ai.word.word",
+        "docair-ai.glossary.explain",
+        "docair-ai.explain.explain"
+      ],
+      "edges": [
+        {
+          "from": "docair-ai.word.word",
+          "to": "docair-ai.client.chat"
+        },
+        {
+          "from": "docair-ai.glossary.explain",
+          "to": "docair-ai.client.chat"
+        },
+        {
+          "from": "docair-ai.explain.explain",
+          "to": "docair-ai.client.chat_streamed"
+        }
+      ]
+    },
+    {
+      "title": "Everything else is docair's own code",
+      "text": "Layout, the SVG pictures, the self-contained page, the server, tidy, slices and the changes between commits are all deterministic docair code. The model appears nowhere in them.",
+      "nodes": [
+        "docair-viewer.render_html",
+        "docair-layout.lay_out"
+      ],
+      "edges": []
+    }
+  ]
+}

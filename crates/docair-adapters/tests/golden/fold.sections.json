@@ -1,0 +1,103 @@
+[
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "billing"
+    ],
+    "parts": [
+      {
+        "id": "billing",
+        "open": true
+      },
+      {
+        "id": "billing.bill",
+        "parent": "billing"
+      },
+      {
+        "id": "billing.money",
+        "parent": "billing",
+        "closed": true,
+        "holds": 3
+      },
+      {
+        "id": "billing.tax",
+        "parent": "billing"
+      },
+      {
+        "id": "billing.fee",
+        "parent": "billing"
+      }
+    ],
+    "lines": [
+      {
+        "from": "billing.bill",
+        "to": "billing.tax",
+        "kind": "call",
+        "members": [
+          0
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "billing.money"
+    ],
+    "parts": [
+      {
+        "id": "billing",
+        "open": true,
+        "more": 1
+      },
+      {
+        "id": "billing.money",
+        "parent": "billing",
+        "open": true
+      },
+      {
+        "id": "billing.money.amount",
+        "parent": "billing.money",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "billing.money.round",
+        "parent": "billing.money"
+      }
+    ],
+    "lines": []
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "billing.money.amount"
+    ],
+    "parts": [
+      {
+        "id": "billing",
+        "open": true,
+        "more": 1
+      },
+      {
+        "id": "billing.money",
+        "parent": "billing",
+        "open": true,
+        "more": 1
+      },
+      {
+        "id": "billing.money.amount",
+        "parent": "billing.money",
+        "open": true
+      },
+      {
+        "id": "billing.money.amount.add",
+        "parent": "billing.money.amount"
+      }
+    ],
+    "lines": []
+  }
+]

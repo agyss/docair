@@ -1,0 +1,57 @@
+<!--***
+  The page layout: the upload page, or once a page is generated, that page filling the whole window.
+
+  @id      docair-web.layout
+  @kind    component
+  @part-of docair-web.app
+***-->
+@if (result(); as r) {
+  <app-result-view [result]="r" (closed)="reset()" />
+  @if (error()) {
+    <p class="error floating" data-test="error">{{ error() }}</p>
+  }
+} @else {
+  <main class="page">
+    <header class="top">
+      <h1><span class="logo">◎</span> docair</h1>
+      <p class="tagline">See how a project works: from the infrastructure down to the functions, drawn from its code and docs.</p>
+    </header>
+
+    <app-upload-panel [busy]="busy()" [progress]="progress()" (generate)="generate($event)" />
+
+    @if (error()) {
+      <p class="error" data-test="error">{{ error() }}</p>
+    }
+
+    <section class="how" aria-label="How it works">
+      <div class="step">
+        <span class="num">1</span>
+        <h3>Generate the docs</h3>
+        <p>Drop a project folder. docair reads doc blocks in any language, Markdown, Terraform, Helm and Dockerfiles. Nothing is stored; <code>.env</code> and Terraform state never leave your machine.</p>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <h3>Look at it layer by layer</h3>
+        <p>Switch between the infrastructure, the network, Kubernetes, the apps and the code, one concern at a time, and zoom into any box. Hide what you don't care about. Tests show next to what they cover.</p>
+      </div>
+      <div class="step">
+        <span class="num">3</span>
+        <h3>Ask, and fix the docs</h3>
+        <p>Ask how something works and follow the walkthrough, or tell docair what is wrong or missing: review the edit, apply it to the server's copy, and download the patch for your code. In your own project, <code>docair serve</code> applies it to the files, and <code>docair ask</code> and <code>docair chat</code> do the same in the terminal.</p>
+      </div>
+    </section>
+
+    <details class="example">
+      <summary>What docair reads: a doc block</summary>
+      <pre><code>/***
+ * Store a new order.
+ *
+ * &#64;http    POST /api/orders
+ * &#64;writes  orders-db (Order)
+ * &#64;flow    checkout 3 "the API stores the order"
+ ***/
+pub fn create_order(order: Order) &#123; … &#125;</code></pre>
+      <p>Blocks open with <code>/***</code>, <code>#***</code> or <code>&lt;!--***</code>, whatever the language. Tags say what a part is, what it calls, reads and writes. The full format is in docs/SPEC.md.</p>
+    </details>
+  </main>
+}

@@ -1,0 +1,65 @@
+import { HttpClient, HttpEvent } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+import { Observable } from 'rxjs';
+
+/** A file the user picked, with its path inside the picked folder. */
+export interface PickedFile {
+  path: string;
+  file: File;
+}
+
+/** One diagnostic, as docair-server reports it. */
+export interface Diagnostic {
+  code: string;
+  severity: 'error' | 'warning';
+  message: string;
+  file?: string;
+  line?: number;
+}
+
+/** What docair-server answers for one upload. */
+export interface ScanResult {
+  system: string;
+  files: number;
+  nodes: number;
+  edges: number;
+  flows: number;
+  errors: number;
+  warnings: number;
+  diagnostics: Diagnostic[];
+  html: string;
+  /** Where the server keeps the upload as a project: its page, which asks the AI and applies edits. */
+  page?: string;
+}
+
+/***
+ * Talks to docair-server: sends the picked files and reports the upload's progress.
+ *
+ * @id      docair-web.scan-service
+ * @kind    component
+ * @part-of docair-web
+ ***/
+@Injectable({ providedIn: 'root' })
+export class ScanService {
+  private readonly http = inject(HttpClient);
+
+  /***
+   * Upload the files as one multipart request; each part is named after the
+   * file's path in the picked folder, so the server can rebuild the folder.
+   *
+   * The request goes to the page's own origin: nginx in the docair-web
+   * container passes `/api` on to docair-server (docker/README.md).
+   *
+   * @id      docair-web.scan-service.scan
+   * @part-of docair-web.scan-service
+   * @calls   nginx (POST /api/scan: files) -> ScanResult
+   * @flow    upload 3 "the browser posts the files to /api/scan"
+   ***/
+  scan(files: PickedFile[]): Observable<HttpEvent<ScanResult>> {
+    const form = new FormData();
+    for (const picked of files) {
+      form.append('file', picked.file, picked.path);
+    }
+    return this.http.post<ScanResult>('/api/scan', form, { observe: 'events', reportProgress: true });
+  }
+}

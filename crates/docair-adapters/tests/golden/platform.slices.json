@@ -1,0 +1,457 @@
+[
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "k8s.ingress.shop"
+    },
+    "ends": [
+      {
+        "id": "k8s.release.traefik",
+        "stable": true
+      },
+      {
+        "id": "k8s.svc.api",
+        "stable": true
+      },
+      {
+        "id": "k8s.svc.web",
+        "stable": true
+      },
+      {
+        "id": "shopper",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "k8s.ingress.shop",
+      "k8s.release.traefik",
+      "k8s.svc.api",
+      "k8s.svc.web",
+      "shopper"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "k8s.release.traefik",
+        "to": "k8s.ingress.shop",
+        "kind": "data"
+      },
+      {
+        "edge": 1,
+        "from": "k8s.ingress.shop",
+        "to": "k8s.svc.api",
+        "kind": "route"
+      },
+      {
+        "edge": 2,
+        "from": "k8s.ingress.shop",
+        "to": "k8s.svc.web",
+        "kind": "route"
+      },
+      {
+        "edge": 11,
+        "from": "shopper",
+        "to": "k8s.ingress.shop",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 0
+      },
+      {
+        "id": "k8s.ns.shop",
+        "more": 0
+      },
+      {
+        "id": "k8s.ns.traefik",
+        "more": 0
+      },
+      {
+        "id": "k8s.release.shop",
+        "more": 2
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "k8s.svc.api"
+    },
+    "ends": [
+      {
+        "id": "k8s.ingress.shop",
+        "stable": true
+      },
+      {
+        "id": "k8s.deploy.api",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "k8s.svc.api",
+      "k8s.ingress.shop",
+      "k8s.deploy.api"
+    ],
+    "lines": [
+      {
+        "edge": 1,
+        "from": "k8s.ingress.shop",
+        "to": "k8s.svc.api",
+        "kind": "route"
+      },
+      {
+        "edge": 3,
+        "from": "k8s.svc.api",
+        "to": "k8s.deploy.api",
+        "kind": "select"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 1
+      },
+      {
+        "id": "k8s.ns.shop",
+        "more": 0
+      },
+      {
+        "id": "k8s.release.shop",
+        "more": 2
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "k8s.svc.web"
+    },
+    "ends": [
+      {
+        "id": "k8s.ingress.shop",
+        "stable": true
+      },
+      {
+        "id": "k8s.deploy.web",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "k8s.svc.web",
+      "k8s.ingress.shop",
+      "k8s.deploy.web"
+    ],
+    "lines": [
+      {
+        "edge": 2,
+        "from": "k8s.ingress.shop",
+        "to": "k8s.svc.web",
+        "kind": "route"
+      },
+      {
+        "edge": 4,
+        "from": "k8s.svc.web",
+        "to": "k8s.deploy.web",
+        "kind": "select"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 1
+      },
+      {
+        "id": "k8s.ns.shop",
+        "more": 0
+      },
+      {
+        "id": "k8s.release.shop",
+        "more": 2
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "tf.kind_cluster.dev"
+    },
+    "ends": [
+      {
+        "id": "k8s.cluster.dev",
+        "stable": true
+      },
+      {
+        "id": "tf.helm_release.ingress",
+        "stable": false,
+        "within": "terraform"
+      },
+      {
+        "id": "tf.helm_release.shop",
+        "stable": false,
+        "within": "terraform"
+      }
+    ],
+    "parts": [
+      "tf.kind_cluster.dev",
+      "k8s.cluster.dev",
+      "tf.helm_release.ingress",
+      "tf.helm_release.shop"
+    ],
+    "lines": [
+      {
+        "edge": 5,
+        "from": "tf.kind_cluster.dev",
+        "to": "k8s.cluster.dev",
+        "kind": "create"
+      },
+      {
+        "edge": 6,
+        "from": "tf.kind_cluster.dev",
+        "to": "tf.helm_release.ingress",
+        "kind": "data"
+      },
+      {
+        "edge": 9,
+        "from": "tf.kind_cluster.dev",
+        "to": "tf.helm_release.shop",
+        "kind": "data"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "terraform",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "tf.helm_release.ingress"
+    },
+    "ends": [
+      {
+        "id": "tf.kind_cluster.dev",
+        "stable": false,
+        "within": "terraform"
+      },
+      {
+        "id": "k8s.release.traefik",
+        "stable": true
+      },
+      {
+        "id": "tf.helm_release.shop",
+        "stable": false,
+        "within": "terraform"
+      }
+    ],
+    "parts": [
+      "tf.helm_release.ingress",
+      "tf.kind_cluster.dev",
+      "k8s.release.traefik",
+      "tf.helm_release.shop"
+    ],
+    "lines": [
+      {
+        "edge": 6,
+        "from": "tf.kind_cluster.dev",
+        "to": "tf.helm_release.ingress",
+        "kind": "data"
+      },
+      {
+        "edge": 7,
+        "from": "tf.helm_release.ingress",
+        "to": "k8s.release.traefik",
+        "kind": "create"
+      },
+      {
+        "edge": 8,
+        "from": "tf.helm_release.ingress",
+        "to": "tf.helm_release.shop",
+        "kind": "data"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 1
+      },
+      {
+        "id": "k8s.ns.traefik",
+        "more": 0
+      },
+      {
+        "id": "terraform",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "k8s.release.traefik"
+    },
+    "ends": [
+      {
+        "id": "k8s.ingress.shop",
+        "stable": true
+      },
+      {
+        "id": "tf.helm_release.ingress",
+        "stable": false,
+        "within": "terraform"
+      }
+    ],
+    "parts": [
+      "k8s.release.traefik",
+      "k8s.ingress.shop",
+      "tf.helm_release.ingress"
+    ],
+    "lines": [
+      {
+        "edge": 0,
+        "from": "k8s.release.traefik",
+        "to": "k8s.ingress.shop",
+        "kind": "data"
+      },
+      {
+        "edge": 7,
+        "from": "tf.helm_release.ingress",
+        "to": "k8s.release.traefik",
+        "kind": "create"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 0
+      },
+      {
+        "id": "k8s.ns.shop",
+        "more": 0
+      },
+      {
+        "id": "k8s.ns.traefik",
+        "more": 0
+      },
+      {
+        "id": "k8s.release.shop",
+        "more": 4
+      },
+      {
+        "id": "terraform",
+        "more": 2
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "tf.helm_release.shop"
+    },
+    "ends": [
+      {
+        "id": "tf.helm_release.ingress",
+        "stable": false,
+        "within": "terraform"
+      },
+      {
+        "id": "tf.kind_cluster.dev",
+        "stable": false,
+        "within": "terraform"
+      },
+      {
+        "id": "k8s.release.shop",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "tf.helm_release.shop",
+      "tf.helm_release.ingress",
+      "tf.kind_cluster.dev",
+      "k8s.release.shop"
+    ],
+    "lines": [
+      {
+        "edge": 8,
+        "from": "tf.helm_release.ingress",
+        "to": "tf.helm_release.shop",
+        "kind": "data"
+      },
+      {
+        "edge": 9,
+        "from": "tf.kind_cluster.dev",
+        "to": "tf.helm_release.shop",
+        "kind": "data"
+      },
+      {
+        "edge": 10,
+        "from": "tf.helm_release.shop",
+        "to": "k8s.release.shop",
+        "kind": "create"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 1
+      },
+      {
+        "id": "k8s.ns.shop",
+        "more": 0
+      },
+      {
+        "id": "terraform",
+        "more": 0
+      }
+    ]
+  },
+  {
+    "schema": "docair.slice/0",
+    "seed": {
+      "kind": "part",
+      "id": "shopper"
+    },
+    "ends": [
+      {
+        "id": "k8s.ingress.shop",
+        "stable": true
+      }
+    ],
+    "parts": [
+      "shopper",
+      "k8s.ingress.shop"
+    ],
+    "lines": [
+      {
+        "edge": 11,
+        "from": "shopper",
+        "to": "k8s.ingress.shop",
+        "kind": "call"
+      }
+    ],
+    "boxes": [
+      {
+        "id": "k8s.cluster.dev",
+        "more": 1
+      },
+      {
+        "id": "k8s.ns.shop",
+        "more": 0
+      },
+      {
+        "id": "k8s.release.shop",
+        "more": 4
+      }
+    ]
+  }
+]

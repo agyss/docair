@@ -1,0 +1,21 @@
+# Reading files with the standard library: `fs::read_to_string(path)`,
+# `fs::read_dir(dir)`, `File::open(path)`. The block names the store; the
+# rule confirms that the code reads one (docs/ADAPTERS.md §5.7).
+id: rust.std.fs-read
+language: rust
+rule:
+  any:
+    - pattern: std::fs::read_to_string($P)
+    - pattern: fs::read_to_string($P)
+    - pattern: std::fs::read($P)
+    - pattern: fs::read($P)
+    - pattern: std::fs::read_dir($P)
+    - pattern: fs::read_dir($P)
+    - pattern: std::fs::File::open($P)
+    - pattern: File::open($P)
+    - pattern: tokio::fs::read_to_string($P)
+    - pattern: tokio::fs::read($P)
+facts:
+  - reads: file
+    path: $P
+    by: enclosing

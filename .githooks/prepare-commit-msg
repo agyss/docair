@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Hands prepare-commit-msg to beads' hook (see .beads/hooks); the secret check runs at pre-commit only.
+[ -x .beads/hooks/prepare-commit-msg ] && exec .beads/hooks/prepare-commit-msg "$@"
+exit 0

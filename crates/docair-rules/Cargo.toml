@@ -1,0 +1,26 @@
+#***
+# Framework rules as data: an ast-grep pattern plus the facts a match means
+# (docs/ADAPTERS.md §5.2), and the fixture runner every rule must pass.
+#
+# @id      docair-rules
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-rules"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ast-grep-config.workspace = true
+ast-grep-core.workspace = true
+docair-core.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tree-sitter-rust.workspace = true

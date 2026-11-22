@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Pre-commit: refuses a commit that would publish a secret.
+#
+# Checks the staged content (what the commit records), not the working tree:
+#   1. no file named like a secret store (.env, keys, certificates, kubeconfig);
+#   2. no line that holds the literal value of a secret from the local .env;
+#   3. no line with a key-shaped string (private key blocks, API tokens).
+# Then it hands over to beads' own pre-commit hook, so the issue export still runs.
+#
+# Matches are reported by file and line number only; the secret itself is never printed.
+# False positive: commit with --no-verify and say why in the message.
+# Whole tracked tree instead of the commit:  .githooks/pre-commit --tree
+
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+mode=staged
+[ "${1:-}" = "--tree" ] && mode=tree
+
+# --- secret values from .env (at least 8 characters, names with KEY/SECRET/TOKEN/PASS)
+values=()
+if [ -f .env ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    name=${line%%=*}
+    value=${line#*=}
+    value=${value%\"}; value=${value#\"}; value=${value%\'}; value=${value#\'}
+    case "$name" in *KEY*|*SECRET*|*TOKEN*|*PASS*) ;; *) continue ;; esac
+    if [ "${#value}" -ge 8 ]; then values+=("$value"); fi
+  done < .env
+fi
+
+# --- key-shaped strings (extended regular expressions)
+patterns=(
+  '-----BEGIN ((RSA|EC|DSA|OPENSSH|PGP|ENCRYPTED) )?PRIVATE KEY'
+  'sk-[A-Za-z0-9_-]{20,}'
+  'ghp_[A-Za-z0-9]{30,}'
+  'github_pat_[A-Za-z0-9_]{22,}'
+  'AKIA[0-9A-Z]{16}'
+  'xox[baprs]-[A-Za-z0-9-]{10,}'
+  '(api[_-]?key|secret|token|password)["'\'']?[[:space:]]*[:=][[:space:]]*["'\'']?[A-Za-z0-9_/+=-]{20,}'
+)
+eargs=()
+for p in "${patterns[@]}"; do eargs+=(-e "$p"); done
+
+fail=0
+report() { echo "secret check: $1" >&2; fail=1; }
+
+# scan NAME < content: reports the line numbers of matches, never the matched text
+scan() {
+  local name=$1 content hits
+  content=$(cat)
+  if [ "${#values[@]}" -gt 0 ]; then
+    hits=$(printf '%s\n' "$content" | grep -nF -e "${values[@]}" | cut -d: -f1 | paste -sd, -)
+    [ -n "$hits" ] && report "a value of a secret from .env is in $name, line(s) $hits"
+  fi
+  hits=$(printf '%s\n' "$content" | grep -nE "${eargs[@]}" | cut -d: -f1 | paste -sd, -)
+  [ -n "$hits" ] && report "key-shaped string in $name, line(s) $hits"
+  return 0
+}
+
+# --- 1. secret-store file names -----------------------------------------------
+if [ "$mode" = staged ]; then
+  files=$(git diff --cached --name-only --diff-filter=ACMR)
+else
+  files=$(git ls-files)
+fi
+bad=$(printf '%s\n' "$files" \
+  | grep -E '(^|/)\.env(\..*)?$|\.(pem|key|p12|pfx)$|(^|/)kubeconfig$' \
+  | grep -vE '(^|/)\.env\.example$')
+while IFS= read -r f; do
+  [ -n "$f" ] && report "secret-store file in the commit: $f"
+done <<< "$bad"
+
+# --- 2 and 3. contents ----------------------------------------------------------
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if [ "$mode" = staged ]; then
+    git show ":$f" 2>/dev/null | grep -qI . || continue          # skip binary blobs
+    scan "$f" < <(git show ":$f" 2>/dev/null)
+  else
+    [ -f "$f" ] && grep -qI . "$f" || continue
+    scan "$f" < "$f"
+  fi
+done <<< "$files"
+
+if [ "$fail" -ne 0 ]; then
+  echo "commit refused: remove the secret or unstage the file (false positive: --no-verify)" >&2
+  exit 1
+fi
+
+# --- hand over to beads ----------------------------------------------------------
+[ "$mode" = tree ] && { echo "secret check: tracked tree clean"; exit 0; }
+if [ -x .beads/hooks/pre-commit ]; then
+  exec .beads/hooks/pre-commit "$@"
+fi
+exit 0

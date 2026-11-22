@@ -1,0 +1,30 @@
+asyncapi: 2.6.0
+x-docair-part-of: mailer
+info:
+  title: Mailer
+  version: 1.0.0
+servers:
+  production:
+    url: kafka.example.com:9092
+    protocol: kafka
+channels:
+  order.created:
+    description: A new order was stored.
+    publish:
+      operationId: receiveOrderCreated
+      message:
+        $ref: '#/components/messages/OrderCreated'
+  order.cancelled:
+    description: An order was cancelled. No code handles it yet, on purpose.
+    publish:
+      operationId: receiveOrderCancelled
+      message:
+        name: OrderCancelled
+        payload:
+          type: object
+components:
+  messages:
+    OrderCreated:
+      name: OrderCreated
+      payload:
+        type: object

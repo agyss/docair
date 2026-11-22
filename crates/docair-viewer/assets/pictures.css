@@ -1,0 +1,96 @@
+/* The pictures the CLI draws as SVG (docs/SLICES.md §6): each class in the page's colours
+   (viewer.css: --k-*, --e-*, --t-*), so one picture serves light and dark. Kept as the viewer's
+   Cytoscape style drew them (viewer.js makeStyle). */
+
+.docair-pic { font-family: var(--pic-font, var(--mono, ui-monospace, Menlo, Consolas, monospace)); }
+.docair-pic text { fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+.docair-pic .bg { fill: var(--canvas); }
+
+/* parts and boxes: fill and outline from the kind (--kb, --kl) */
+.docair-pic .sh { fill: var(--kb); stroke: var(--kl); stroke-width: 1.5; }
+.docair-pic .gap { fill: none; stroke: var(--kb); stroke-width: 1.1; }
+.docair-pic .k-system { --kb: var(--k-system-bg); --kl: var(--k-system-line); }
+.docair-pic .k-service { --kb: var(--k-service-bg); --kl: var(--k-service-line); }
+.docair-pic .k-module { --kb: var(--k-module-bg); --kl: var(--k-module-line); }
+.docair-pic .k-api { --kb: var(--k-api-bg); --kl: var(--k-api-line); }
+.docair-pic .k-component { --kb: var(--k-component-bg); --kl: var(--k-component-line); }
+.docair-pic .k-function { --kb: var(--k-function-bg); --kl: var(--k-function-line); }
+.docair-pic .k-endpoint { --kb: var(--k-endpoint-bg); --kl: var(--k-endpoint-line); }
+.docair-pic .k-store { --kb: var(--k-store-bg); --kl: var(--k-store-line); }
+.docair-pic .k-topic { --kb: var(--k-topic-bg); --kl: var(--k-topic-line); }
+.docair-pic .k-external { --kb: var(--k-external-bg); --kl: var(--k-external-line); }
+.docair-pic .k-job { --kb: var(--k-job-bg); --kl: var(--k-job-line); }
+.docair-pic .k-workload { --kb: var(--k-workload-bg); --kl: var(--k-workload-line); }
+.docair-pic .k-config { --kb: var(--k-config-bg); --kl: var(--k-config-line); }
+.docair-pic .k-host { --kb: var(--k-host-bg); --kl: var(--k-host-line); }
+.docair-pic .k-cluster { --kb: var(--k-cluster-bg); --kl: var(--k-cluster-line); }
+.docair-pic .k-namespace { --kb: var(--k-namespace-bg); --kl: var(--k-namespace-line); }
+.docair-pic .k-network { --kb: var(--k-network-bg); --kl: var(--k-network-line); }
+.docair-pic .k-gateway { --kb: var(--k-gateway-bg); --kl: var(--k-gateway-line); }
+.docair-pic .k-container { --kb: var(--k-container-bg); --kl: var(--k-container-line); }
+.docair-pic .k-release { --kb: var(--k-release-bg); --kl: var(--k-release-line); }
+.docair-pic .k-test { --kb: var(--k-test-bg); --kl: var(--k-test-line); }
+/* data has no --k-data-* in viewer.css (docair-54p): the data colours */
+.docair-pic .k-data { --kb: var(--data-soft); --kl: var(--data); }
+.docair-pic .k-unresolved { --kb: var(--k-unresolved-bg); --kl: var(--k-unresolved-line); }
+.docair-pic .k-unknown { --kb: var(--k-unknown-bg); --kl: var(--k-unknown-line); }
+.docair-pic .k-external > .sh, .docair-pic .k-unresolved > .sh { stroke-dasharray: 5 3; }
+
+/* tests: their result */
+.docair-pic .t-passed { --kb: var(--t-passed-bg); --kl: var(--t-passed); }
+.docair-pic .t-failed { --kb: var(--t-failed-bg); --kl: var(--t-failed); }
+.docair-pic .t-flaky { --kb: var(--t-flaky-bg); --kl: var(--t-flaky); }
+.docair-pic .t-none, .docair-pic .t-skipped { --kl: var(--t-none); }
+.docair-pic .t-passed > .sh, .docair-pic .t-flaky > .sh { stroke-width: 2; }
+.docair-pic .t-failed > .sh { stroke-width: 2.5; }
+.docair-pic .t-none > .sh, .docair-pic .t-skipped > .sh { stroke-dasharray: 5 3; }
+
+/* a closed box stands for what it holds: a double outline */
+.docair-pic .closed > .sh { stroke-width: 3.5; }
+
+/* open boxes: the name in the band at the top */
+.docair-pic .box > .sh { fill-opacity: 0.6; }
+.docair-pic .box > .bn { fill: var(--muted); font-weight: 600; }
+.docair-pic .box.k-service > .sh, .docair-pic .box.k-container > .sh { stroke-width: 2; }
+.docair-pic .box.k-cluster > .sh, .docair-pic .box.k-host > .sh { stroke-width: 2.5; }
+.docair-pic .box.k-namespace > .sh, .docair-pic .box.k-network > .sh { stroke-dasharray: 6 4; }
+.docair-pic .box.k-container > .sh { stroke-width: 3.5; }
+
+/* lines: one colour per family, the line style tells its members apart (--ec) */
+.docair-pic .ln { fill: none; stroke: var(--ec); stroke-linejoin: round; }
+.docair-pic .ah { fill: var(--ec); }
+.docair-pic .e-call { --ec: var(--e-call); }
+.docair-pic .e-route { --ec: var(--e-route); }
+.docair-pic .e-select { --ec: var(--e-select); }
+.docair-pic .e-data { --ec: var(--e-data); }
+.docair-pic .e-read { --ec: var(--e-read); }
+.docair-pic .e-write { --ec: var(--e-write); }
+.docair-pic .e-create { --ec: var(--e-create); }
+.docair-pic .e-emit { --ec: var(--e-emit); }
+.docair-pic .e-consume { --ec: var(--e-consume); }
+.docair-pic .e-cover { --ec: var(--e-cover); }
+/* a type's use that no other line brings: neutral, dash-dot (docair-4wk.43) */
+.docair-pic .e-use { --ec: var(--e-use); }
+.docair-pic .e-use > .ln { stroke-dasharray: 4 2 1 2; }
+.docair-pic .e-emit > .ln, .docair-pic .e-consume > .ln, .docair-pic .e-cover > .ln { stroke-dasharray: 1.5 3; stroke-linecap: round; }
+.docair-pic .e-route > .ln, .docair-pic .e-select > .ln, .docair-pic .e-create > .ln { stroke-dasharray: 6 4; }
+/* a line that may reach its part, or something outside (docs/ADAPTERS.md §5.5) */
+.docair-pic .reach-could > .ln { stroke-dasharray: 6 4; }
+.docair-pic .dangling { --ec: var(--error); }
+.docair-pic .dangling > .ln { stroke-dasharray: 6 4; }
+
+/* a line's words, and the data it carries as chips */
+/* A line's words stand on a tag of their own: opaque, edged, so lines that run under them do not show through (docair-irq). */
+.docair-pic .words > rect { fill: var(--canvas); fill-opacity: 1; stroke: var(--line); stroke-width: 0.6; }
+.docair-pic .words > text { fill: var(--muted); }
+.docair-pic .words.bundle > text { fill: var(--text); font-weight: 500; }
+.docair-pic .words > rect.chip { fill: var(--data-soft); fill-opacity: 1; stroke: var(--data); stroke-width: 0.8; }
+.docair-pic .words .d { fill: var(--data); font-weight: 600; }
+
+/* Parts Terraform declares carry its mark on their corner. */
+.docair-pic .tf-mark rect { fill: var(--panel); stroke: var(--line); stroke-width: 0.8; }
+.docair-pic .tf-mark path { fill: #7b42bc; }
+@media (prefers-color-scheme: dark) { .docair-pic .tf-mark path { fill: #a77bf3; } }
+/* Kinds that share an outline differ by their dashes (svg.rs shape_of). */
+.docair-pic .k-unknown > .sh { stroke-dasharray: 1.5 3; }
+.docair-pic .k-namespace > .sh { stroke-dasharray: 6 4; }

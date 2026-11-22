@@ -1,0 +1,41 @@
+#***
+# The `docair` command line tool.
+#
+# @id      docair-cli
+# @kind    service
+# @part-of workstation
+#***
+[package]
+name = "docair-cli"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "docair"
+path = "src/main.rs"
+
+[dependencies]
+docair-adapters.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+docair-ai.workspace = true
+docair-core.workspace = true
+docair-layout.workspace = true
+docair-viewer.workspace = true
+docair-scip.workspace = true
+tempfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+docair-server = { path = "../docair-server" }
+tokio.workspace = true
+tower-http.workspace = true
+notify.workspace = true
+
+[dev-dependencies]
+tower.workspace = true

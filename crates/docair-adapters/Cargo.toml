@@ -1,0 +1,32 @@
+#***
+# The adapter registry: every adapter docair has, in the order that decides
+# who says what a symbol is. The CLI and the server both scan with it.
+#
+# @id      docair-adapters
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-adapters"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+docair-core.workspace = true
+# The adapters: every dependency named docair-lang-* is one (build.rs lists them,
+# docs/ADAPTERS.md §5.3). Adding an adapter is its crate and one line here.
+docair-lang-apis.workspace = true
+docair-lang-generic.workspace = true
+docair-lang-helm = { path = "../docair-lang-helm" }
+docair-lang-k8s = { path = "../docair-lang-k8s" }
+docair-lang-rust.workspace = true
+docair-lang-terraform = { path = "../docair-lang-terraform" }
+docair-lang-ts.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

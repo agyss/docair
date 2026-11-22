@@ -1,0 +1,21 @@
+# fetch() with a method: `fetch('/api/orders', { method: 'POST', … })`.
+id: ts.fetch
+language: typescript
+rule:
+  pattern: fetch($URL, $OPTS)
+  has:
+    stopBy: end
+    kind: pair
+    all:
+      - has: { field: key, regex: "^.?method.?$" }
+      - has: { field: value, pattern: $METHOD }
+constraints:
+  URL:
+    any:
+      - kind: string
+      - kind: template_string
+facts:
+  - requests: http
+    method: $METHOD
+    path: $URL
+    by: enclosing

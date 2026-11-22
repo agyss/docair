@@ -1,0 +1,91 @@
+{
+  "schema": "docair.walkthrough/0",
+  "id": "especially-why-is-there-no-line-out-to-an-ai",
+  "question": "especially, why is there no line out to an AI?",
+  "title": "Why the tests hold no line to a model",
+  "summary": "The e2e tests never call an AI themselves: they start docair serve with the AI settings pointed at the fake model, and the only lines to a model in the graph run out of docair's own client, which the fake endpoint answers.",
+  "recorded": {
+    "at": "2026-11-20T21:34:02Z",
+    "by": "ai",
+    "model": "zai-org/GLM-5.3-Flash",
+    "endpoint": "https://api.together.xyz/v1"
+  },
+  "steps": [
+    {
+      "title": "The tests start docair serve pointed at the fake model",
+      "text": "`e2e.serve` runs `docair serve` on a copy of a fixture with the AI settings from `fakeAiEnv`, which point the endpoint at the fake AI (e2e/fake-ai.mjs) instead of a real one. The tests that need the model (`withFakeAi`) run only against this local server and are skipped against a real deployment. So the wiring to a model happens in docair's configuration, not in the test code.",
+      "nodes": [
+        "e2e.serve",
+        "docair-cli.serve.cmd_serve"
+      ],
+      "edges": [
+        {
+          "from": "e2e.serve",
+          "to": "docair-cli.serve.cmd_serve"
+        }
+      ]
+    },
+    {
+      "title": "A question goes in through the page's chat, not to a model",
+      "text": "The test `a question becomes a walkthrough…` calls the ask helper, which types the question into the page's chat panel. The page posts it to the served project's `/api/ask`; the test never opens a connection to any AI. It only checks what comes back.",
+      "nodes": [
+        "ask-spec.a-question-becomes-a-walkthrough-that-plays-on-the-chart",
+        "docair-e2e.tests.ask-spec.ask",
+        "docair-viewer.doc-page.chat"
+      ],
+      "edges": [
+        {
+          "from": "ask-spec.a-question-becomes-a-walkthrough-that-plays-on-the-chart",
+          "to": "docair-e2e.tests.ask-spec.ask"
+        }
+      ]
+    },
+    {
+      "title": "The server hands the question to docair's ask",
+      "text": "`docair-server.ask` receives POST /api/ask with the question, the graph and the earlier turns, and calls `docair-ai.ask.ask`. From here on the AI work is docair's, inside the server process.",
+      "nodes": [
+        "docair-server.ask",
+        "docair-ai.ask.ask"
+      ],
+      "edges": [
+        {
+          "from": "docair-server.ask",
+          "to": "docair-ai.ask.ask"
+        }
+      ]
+    },
+    {
+      "title": "docair's client is the only thing that calls a model",
+      "text": "`docair-ai.ask.ask` condenses the graph into a digest and calls `docair-ai.client.chat` with the messages. This client is where the graph's lines to a model live: it POSTs to the configured endpoint (`ai-endpoint`, via `docair-ai.client.post`). No test, page or CLI code holds such a line.",
+      "nodes": [
+        "docair-ai.ask.ask",
+        "docair-ai.client.chat",
+        "ai-endpoint"
+      ],
+      "edges": [
+        {
+          "from": "docair-ai.ask.ask",
+          "to": "docair-ai.client.chat"
+        },
+        {
+          "from": "docair-ai.client.chat",
+          "to": "ai-endpoint"
+        }
+      ]
+    },
+    {
+      "title": "In the tests, that endpoint is the fake AI",
+      "text": "Because the settings point at the fake model, the client's POST lands on `docair-e2e.fake-ai.server`, which answers by keywords (`docair-e2e.fake-ai.reply`) so every run gets the same reply. The graph draws the tests' line to the server they start, and the model line stays where it belongs: inside docair.",
+      "nodes": [
+        "docair-e2e.fake-ai.server",
+        "docair-e2e.fake-ai.reply"
+      ],
+      "edges": [
+        {
+          "from": "docair-e2e.fake-ai.server",
+          "to": "docair-e2e.fake-ai.reply"
+        }
+      ]
+    }
+  ]
+}

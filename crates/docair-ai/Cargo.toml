@@ -1,0 +1,28 @@
+#***
+# Asks an AI model how the system works and gets a walkthrough back (SPEC §10).
+#
+# Speaks the OpenAI-compatible chat-completions API, so any endpoint that
+# offers it works: Together, OpenAI, a local vLLM or Ollama. The settings come
+# from `[ai]` in docair.toml and the environment; the key only from the
+# environment or a gitignored `.env`.
+#
+# @id      docair-ai
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-ai"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+docair-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true

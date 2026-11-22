@@ -1,0 +1,408 @@
+[
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "browser"
+    ],
+    "parts": [
+      {
+        "id": "browser",
+        "open": true
+      },
+      {
+        "id": "shop-ui",
+        "parent": "browser",
+        "closed": true,
+        "holds": 2
+      }
+    ],
+    "lines": []
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "infra",
+    "opened": [
+      "cluster"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "parent": "cluster",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "infra",
+        "open": true
+      },
+      {
+        "id": "tf.cluster",
+        "parent": "infra"
+      },
+      {
+        "id": "cluster",
+        "parent": "infra",
+        "open": true
+      },
+      {
+        "id": "orders-db",
+        "parent": "cluster"
+      }
+    ],
+    "lines": [
+      {
+        "from": "orders-api",
+        "to": "orders-db",
+        "kind": "write",
+        "members": [
+          0
+        ],
+        "bundled": true
+      },
+      {
+        "from": "tf.cluster",
+        "to": "cluster",
+        "kind": "create",
+        "members": [
+          1
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "infra"
+    ],
+    "parts": [
+      {
+        "id": "infra",
+        "open": true
+      },
+      {
+        "id": "tf.cluster",
+        "parent": "infra"
+      },
+      {
+        "id": "cluster",
+        "parent": "infra",
+        "closed": true,
+        "holds": 4
+      }
+    ],
+    "lines": [
+      {
+        "from": "tf.cluster",
+        "to": "cluster",
+        "kind": "create",
+        "members": [
+          1
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "apps",
+    "opened": [
+      "orders-api"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "open": true
+      },
+      {
+        "id": "orders.create",
+        "parent": "orders-api"
+      },
+      {
+        "id": "orders.list",
+        "parent": "orders-api"
+      },
+      {
+        "id": "shop-tests",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "browser",
+        "closed": true,
+        "holds": 3
+      },
+      {
+        "id": "orders-db"
+      }
+    ],
+    "lines": [
+      {
+        "from": "orders.create",
+        "to": "orders-db",
+        "kind": "write",
+        "members": [
+          0
+        ]
+      },
+      {
+        "from": "browser",
+        "to": "orders.create",
+        "kind": "call",
+        "members": [
+          2
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "browser",
+        "kind": "cover",
+        "members": [
+          4,
+          6
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "orders.create",
+        "kind": "cover",
+        "members": [
+          5
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "opened": [
+      "shop-tests"
+    ],
+    "parts": [
+      {
+        "id": "infra",
+        "closed": true,
+        "holds": 6
+      },
+      {
+        "id": "shop-tests",
+        "open": true
+      },
+      {
+        "id": "cart-spec.buying-stores-the-order",
+        "parent": "shop-tests"
+      },
+      {
+        "id": "cart-spec.the-total-adds-up",
+        "parent": "shop-tests"
+      },
+      {
+        "id": "browser",
+        "closed": true,
+        "holds": 3
+      }
+    ],
+    "lines": [
+      {
+        "from": "browser",
+        "to": "infra",
+        "kind": "call",
+        "members": [
+          2
+        ],
+        "bundled": true
+      },
+      {
+        "from": "cart-spec.buying-stores-the-order",
+        "to": "browser",
+        "kind": "cover",
+        "members": [
+          4
+        ],
+        "bundled": true
+      },
+      {
+        "from": "cart-spec.buying-stores-the-order",
+        "to": "infra",
+        "kind": "cover",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "cart-spec.the-total-adds-up",
+        "to": "browser",
+        "kind": "cover",
+        "members": [
+          6
+        ],
+        "bundled": true
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "apps",
+    "opened": [
+      "shop-ui"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "shop-ui.cart",
+        "parent": "shop-ui",
+        "closed": true,
+        "holds": 1
+      },
+      {
+        "id": "shop-tests",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "shopper"
+      },
+      {
+        "id": "browser",
+        "open": true
+      },
+      {
+        "id": "shop-ui",
+        "parent": "browser",
+        "open": true
+      }
+    ],
+    "lines": [
+      {
+        "from": "shop-ui.cart",
+        "to": "orders-api",
+        "kind": "call",
+        "members": [
+          2
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "shop-ui.cart",
+        "kind": "cover",
+        "members": [
+          4,
+          6
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "orders-api",
+        "kind": "cover",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shopper",
+        "to": "shop-ui.cart",
+        "kind": "call",
+        "members": [
+          7
+        ]
+      }
+    ]
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "code",
+    "opened": [
+      "shop-ui.cart"
+    ],
+    "parts": [
+      {
+        "id": "orders-api",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "shop-ui.cart",
+        "parent": "shop-ui",
+        "open": true
+      },
+      {
+        "id": "shop-ui.cart.total",
+        "parent": "shop-ui.cart"
+      },
+      {
+        "id": "shop-tests",
+        "closed": true,
+        "holds": 2
+      },
+      {
+        "id": "shopper"
+      },
+      {
+        "id": "browser",
+        "open": true
+      },
+      {
+        "id": "shop-ui",
+        "parent": "browser",
+        "open": true
+      }
+    ],
+    "lines": [
+      {
+        "from": "shop-ui.cart",
+        "to": "orders-api",
+        "kind": "call",
+        "members": [
+          2
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "shop-ui.cart",
+        "kind": "cover",
+        "members": [
+          4
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "orders-api",
+        "kind": "cover",
+        "members": [
+          5
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shop-tests",
+        "to": "shop-ui.cart.total",
+        "kind": "cover",
+        "members": [
+          6
+        ],
+        "bundled": true
+      },
+      {
+        "from": "shopper",
+        "to": "shop-ui.cart",
+        "kind": "call",
+        "members": [
+          7
+        ]
+      }
+    ]
+  }
+]

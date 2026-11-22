@@ -1,0 +1,55 @@
+[
+  {
+    "schema": "docair.layer/0",
+    "layer": "overview",
+    "parts": [
+      {
+        "id": "billing",
+        "closed": true,
+        "holds": 7
+      }
+    ],
+    "lines": []
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "apps",
+    "parts": [
+      {
+        "id": "billing",
+        "closed": true,
+        "holds": 7
+      }
+    ],
+    "lines": []
+  },
+  {
+    "schema": "docair.layer/0",
+    "layer": "code",
+    "parts": [
+      {
+        "id": "billing",
+        "open": true,
+        "more": 2
+      },
+      {
+        "id": "billing.bill",
+        "parent": "billing"
+      },
+      {
+        "id": "billing.tax",
+        "parent": "billing"
+      }
+    ],
+    "lines": [
+      {
+        "from": "billing.bill",
+        "to": "billing.tax",
+        "kind": "call",
+        "members": [
+          0
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,991 @@
+{
+  "schema": "docair.graph/0",
+  "system": "shop",
+  "generator": "docair 0.1.0",
+  "nodes": [
+    {
+      "id": "orders-api",
+      "kind": "service",
+      "name": "orders-api",
+      "summary": "The orders API.",
+      "description": "",
+      "part_of": "cluster",
+      "source": {
+        "file": "api/Cargo.toml",
+        "line": 1,
+        "end": 7
+      },
+      "symbol": "[package]",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders-api",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "cluster",
+          "line": 6,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "orders.create",
+      "kind": "function",
+      "name": "create_order",
+      "summary": "Store a new order.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 1,
+        "end": 11
+      },
+      "symbol": "fn create_order",
+      "http": {
+        "method": "POST",
+        "path": "/api/orders"
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.create",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "POST /api/orders",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "writes",
+          "value": "orders-db (Order)",
+          "line": 7,
+          "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "checkout 3 \"the API stores the order\"",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "keep 2 \"the API takes the order\"",
+          "line": 9,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 11,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "orders.list",
+      "kind": "function",
+      "name": "list_orders",
+      "summary": "List the orders of a shopper.",
+      "description": "",
+      "part_of": "orders-api",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 13,
+        "end": 20
+      },
+      "symbol": "fn list_orders",
+      "http": {
+        "method": "GET",
+        "path": "/api/orders"
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders.list",
+          "line": 16,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "orders-api",
+          "line": 17,
+          "origin": "authored"
+        },
+        {
+          "name": "http",
+          "value": "GET /api/orders",
+          "line": 18,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 20,
+          "origin": "inferred",
+          "reason": "tree-sitter: function_item"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": []
+      }
+    },
+    {
+      "id": "infra",
+      "kind": "host",
+      "name": "infra",
+      "summary": "The infrastructure: one cluster for the API and the database.",
+      "description": "",
+      "part_of": "shop",
+      "source": {
+        "file": "infra/main.tf",
+        "line": 1,
+        "end": 7
+      },
+      "symbol": "terraform {",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "infra",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "host",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop",
+          "line": 6,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "tf.cluster",
+      "kind": "config",
+      "name": "kind_cluster.shop",
+      "summary": "Terraform creates the cluster.",
+      "description": "",
+      "part_of": "infra",
+      "source": {
+        "file": "infra/main.tf",
+        "line": 12,
+        "end": 19
+      },
+      "symbol": "resource kind_cluster.shop",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "tf.cluster",
+          "line": 15,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "config",
+          "line": 16,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "infra",
+          "line": 17,
+          "origin": "authored"
+        },
+        {
+          "name": "creates",
+          "value": "cluster (kind create)",
+          "line": 18,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "cluster",
+      "kind": "cluster",
+      "name": "shop",
+      "summary": "The Kubernetes cluster that runs the API and the database.",
+      "description": "",
+      "part_of": "infra",
+      "source": {
+        "file": "infra/main.tf",
+        "line": 21,
+        "end": 27
+      },
+      "symbol": "shop",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "cluster",
+          "line": 24,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "cluster",
+          "line": 25,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "infra",
+          "line": 26,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "shop-ui.cart",
+      "kind": "component",
+      "name": "Cart",
+      "summary": "The cart page: lists the items and sends the order.",
+      "description": "",
+      "part_of": "shop-ui",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 1,
+        "end": 24
+      },
+      "symbol": "class Cart",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shop-ui.cart",
+          "line": 4,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "component",
+          "line": 5,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop-ui",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "calls",
+          "value": "http:POST /api/orders (CreateOrder) -> Order",
+          "line": 7,
+          "origin": "authored"
+        },
+        {
+          "name": "creates",
+          "value": "data.order \"the shopper clicks Buy\"",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "checkout 2 \"the cart posts the order\"",
+          "line": 9,
+          "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "keep 1 \"the cart sends the order\"",
+          "line": 10,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "component",
+          "line": 12,
+          "origin": "inferred",
+          "reason": "tree-sitter: class_declaration"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "shop-ui.cart.total",
+      "kind": "function",
+      "name": "total",
+      "summary": "Total of the cart, in cents.",
+      "description": "",
+      "part_of": "shop-ui.cart",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 15,
+        "end": 23
+      },
+      "symbol": "total",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shop-ui.cart.total",
+          "line": 18,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop-ui.cart",
+          "line": 19,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "function",
+          "line": 21,
+          "origin": "inferred",
+          "reason": "tree-sitter: method_definition"
+        }
+      ],
+      "origin": "authored",
+      "signature": {
+        "params": [],
+        "returns": "number"
+      }
+    },
+    {
+      "id": "shop-tests",
+      "kind": "test",
+      "name": "cart",
+      "summary": "The cart's tests.",
+      "description": "",
+      "part_of": "shop",
+      "source": {
+        "file": "ui/tests/cart.spec.ts",
+        "line": 3,
+        "end": 31
+      },
+      "symbol": "cart",
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shop-tests",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "test",
+          "line": 7,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "test",
+          "line": 10,
+          "origin": "inferred",
+          "reason": "test call"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "cart-spec.buying-stores-the-order",
+      "kind": "test",
+      "name": "buying stores the order",
+      "summary": "Buying sends the order to the API.",
+      "description": "",
+      "part_of": "shop-tests",
+      "source": {
+        "file": "ui/tests/cart.spec.ts",
+        "line": 11,
+        "end": 20
+      },
+      "symbol": "buying stores the order",
+      "docs": [],
+      "tags": [
+        {
+          "name": "part-of",
+          "value": "shop-tests",
+          "line": 14,
+          "origin": "authored"
+        },
+        {
+          "name": "covers",
+          "value": "shop-ui.cart",
+          "line": 15,
+          "origin": "authored"
+        },
+        {
+          "name": "covers",
+          "value": "orders.create",
+          "line": 16,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "test",
+          "line": 18,
+          "origin": "inferred",
+          "reason": "test call"
+        }
+      ],
+      "origin": "authored",
+      "test": {
+        "status": "passed",
+        "duration_ms": 1840,
+        "at": "2026-11-14T08:00:00.000Z"
+      }
+    },
+    {
+      "id": "cart-spec.the-total-adds-up",
+      "kind": "test",
+      "name": "the total adds up",
+      "summary": "The total is the sum of the items.",
+      "description": "",
+      "part_of": "shop-tests",
+      "source": {
+        "file": "ui/tests/cart.spec.ts",
+        "line": 22,
+        "end": 30
+      },
+      "symbol": "the total adds up",
+      "docs": [],
+      "tags": [
+        {
+          "name": "part-of",
+          "value": "shop-tests",
+          "line": 25,
+          "origin": "authored"
+        },
+        {
+          "name": "covers",
+          "value": "shop-ui.cart.total",
+          "line": 26,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "test",
+          "line": 28,
+          "origin": "inferred",
+          "reason": "test call"
+        }
+      ],
+      "origin": "authored",
+      "test": {
+        "status": "failed",
+        "duration_ms": 120,
+        "at": "2026-11-14T08:00:02.000Z"
+      }
+    },
+    {
+      "id": "shopper",
+      "kind": "external",
+      "name": "shopper",
+      "summary": "The shopper, in a browser.",
+      "description": "",
+      "part_of": "shop",
+      "source": {
+        "file": "README.md",
+        "line": 5,
+        "end": 13
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shopper",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "external",
+          "line": 9,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop",
+          "line": 10,
+          "origin": "authored"
+        },
+        {
+          "name": "calls",
+          "value": "shop-ui.cart (clicks Buy)",
+          "line": 11,
+          "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "checkout 1 \"the shopper clicks Buy\"",
+          "line": 12,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "browser",
+      "kind": "external",
+      "name": "browser",
+      "summary": "The shopper's browser: the shop's web front end runs here.",
+      "description": "",
+      "part_of": "shop",
+      "source": {
+        "file": "README.md",
+        "line": 15,
+        "end": 21
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "browser",
+          "line": 18,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "external",
+          "line": 19,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop",
+          "line": 20,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "data.order",
+      "kind": "data",
+      "name": "order",
+      "summary": "The order the shopper places: the items of the cart, as the cart sends them and the API stores them.",
+      "description": "",
+      "part_of": "shop",
+      "source": {
+        "file": "README.md",
+        "line": 23,
+        "end": 30
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "data.order",
+          "line": 26,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "data",
+          "line": 27,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop",
+          "line": 28,
+          "origin": "authored"
+        },
+        {
+          "name": "carried-as",
+          "value": "CreateOrder, Order",
+          "line": 29,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "orders-db",
+      "kind": "store",
+      "name": "orders-db",
+      "summary": "The orders table in Postgres.",
+      "description": "",
+      "part_of": "cluster",
+      "source": {
+        "file": "README.md",
+        "line": 32,
+        "end": 39
+      },
+      "docs": [],
+      "tags": [
+        {
+          "name": "id",
+          "value": "orders-db",
+          "line": 35,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "store",
+          "line": 36,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "cluster",
+          "line": 37,
+          "origin": "authored"
+        },
+        {
+          "name": "flow",
+          "value": "keep 3 \"the order is written\"",
+          "line": 38,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored"
+    },
+    {
+      "id": "shop-ui",
+      "kind": "service",
+      "name": "shop-ui",
+      "summary": "The shop's web front end.",
+      "description": "",
+      "part_of": "browser",
+      "source": {
+        "file": "ui/README.md",
+        "line": 3,
+        "end": 10
+      },
+      "docs": [
+        {
+          "file": "ui/README.md",
+          "markdown": "# ui\n\n```docair\nThe shop's web front end.\n\n@id      shop-ui\n@kind    service\n@part-of shop\n@runs-in browser\n```"
+        }
+      ],
+      "tags": [
+        {
+          "name": "id",
+          "value": "shop-ui",
+          "line": 6,
+          "origin": "authored"
+        },
+        {
+          "name": "kind",
+          "value": "service",
+          "line": 7,
+          "origin": "authored"
+        },
+        {
+          "name": "part-of",
+          "value": "shop",
+          "line": 8,
+          "origin": "authored"
+        },
+        {
+          "name": "runs-in",
+          "value": "browser",
+          "line": 9,
+          "origin": "authored"
+        }
+      ],
+      "origin": "authored",
+      "runs_in": "browser",
+      "code_from": "shop"
+    },
+    {
+      "id": "shop",
+      "kind": "system",
+      "name": "shop",
+      "summary": "",
+      "description": "",
+      "docs": [
+        {
+          "file": "README.md",
+          "markdown": "# shop\n\nA shop: the shopper puts things in a cart, the API stores the order.\n\n```docair\nThe shopper, in a browser.\n\n@id      shopper\n@kind    external\n@part-of shop\n@calls   shop-ui.cart (clicks Buy)\n@flow    checkout 1 \"the shopper clicks Buy\"\n```\n\n```docair\nThe shopper's browser: the shop's web front end runs here.\n\n@id      browser\n@kind    external\n@part-of shop\n```\n\n```docair\nThe order the shopper places: the items of the cart, as the cart sends them and the API stores them.\n\n@id         data.order\n@kind       data\n@part-of    shop\n@carried-as CreateOrder, Order\n```\n\n```docair\nThe orders table in Postgres.\n\n@id      orders-db\n@kind    store\n@part-of cluster\n@flow    keep 3 \"the order is written\"\n```"
+        }
+      ],
+      "tags": [],
+      "origin": "inferred"
+    }
+  ],
+  "edges": [
+    {
+      "id": "orders.create -write-> orders-db",
+      "from": "orders.create",
+      "to": "orders-db",
+      "kind": "write",
+      "label": "Order",
+      "payload": "Order",
+      "carries": [
+        "data.order"
+      ],
+      "tag": "@writes orders-db (Order)",
+      "source": {
+        "file": "api/src/lib.rs",
+        "line": 7
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "tf.cluster -create-> cluster",
+      "from": "tf.cluster",
+      "to": "cluster",
+      "kind": "create",
+      "label": "kind create",
+      "payload": "kind create",
+      "tag": "@creates cluster (kind create)",
+      "source": {
+        "file": "infra/main.tf",
+        "line": 18
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "shop-ui.cart -call-> orders.create",
+      "from": "shop-ui.cart",
+      "to": "orders.create",
+      "kind": "call",
+      "label": "(CreateOrder) → Order",
+      "via": "http:POST /api/orders",
+      "payload": "CreateOrder",
+      "reply": "Order",
+      "carries": [
+        "data.order"
+      ],
+      "carries_back": [
+        "data.order"
+      ],
+      "tag": "@calls http:POST /api/orders (CreateOrder) -> Order",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 7
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "shop-ui.cart -create-> data.order",
+      "from": "shop-ui.cart",
+      "to": "data.order",
+      "kind": "create",
+      "text": "the shopper clicks Buy",
+      "tag": "@creates data.order \"the shopper clicks Buy\"",
+      "source": {
+        "file": "ui/src/cart.ts",
+        "line": 8
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "cart-spec.buying-stores-the-order -cover-> shop-ui.cart",
+      "from": "cart-spec.buying-stores-the-order",
+      "to": "shop-ui.cart",
+      "kind": "cover",
+      "tag": "@covers shop-ui.cart",
+      "source": {
+        "file": "ui/tests/cart.spec.ts",
+        "line": 15
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "cart-spec.buying-stores-the-order -cover-> orders.create",
+      "from": "cart-spec.buying-stores-the-order",
+      "to": "orders.create",
+      "kind": "cover",
+      "tag": "@covers orders.create",
+      "source": {
+        "file": "ui/tests/cart.spec.ts",
+        "line": 16
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "cart-spec.the-total-adds-up -cover-> shop-ui.cart.total",
+      "from": "cart-spec.the-total-adds-up",
+      "to": "shop-ui.cart.total",
+      "kind": "cover",
+      "tag": "@covers shop-ui.cart.total",
+      "source": {
+        "file": "ui/tests/cart.spec.ts",
+        "line": 26
+      },
+      "origin": "authored"
+    },
+    {
+      "id": "shopper -call-> shop-ui.cart",
+      "from": "shopper",
+      "to": "shop-ui.cart",
+      "kind": "call",
+      "label": "(clicks Buy)",
+      "payload": "clicks Buy",
+      "tag": "@calls shop-ui.cart (clicks Buy)",
+      "source": {
+        "file": "README.md",
+        "line": 11
+      },
+      "origin": "authored"
+    }
+  ],
+  "flows": [
+    {
+      "name": "checkout",
+      "steps": [
+        {
+          "step": 1,
+          "nodes": [
+            "shopper"
+          ],
+          "label": "the shopper clicks Buy",
+          "path": []
+        },
+        {
+          "step": 2,
+          "nodes": [
+            "shop-ui.cart"
+          ],
+          "label": "the cart posts the order",
+          "path": [
+            7
+          ]
+        },
+        {
+          "step": 3,
+          "nodes": [
+            "orders.create"
+          ],
+          "label": "the API stores the order",
+          "path": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "keep",
+      "steps": [
+        {
+          "step": 1,
+          "nodes": [
+            "shop-ui.cart"
+          ],
+          "label": "the cart sends the order",
+          "path": []
+        },
+        {
+          "step": 2,
+          "nodes": [
+            "orders.create"
+          ],
+          "label": "the API takes the order",
+          "path": [
+            2
+          ]
+        },
+        {
+          "step": 3,
+          "nodes": [
+            "orders-db"
+          ],
+          "label": "the order is written",
+          "path": [
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "walkthroughs": [],
+  "view": {
+    "hide": [],
+    "tests": true
+  },
+  "glossary": [
+    {
+      "id": "order",
+      "term": "order",
+      "aliases": [
+        "orders"
+      ],
+      "summary": "What the shopper buys: the items of the cart, as `orders.create` stores them in the orders table.",
+      "markdown": "What the shopper buys: the items of the cart, as `orders.create` stores them in the orders table.\n\nHow an order moves through the shop is in [the order guide](docs/orders.md#how-an-order-moves).",
+      "see": [
+        "orders.create",
+        "orders-db"
+      ],
+      "source": {
+        "file": "GLOSSARY.md",
+        "line": 5
+      },
+      "from": "code",
+      "node": "data.order"
+    },
+    {
+      "id": "cart",
+      "term": "cart",
+      "summary": "The list of items the shopper picks before buying.",
+      "markdown": "The list of items the shopper picks before buying.",
+      "see": [
+        "shop-ui.cart"
+      ],
+      "source": {
+        "file": "GLOSSARY.md",
+        "line": 14
+      }
+    }
+  ],
+  "library": [
+    {
+      "file": "docs/orders.md",
+      "markdown": "# Orders\n\n## How an order moves\n\nThe shopper clicks Buy. The cart posts `CreateOrder` to `POST /api/orders`, and\ncreate_order writes the order into the orders table.\n"
+    }
+  ],
+  "meanings": {
+    "file": "docs/meanings.toml",
+    "decisions": {
+      "cart": {
+        "why": "Cart is the cart page; the word means the list of items, as the glossary says"
+      },
+      "order": {
+        "from": "data.order",
+        "checked": "ada35fb2",
+        "why": "the data the shopper places; the glossary entry agrees with it"
+      }
+    },
+    "unnamed": [
+      "API"
+    ]
+  },
+  "diagnostics": []
+}

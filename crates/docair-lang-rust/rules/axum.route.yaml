@@ -1,0 +1,43 @@
+# axum routes: `.route("/api/scan", post(scan_upload))`, also chained methods
+# like `get(list).post(create)`. The handler serves the route; the function
+# that builds the router calls it, with the route as what travels.
+id: rust.axum.route
+language: rust
+rule:
+  # Longest chain first: `any` keeps the first pattern that fits, and the
+  # one-method pattern also fits a chain (with `get(a).post` as its method).
+  any:
+    - pattern: $ROUTER.route($PATH, $M1($H1).$M2($H2).$M3($H3))
+    - pattern: $ROUTER.route($PATH, $M1($H1).$M2($H2))
+    - pattern: $ROUTER.route($PATH, $M1($H1))
+constraints:
+  PATH: { kind: string_literal }
+  M1: { regex: ^(get|post|put|patch|delete|head|options|trace)$ }
+  M2: { regex: ^(get|post|put|patch|delete|head|options|trace)$ }
+  M3: { regex: ^(get|post|put|patch|delete|head|options|trace)$ }
+transform:
+  V1: { convert: { source: $M1, toCase: upperCase } }
+  V2: { convert: { source: $M2, toCase: upperCase } }
+  V3: { convert: { source: $M3, toCase: upperCase } }
+facts:
+  - serves: http
+    method: $M1
+    path: $PATH
+    by: $H1
+  - serves: http
+    method: $M2
+    path: $PATH
+    by: $H2
+  - serves: http
+    method: $M3
+    path: $PATH
+    by: $H3
+  - calls: $H1
+    payload: $V1 $PATH
+    by: enclosing
+  - calls: $H2
+    payload: $V2 $PATH
+    by: enclosing
+  - calls: $H3
+    payload: $V3 $PATH
+    by: enclosing

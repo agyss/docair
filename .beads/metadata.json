@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "docair",
+  "project_id": "cb94c5ca-40e6-4037-927a-a7aa68ef538f"
+}

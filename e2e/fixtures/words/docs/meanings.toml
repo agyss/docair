@@ -1,0 +1,6 @@
+# What the words of the docs mean: decisions written by `docair glossary`
+# (docs/MEANINGS.md in docair). Review them like code.
+
+[audit]
+term = false
+why = "the nightly check, an everyday word here"

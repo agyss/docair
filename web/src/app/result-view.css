@@ -1,0 +1,113 @@
+/* The generated page takes the whole window; only a slim bar stays above it. */
+:host {
+  position: fixed;
+  inset: 0;
+  display: block;
+  background: var(--bg);
+}
+.result {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: relative;
+}
+.brand {
+  font-weight: 650;
+  color: var(--muted);
+}
+h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12.5px;
+}
+.stats li {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.stats b {
+  color: var(--text);
+}
+.stats li.bad b {
+  color: var(--error);
+}
+.stats li.warn b {
+  color: var(--warning);
+}
+.diagnostics {
+  font-size: 12.5px;
+}
+.diagnostics summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.diagnostics[open] ul {
+  position: absolute;
+  top: 100%;
+  left: 14px;
+  right: 14px;
+  z-index: 10;
+  max-height: 50vh;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 12px 8px 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.diagnostics .error code {
+  color: var(--error);
+}
+.diagnostics .warning code {
+  color: var(--warning);
+}
+.where {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.actions .button {
+  padding: 4px 12px;
+}
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+/* The page, drawn by docair; the frame says when the page's first picture is there. */
+.frame {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+iframe {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  display: block;
+  background: var(--panel);
+}

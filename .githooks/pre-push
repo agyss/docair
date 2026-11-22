@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Hands pre-push to beads' hook (see .beads/hooks); the secret check runs at pre-commit only.
+[ -x .beads/hooks/pre-push ] && exec .beads/hooks/pre-push "$@"
+exit 0

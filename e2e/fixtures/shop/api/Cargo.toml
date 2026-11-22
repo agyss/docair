@@ -1,0 +1,11 @@
+#***
+# The orders API.
+#
+# @id      orders-api
+# @kind    service
+# @part-of cluster
+#***
+[package]
+name = "orders-api"
+version = "0.1.0"
+edition = "2024"

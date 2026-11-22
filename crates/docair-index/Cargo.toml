@@ -1,0 +1,42 @@
+#***
+# docair's code indexer (docs/REGENERATE.md §4.4): rust-analyzer as a library. It writes a
+# project's SCIP index, whole or for the files a save changed, with only what is needed loaded,
+# and lines for code a derive generates.
+#
+# @id      docair-index
+# @kind    service
+# @part-of workstation
+#***
+[package]
+name = "docair-index"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+# ra_ap_* 0.0.358 needs 1.98.
+rust-version = "1.98"
+publish.workspace = true
+
+[[bin]]
+name = "docair-index"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+docair-scip.workspace = true
+protobuf.workspace = true
+ra_ap_hir.workspace = true
+ra_ap_ide.workspace = true
+ra_ap_ide_db.workspace = true
+ra_ap_load-cargo.workspace = true
+ra_ap_project_model.workspace = true
+ra_ap_syntax.workspace = true
+ra_ap_vfs.workspace = true
+scip.workspace = true
+serde_json.workspace = true
+unicode-properties.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

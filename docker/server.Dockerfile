@@ -1,0 +1,24 @@
+#***
+# The docair-server container: the server binary on a distroless base.
+#
+# Built in two stages: the Rust toolchain compiles a release binary, then only
+# that binary is copied onto a small base image without a shell or package
+# manager. It runs as an unprivileged user and listens on 8080.
+#
+# @id      container.docair-server
+# @kind    container
+# @part-of docker
+# @reads   images (docair-server)
+#***
+FROM rust:1.99-slim-trixie AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+# The page's WebAssembly module is built with it (docair-layout-wasm's build.rs).
+RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -p docair-server
+
+FROM gcr.io/distroless/cc-debian13:nonroot
+COPY --from=build /src/target/release/docair-server /usr/local/bin/docair-server
+USER nonroot
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/docair-server"]

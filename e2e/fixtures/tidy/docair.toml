@@ -1,0 +1,3 @@
+# A tiny project for tidying (docs/ADAPTERS.md §6.1): one doc block says a call its code makes
+# already, with no words of its own, so docair offers to remove the tag.
+system = "tidyp"

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Hands post-checkout to beads' hook (see .beads/hooks); the secret check runs at pre-commit only.
+[ -x .beads/hooks/post-checkout ] && exec .beads/hooks/post-checkout "$@"
+exit 0

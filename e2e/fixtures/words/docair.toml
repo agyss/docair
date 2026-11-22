@@ -1,0 +1,3 @@
+# A tiny project for the e2e tests of meanings (docs/MEANINGS.md in docair): a word the code
+# defines, a doc heading, a glossary entry not checked against the code, an open word, a decision.
+system = "words"

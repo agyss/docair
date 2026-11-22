@@ -1,0 +1,30 @@
+#***
+# Lays out a picture of nested boxes: parts placed box by box, inside out,
+# and their lines routed at right angles.
+#
+# A library of its own: it knows parts with a size, the box each one is in,
+# and lines between them; nothing of docair's graph. docair-viewer maps a
+# layer's picture or a slice to it (docs/SLICES.md §5).
+#
+# @id      docair-layout
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-layout"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Lays out nested boxes and routes their lines at right angles"
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+# Serialize and deserialize the input and the layout.
+serde = ["dep:serde"]

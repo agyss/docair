@@ -1,0 +1,3 @@
+{
+  "docair.path": "${workspaceFolder}/target/release/docair"
+}

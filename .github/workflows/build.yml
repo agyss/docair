@@ -1,0 +1,137 @@
+name: build
+
+# Manual only: run it from the Actions tab (Run workflow) or with `gh workflow run build.yml`.
+# With `publish: true` it also creates the GitHub release v<version> with the CLI archives
+# and SHA256SUMS, which scripts/install.sh downloads.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, X.Y.Z, e.g. 0.1.0 (the release tag is v<version>)"
+        required: true
+      publish:
+        description: "Create the GitHub release (otherwise only the build artifacts)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    name: check the version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate X.Y.Z
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # 0.1.0, or a pre-release: 0.1.0-alpha, 0.1.0-beta-2
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(-[0-9]+)?)?$ ]]; then
+            echo "version must look like 0.1.0, 0.1.0-alpha or 0.1.0-beta-2, got: $VERSION" >&2
+            exit 1
+          fi
+
+  web:
+    name: web app
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docair-web-${{ inputs.version }}
+          path: web/dist/
+          if-no-files-found: error
+
+  cli:
+    name: docair CLI (${{ matrix.os }})
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            exe: docair
+          - os: macos-latest
+            target: macos-arm64
+            exe: docair
+          - os: windows-latest
+            target: windows-x86_64
+            exe: docair.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          # docair-layout-wasm's build.rs compiles the page's WebAssembly module
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release -p docair-cli
+      # One archive per platform: docair at the top level, plus README and LICENSE.
+      # Unix: docair-<version>-<target>.tar.gz (what scripts/install.sh downloads).
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          stage=$(mktemp -d)
+          cp "target/release/${{ matrix.exe }}" README.md LICENSE "$stage/"
+          mkdir -p dist
+          tar -czf "dist/docair-${{ inputs.version }}-${{ matrix.target }}.tar.gz" -C "$stage" .
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "stage")
+          Copy-Item "target/release/${{ matrix.exe }}", "README.md", "LICENSE" -Destination $stage
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/docair-${{ inputs.version }}-${{ matrix.target }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docair-${{ inputs.version }}-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: publish the release
+    if: inputs.publish
+    needs: cli
+    runs-on: ubuntu-latest
+    # The only job with write access: it creates the tag and the release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docair-${{ inputs.version }}-*
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        working-directory: release
+        run: |
+          sha256sum docair-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "v$VERSION" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "docair $VERSION" \
+            "${prerelease[@]}" \
+            --notes "docair $VERSION: the CLI for Linux (x86_64), macOS (arm64) and Windows (x86_64). Install: see the README, section Install the CLI."

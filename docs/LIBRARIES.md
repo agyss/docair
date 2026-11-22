@@ -1,0 +1,182 @@
+# Libraries
+
+Decision record for docair's dependencies (2026-11-14). The choices are verified
+by the proof of concept in this repository: `docair build .` run on docair itself.
+
+## What drives the choice
+
+* The output is **one HTML file**: offline, no CDN, fit to attach to a CI run or a mail.
+* The core stays **language-agnostic** ([SPEC §2](SPEC.md)): it knows comment
+  syntax and the tag grammar only. Knowledge about code lives in adapters.
+* The picture needs **nested groups** (`@part-of`) with edges crossing them,
+  data flowing in one direction, a shape per kind, and **animated flows**.
+* The tool is Rust. The viewer needs no Node build step.
+
+## Backend (Rust)
+
+| Concern | Choice | Why | Not chosen |
+|---------|--------|-----|------------|
+| File walk | `ignore` 0.4 + `globset` 0.4 | ripgrep's walker: `.gitignore`, a custom `.docairignore`, fast | `walkdir` (no ignore rules) |
+| Code parsing (adapters) | `tree-sitter` 0.27 + grammar crates: `tree-sitter-rust` 0.24 and `tree-sitter-typescript` 0.23.2 (2024-11-11, the newest; its TSX grammar for `.tsx`/`.jsx`) now; `-html` / `tree-sitter-angular`, `-yaml` next | one API for every language, tolerant of broken code, exact rows for attaching blocks, grammars for all v0 languages | `syn` (Rust only, fails on broken code); `oxc` / `swc` (TS only; keep `oxc` in mind if the TS adapter needs type resolution) |
+| Pattern inference | `ast-grep-core` + `ast-grep-config` `=0.51.1` (crate `docair-rules`, 2026-11-17) | framework rules as data: structural patterns like `this.http.post($URL, $$$)` or `#[$METHOD($PATH)]` on top of the same tree-sitter 0.27, in ast-grep's documented YAML rule format, so rules can be tried in its playground ([ADAPTERS.md](ADAPTERS.md) §5.2). 0.51.2 and 0.51.3 were under two weeks old | a hand-written tree walk per pattern; tree-sitter queries (`.scm`), which are harder to read and write |
+| Code graph (cross-references, call graph) | `scip` `=0.10.0` (2026-09-03) + `protobuf` `=3.7.2` (2025-03-10, pinned by scip), in crate `docair-scip` (2026-11-18) | code is the source of truth ([ADAPTERS.md](ADAPTERS.md)): the languages' own tools write SCIP indexes (`rust-analyzer scip`, 4.5 s for docair; `@sourcegraph/scip-typescript` `=0.6.1` (2026-11-03; 0.6.2 is younger than two weeks), a dev dependency of `web/` and of `e2e/` (docair-4wk.40, with an `e2e/tsconfig.json` for it), 0.5 s for docair's web app), so every call resolves the way the compiler sees it; calls through a trait reach its implementations by their `impl#[T][Trait]m().` symbols (§5.4). Without an index, the adapters keep the calls the syntax makes certain | `stack-graphs` (archived by GitHub in Sep 2025), `tree-sitter-graph` (no release since Dec 2024), `code2graph` (beta, created Jun 2026), Graphify (Python tool, no library; tree-sitter only, so calls without types; no releases to pin), CodeQL (license), Joern (JVM) |
+| Code index of Rust, as a library | rust-analyzer's crates `ra_ap_hir`, `ra_ap_ide`, `ra_ap_ide_db`, `ra_ap_load-cargo`, `ra_ap_project_model`, `ra_ap_syntax`, `ra_ap_vfs`, all `=0.0.358` (2026-10-12, the newest older than two weeks), in the program `docair-index` (docs/REGENERATE.md §4.4); `unicode-properties` `=0.1.4` and, through `ra_ap_hir_def`, `unicode-ident` 1.0.24 (was 1.0.27): rust-analyzer's lexer checks that both name the same Unicode version, and 0.1.5 is Unicode 18, 1.0.24 Unicode 17 | the compiler's own name resolution, type inference and trait solving, loaded once per save in a process that exits: the edited files' calls in 1.3–5 s against `rust-analyzer scip`'s 14 s, and what a derive generates, which the scip command does not show. Its input is shaped, not its code forked: crates left out get empty files, other files' function bodies are left out. The crates are published weekly with an unstable API, so pinned exactly and upgraded on purpose; about 200 lines are copied from rust-analyzer (MIT or Apache-2.0): its scip command's occurrence writer and the crate-private `def_to_moniker` (`docair-index/src/moniker.rs`, `write.rs`) | a rust-analyzer kept running (1–2 GB held between saves); a fork of rust-analyzer (its internals are no API and change weekly); type inference of docair's own on tree-sitter (a third of the calls need std's traits and generics) |
+| Graph algorithms | `petgraph` 0.8 | shortest paths between flow steps (A*), directed and undirected views | a hand-written BFS |
+| Markdown | `pulldown-cmark` 0.13 | CommonMark with source offsets for sections; its heading-attribute extension parses `{#node-id}` natively; also renders the HTML for the viewer | `comrak` (GFM, heavier) |
+| Config, JSON | `toml` 1.1, `serde`, `serde_json` (with `float_roundtrip` in docair-viewer) | `docair.toml`, `docair.graph.json`; `float_roundtrip` reads a kept layout back to the very numbers it was written with, so a page from kept layouts is the same page, byte for byte, including the layouts it packs for moving a part by hand. Without it, serde_json's faster parsing can miss the last digit | — |
+| CLI | `clap` 4 (derive) | the standard choice | `argh`, `lexopt` |
+| File events (`docair serve`) | `notify` 8.2.1, pinned (8.2.2 is younger than two weeks) | the system's own events (inotify, FSEvents, ReadDirectoryChanges): a saved file is seen at once, and an idle project costs nothing; docair waits until the files are quiet for 0.4 s itself, so no debouncer crate | looking at every file each second (what serve did: a listing of the whole project per second), `notify-debouncer-mini` (one more crate for a dozen lines) |
+| YAML and JSON with line numbers | `serde-saphyr` =2.0.0: API descriptions ([IMPORTS.md](IMPORTS.md)) are read into a tree whose every node keeps its line (`Spanned`), and JSON parses as YAML 1.2; ast-grep-config uses the same crate for rules. Kubernetes manifests are still read line by line, because Helm templates are not YAML | `serde_yaml` is deprecated and archived (Mar 2024); `saphyr`'s own tree has lines too, but would be a second YAML stack next to ast-grep's; 2.1.1 was younger than two weeks and 2.1.0 is yanked | `serde_yaml`, `serde_yml` (both deprecated), `saphyr` |
+| Pretty diagnostics (later) | `miette` or `ariadne` | source snippets in `docair check` output | — |
+| Layout of the pictures (docair-702.3, 702.9) | our own, crate `docair-layout` (2026-11-18): each box laid out on its own in layers (Sugiyama), sized and placed inside out (top-down); words in one monospace font, measured as characters times one advance; dagre's median positions and alternating ties taken over | lines may end at a box, which the pictures need; each box shrinks what it holds to a size budget (top-down); nested boxes never overlap; no dependency, and a library of its own. On 45 pictures of docair, routed by docair's router: 332 crossings, 1 621 bends, 36 Mpx² (SLICES.md §5); dagre with the same part sizes 286 crossings, 1 372 bends, but 141 Mpx², overlapping nested boxes, and no lines to boxes | `dagre` =0.1.2 (2026-10-30, Apache-2.0: no lines to boxes, boxes overlap, no sizing; without its default `json` feature it does not compile), `rust-sugiyama` 0.4.0 (no nested boxes), elkjs (JavaScript, stays only until docair-702.5) |
+| Packing the pictures (docair-702.5) | `miniz_oxide` 0.9.1 (2026-03-13) + `base64` 0.23.1 (2026-08-04), both the newest, in docair-viewer | each picture is deflated and written as base64 into the one HTML file (SLICES.md §13, choice 1); the browser inflates it with its own `DecompressionStream('deflate-raw')`, so the page needs no library. Pure Rust, already in the build (under ureq and serde-saphyr) | `flate2` 1.1.11 (2026-11-06: younger than two weeks; a wrapper around miniz_oxide), gzip framing (the browser reads raw deflate as well) |
+
+## Pull requests (`.github/workflows/docair-pr.yml`)
+
+The workflow is not on master yet: it stays on branch `pr-review` (docs/PULL_REQUESTS.md
+§2), and with it the two actions below. The text pictures are on master.
+
+| Concern | Choice | Why | Not chosen |
+|---------|--------|-----|------------|
+| Check out | `actions/checkout@v7.0.1` (20 Jul 2026, the newest) | the head commit with its whole history, for the merge base | — |
+| The page | `actions/upload-artifact@v7.0.2` (7 Oct 2026, the newest), `archive: false` | one file, unzipped (since v7.0.0), so a signed-in reviewer opens it in the browser; GitHub keeps it, 90 days at most | a branch in the repository, docair-server (a host to run) |
+| Comments | `gh` and `jq`, as the runner has them | docair writes the comments and the plan; the workflow only carries it out | an action to post comments (a dependency for four API calls) |
+| Pictures in a comment | text, drawn by docair (`text_pic`) | a comment keeps no SVG, `style` or script, and fetches an image without a login; light and double box drawing and the four arrows are in WGL4, so every common code font has them | Mermaid (its own layout, not docair's), images on a branch |
+
+## The page (`docair.html`)
+
+Since docs/SLICES.md step 5 (2026-11-18) the CLI lays out and draws every
+picture, so the page carries no library at all:
+
+| Concern | Choice | Size | License |
+|---------|--------|------|---------|
+| Layout | our own, crate `docair-layout` (Backend, above) | in the CLI | — |
+| Drawing | our own: SVG written by `docair-viewer` (`svg.rs`), coloured by CSS variables | in the CLI | — |
+| Packing the pictures | `miniz_oxide` + `base64` (Backend, above); the browser inflates with its own `DecompressionStream` | in the CLI | MIT/Apache-2.0 |
+| The page's script | `crates/docair-viewer/assets/page.js`: no framework, no build step, at most 1,000 lines (a test checks it) | ~35 KB | — |
+
+**Before step 5** the page inlined two libraries and laid out in the browser.
+They are gone, with `crates/docair-viewer/vendor/`; the record of why they were
+chosen stays below.
+
+| Concern | Choice then | Size | License |
+|---------|-------------|------|---------|
+| Drawing, interaction, animation | Cytoscape.js 3.34.4 | 436 KB | MIT |
+| Layout inside each box | elkjs 0.12.1 (ELK layered) | 1.6 MB | EPL-2.0 |
+| Glue | `crates/docair-viewer/assets/viewer.js` | ~250 KB | — |
+
+**Cytoscape.js** has compound nodes built in, which gives the `@part-of`
+frames. It also covers styles per kind (barrel, rhomboid, hexagon, …), tap,
+double-tap and hover events, an animation API for the flow token, and a
+headless mode for tests. It needs no framework or bundler.
+
+**ELK** computes a layered (Sugiyama) layout. The viewer lays out every box on
+its own with it, sizes the boxes itself and draws the lines with its own router,
+at right angles and around the parts (top-down, SPEC §3.5); Cytoscape draws
+those routes directly (`round-segments`). The page loads nothing from the web.
+
+**Own adapter instead of `cytoscape-elk`**: the plugin pins `elkjs ^0.9.3` and
+lays out the whole graph in one run; the viewer lays it out box by box.
+
+| Not chosen | Why |
+|------------|-----|
+| Mermaid | a static diagram: no API for selection, collapse or animation. Still good as a later text output (`docair mermaid`) |
+| Graphviz in WASM (`@hpcc-js/wasm-graphviz`, `@viz-js/viz`) | strong layered layout with clusters, but the output is SVG, so all interaction would be hand-made; about 1 MB of WASM |
+| React Flow / xyflow | needs React and a bundler; has no layout of its own (it would use ELK anyway) |
+| Sigma.js + graphology | WebGL for very large graphs, but no compound nodes |
+| vis-network | clusters instead of real compound nodes; weaker layered layout |
+| AntV G6 5 | capable (combos, many layouts), but larger, with a heavier API than this needs |
+| D3 | low-level: layout, routing and interaction would all be ours to write |
+| maxGraph, JointJS | diagram editors; far more than a viewer needs |
+| `@dagrejs/dagre`, `cytoscape-dagre` | weaker than ELK on compound graphs; no orthogonal routing |
+
+**Licensing.** elkjs is EPL-2.0 (weak copyleft, file level); shipping it
+unmodified inside the generated page was fine, with a notice and the license
+texts in `crates/docair-viewer/vendor/`. The page now holds only docair's own
+code.
+
+## Web app and images
+
+| Concern | Choice | Why | Not chosen |
+|---------|--------|-----|------------|
+| HTTP server | `axum` 0.8 on `tokio` 1.53, `tower-http` 0.7 (`ServeDir`) | tokio-native and small, multipart uploads built in; `ServeDir` lets the server also serve the built frontend for runs without Kubernetes | actix-web (own runtime, macro-heavy), warp (little activity) |
+| HTTP client | `ureq` 3.5.2 (workspace), in docair-ai and docair-server | blocking and small: the AI endpoint's chat requests, run on tokio's blocking threads | `reqwest` (pulls in hyper's client and a second TLS stack), hyper-util's client (more code for a few requests) |
+| Scratch folders | `tempfile` 3.27 | one folder per upload, kept with the upload as a project (at most 8, an hour unused) and deleted with it | — |
+| Frontend | Angular 22 (standalone components, signals, zoneless) | Angular is one of docair's target stacks, so the app is also a real Angular codebase for docair to read; HttpClient reports upload progress | React/Vite (not a target stack), plain JS |
+| Upload rules | `ignore` `=7.0.14` (2026-10-23; 7.0.16 is younger than two weeks), in `web/` | git's ignore rules in the browser: the upload panel leaves out what the CLI's scan leaves out, the rules of every `.gitignore` and `.docairignore` for their own folder and `.git/info/exclude` (docair-7ei); MIT, no dependencies, 130 KB unpacked, CommonJS (allowed in `angular.json`) | a matcher of our own (gitignore's anchors, `**` and `!` are easy to get wrong); filtering on the server after the upload (the upload would still carry the ignored files and go over the limit) |
+| Frontend image | `nginxinc/nginx-unprivileged` 1.30 | static files as a non-root user, SPA fallback, `/api` passed on to the server (its address filled in from `DOCAIR_SERVER` when the container starts, by the image's own template step) | Caddy |
+| Server image | `gcr.io/distroless/cc-debian13:nonroot`, built on `rust:1.99-slim-trixie` | no shell or package manager, glibc for the Rust binary | alpine (musl), scratch (needs a static binary) |
+
+## The VS Code extension (`editors/vscode/`)
+
+No runtime dependencies: the extension uses Node's own `child_process`, `fetch`
+and `crypto`, and VS Code's API (docs/EDITOR.md §6, decision docair-p2c.12).
+Dev dependencies, pinned exactly, each older than two weeks on 2026-11-21:
+
+| Concern | Choice | Why | Not chosen |
+|---------|--------|-----|------------|
+| Compiler | `typescript` `=6.0.3` (2026-04-16) | the 6.0 line docair-web uses; `tsc` alone, no bundler, for six files | 7.0 (the native compiler, a new line), esbuild (one more tool) |
+| VS Code's API types | `@types/vscode` `=1.140.0` (2026-10-01), with `engines.vscode` `^1.140.0` | the oldest VS Code the extension promises to run on; this devcontainer's is 1.143.1 | a newer one, which would raise the minimum |
+| Node's types | `@types/node` `=22.20.5` (2026-10-01) | Node 22's API, which VS Code's extension host offers at least | 24 or 26 (APIs the host may not have) |
+| Packaging | `@vscode/vsce` `=4.1.0` (2026-10-28) | VS Code's own packager, for the local `.vsix` (decision docair-p2c.18); 4.1.1 was younger than two weeks. `npm audit` reports two moderate findings in `minimatch` under it, a denial of service by crafted globs; it only reads the extension's own files | — |
+| Tests | Node's `node:test` and `node:assert` | built in; the extension's logic needs no VS Code (decision docair-p2c.17) | `@vscode/test-electron` (downloads VS Code, needs a display), mocha |
+
+## Versions and supply chain
+
+* The JS libraries are vendored in `crates/docair-viewer/vendor/` with their
+  sha256 (see that README), so builds and generated pages need no network.
+* Every pinned version had been released for at least two weeks. Cytoscape
+  3.35.0 and cytoscape-elk 2.4.0 were four days old and were skipped;
+  `tree-sitter` is pinned to 0.27.1 (not 0.27.2) and `toml` to 1.1.8.
+
+## Proof of concept, verified on docair itself
+
+`docair build .` writes `.docair/docair.graph.json` and `.docair/docair.html`.
+docair's own sources are documented in docair format in every comment family:
+Rust, JavaScript, TOML (`Cargo.toml`, `docair.toml`) and HTML. Markdown is used in
+all three ways: README group docs, a sibling file (`resolve.md`) with an
+anchored section, and fenced declarations for nodes without code (stores, the browser).
+
+| Check | Result |
+|-------|--------|
+| `cargo test` | 20 tests pass |
+| `cargo clippy --all-targets` | no warnings |
+| `docair check .` | 53 nodes, 43 edges, 3 flows; 0 errors, 0 warnings |
+| scan time (release build) | 14 ms |
+| `docair.html` | 2.2 MB, a single file, makes no network requests |
+| headless Chromium (Playwright), light and dark | 35/35 checks: boots in about 300 ms including layout; every node and edge drawn; no overlaps; children inside their groups; edges follow ELK's routes exactly; select, details, docs, tags; double-click collapse with edge bundling; flow stepping and token animation to the last step; search; diagnostics drawer; 400 px width; no console errors |
+| multi-language fixture (Rust, TS, YAML, Markdown) | an actix route attribute is inferred as `@http`, and TS `@calls http:POST /api/orders` resolves to the Rust handler; E001, W101 and W103 are reported; `check` exits 1, `--lenient` exits 0 |
+
+What dogfooding found:
+
+1. **All edges were invisible at first.** ELK ends routes exactly on the node
+   border, which Cytoscape counts as inside the node. Route ends are now pushed
+   4 px outward.
+2. **The flow token could hang**: the animation of a removed token never
+   resolves. Each animation step now races a timeout.
+3. **Return values create cycles.** `check → cmd_scan` made ELK draw long loops
+   around the whole core. Annotating the data's consumer instead
+   (`write_json @in graph from check`) is more accurate and lays out cleanly.
+   Advice for authors: annotate where data is used, not where a call returns.
+4. **Pipelines are long.** Fully expanded, docair's graph is 6:1 wide and
+   unreadable when fitted. The viewer now picks the layout direction that fits
+   the screen and collapses nested groups on first open.
+5. **The spec had gaps** that the code had to decide. They are now in SPEC.md:
+   openers only at the start of a line, the `module` kind, adapter-derived ids,
+   the `@part-of` default chain, the `placeholder` origin, E005/E006/W106, the
+   README and sibling-file rules, and a corrected flow example.
+
+Not in the PoC yet: the TypeScript/Angular and Kubernetes adapters, the
+Runtime layer switch, Mermaid output, `docair serve`, and edge-label placement.
+Labels can overlap on short edges; ELK can place them if it is given label sizes.
+
+## Sources
+
+* stack-graphs archived: [github/stack-graphs](https://github.com/github/stack-graphs), [ecosyste.ms record](https://issues.ecosyste.ms/hosts/GitHub/repositories/github%2Fstack-graphs)
+* [code2graph README](https://docs.rs/crate/code2graph/0.0.0-beta.17/source/README.md)
+* [Graphify](https://github.com/Graphify-Labs/graphify), checked on 2026-11-18
+* [SCIP](https://github.com/sourcegraph/scip)
+* rust-analyzer: [architecture](https://rust-analyzer.github.io/book/contributing/architecture.html), [find usages](https://rust-analyzer.github.io/blog/2019/11/13/find-usages.html), [persistent caches, rust-analyzer#4712](https://github.com/rust-lang/rust-analyzer/issues/4712), [`ra_ap_load-cargo`](https://docs.rs/ra_ap_load-cargo/0.0.358)
+* [serde_yaml deprecation thread](https://users.rust-lang.org/t/serde-yaml-deprecation-alternatives/108868)
+* ELK: [hierarchyHandling](https://eclipse.dev/elk/reference/options/org-eclipse-elk-hierarchyHandling.html), [JSON format](https://eclipse.dev/elk/documentation/tooldevelopers/graphdatastructure/jsonformat.html)
+* Versions and licenses: crates.io and the npm registry, queried on 2026-11-14

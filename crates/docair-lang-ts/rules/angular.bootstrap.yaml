@@ -1,0 +1,13 @@
+# Angular starts an app with `bootstrapApplication(App, appConfig)`: the call
+# starts the root component. The name resolves through the file's imports.
+id: ts.angular.bootstrap
+language: typescript
+rule:
+  any:
+    - pattern: bootstrapApplication($APP, $$$)
+    - pattern: bootstrapApplication($APP)
+constraints:
+  APP: { kind: identifier }
+facts:
+  - calls: $APP
+    by: enclosing

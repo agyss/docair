@@ -1,0 +1,22 @@
+#***
+# API descriptions adapter: OpenAPI and AsyncAPI files, read as what they
+# declare (docs/IMPORTS.md).
+#
+# @id      docair-lang-apis
+# @kind    module
+# @part-of docair-lib
+#***
+[package]
+name = "docair-lang-apis"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+docair-core.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true

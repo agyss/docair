@@ -1,0 +1,77 @@
+openapi: 3.1.0
+info:
+  title: Orders API
+  version: 1.0.0
+  description: The orders a shopper places.
+servers:
+  - url: /api
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Place an order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrder'
+      responses:
+        '201':
+          description: The new order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+  /orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getOrder
+      summary: One order.
+      responses:
+        '200':
+          description: The order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+    put:
+      operationId: update_order
+      summary: Change an order.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Order'
+      responses:
+        '200':
+          description: The changed order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+    delete:
+      operationId: cancelOrder
+      summary: Cancel an order.
+      responses:
+        '204':
+          description: Cancelled.
+components:
+  schemas:
+    CreateOrder:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: string
+    Order:
+      type: object
+      properties:
+        id:
+          type: string

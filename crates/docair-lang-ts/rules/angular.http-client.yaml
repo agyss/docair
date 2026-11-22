@@ -1,0 +1,27 @@
+# Angular's HttpClient: `this.http.post<ScanResult>('/api/scan', form)` in a
+# class whose `http` field is an HttpClient (`inject(HttpClient)`, a typed
+# field, or a constructor parameter).
+id: ts.angular.http-client
+language: typescript
+rule:
+  # With the reply type first: `any` keeps the first pattern that fits.
+  # `($URL, $$$)` needs a second argument, so one-argument calls have their own patterns.
+  any:
+    - pattern: this.$CLIENT.$METHOD<$REPLY>($URL, $$$)
+    - pattern: this.$CLIENT.$METHOD<$REPLY>($URL)
+    - pattern: this.$CLIENT.$METHOD($URL, $$$)
+    - pattern: this.$CLIENT.$METHOD($URL)
+constraints:
+  METHOD: { regex: ^(get|post|put|patch|delete|head|options)$ }
+  URL:
+    any:
+      - kind: string
+      - kind: template_string
+where:
+  CLIENT: { type: HttpClient }
+facts:
+  - requests: http
+    method: $METHOD
+    path: $URL
+    reply: $REPLY
+    by: enclosing

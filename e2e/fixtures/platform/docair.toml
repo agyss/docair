@@ -1,0 +1,3 @@
+# Infrastructure code without a single doc block: docair reads it (SPEC §6.1).
+# apps/README.md only names the programs that run in it (SPEC §3.4).
+system = "platform"
